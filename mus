@@ -1,0 +1,72 @@
+#!/usr/bin/env python
+
+import time
+
+import click
+from click import secho as echo
+
+from mus_db import get_db_connection
+
+cli = click.Group()
+
+
+@cli.command("log")
+@click.argument('filter_str', nargs=-1)
+@click.option('-h', '--host')
+@click.option('-u', '--user')
+@click.option('-a', '--age')
+def log(filter_str, host, user, age):
+
+    filter_str_2 = " ".join(filter_str).strip()
+
+    db = get_db_connection()
+    sql = """
+        SELECT host, user, time, type,
+            message, status, project, tag
+        FROM muslog
+        """
+
+    where_elements = []
+    sqlargs = []
+    if filter_str:
+        where_elements.append("`message` like ?")
+        sqlargs.append("%" + filter_str_2 + "%")
+
+    if host:
+        where_elements.append("`host` like ?")
+        sqlargs.append("%" + host + "%")
+
+    if user:
+        where_elements.append("`user` like ?")
+        sqlargs.append("%" + user + "%")
+
+    if age:
+        age = age.strip()
+        if age.endswith('d'):
+            delta_age = float(age[:-1]) * 60 * 60 * 24
+        elif age.endswith('h'):
+            delta_age = float(age[:-1]) * 60 * 60
+        elif age.endswith('m'):
+            delta_age = float(age[:-1]) * 60
+        else:
+            delta_age = float(age)
+        where_elements.append("time > ?")
+        sqlargs.append(time.time() - delta_age)
+
+    if where_elements:
+        sql += "WHERE " + " AND ".join(where_elements)
+
+    sql += """
+        ORDER BY time DESC
+        LIMIT 20 """
+
+    #print(sql)
+    #print(sqlargs)
+    query = db.execute(sql, sqlargs)
+
+    for rec in query.fetchall():
+        print(rec)
+
+
+if __name__ == "__main__":
+    cli()

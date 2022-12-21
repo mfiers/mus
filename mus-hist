@@ -1,0 +1,47 @@
+#!/usr/bin/env python
+"""
+Minimal script to store history in the mus sqlite database - this tool is supposed
+to be executed as prompt_command. Maybe rewrite in nim or so?
+"""
+
+
+import os
+import sqlite3
+import sys
+import time
+
+from mus_db import get_db_connection
+
+stdin = sys.stdin.read().strip()
+rc_str, _, message = stdin.strip().split(None, 2)
+rc = int(rc_str)
+message = message.strip()
+
+if message == "":
+    exit()
+
+
+# Gather information!
+if 'MUS_HOST' in os.environ:
+    host = os.environ['MUS_HOST']
+else:
+    import socket
+    host = socket.gethostname()
+
+if 'MUS_USER' in os.environ:
+    user = os.environ['MUS_USER']
+else:
+    import getpass
+    user = getpass.getuser()
+
+
+db = get_db_connection()
+
+db.execute(
+    """INSERT INTO muslog(
+        host, user, time, type, message, status)
+        VALUES (?,?,?,?,?,?) """,
+    (host, user, time.time(), 'history',
+     message.strip(), rc))
+
+db.commit()
