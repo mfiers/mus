@@ -1,13 +1,186 @@
 #!/usr/bin/env python
 
+import logging
+import os
+import sys
 import time
+from pathlib import Path
 
 import click
-from click import secho as echo
+import colorama
+from click import echo, style
 
-from mus_db import get_db_connection
+from mus_util import ColorFormatter, ColorLogger, msec2nice
 
-cli = click.Group()
+# Set up color logging
+colorama.init(autoreset=True)
+
+logging.setLoggerClass(ColorLogger)
+lg = logging.getLogger('mus')
+lg.setLevel(logging.WARNING)
+logging.getLogger('asyncio').setLevel(logging.WARNING)
+
+# late import to make sure logging is set properly.
+from mus_config import (  # NOQA: E402
+    get_config,
+    get_local_config,
+    save_kv_to_local_config,
+)
+from mus_db import get_db_connection, get_db_path  # NOQA: E402
+
+
+@click.group()
+@click.option('-v', '--verbose', count=True)
+def cli(verbose):
+    if verbose == 1:
+        lg.setLevel(logging.INFO)
+    elif verbose > 1:
+        lg.setLevel(logging.DEBUG)
+
+
+@cli.group()
+def macro():
+     """Run a cl macro on multiple input files
+
+    To use macro's you need to prepare your shell. See the README.
+
+    \b
+    Arguments:
+        -v, -vv  : increase verbosity
+        -j<INT>  : no parallel processes to use
+        -s<NAME> : save macro for later use
+        -l<NAME> : load and run macro
+        -d       : dry-run - show what would be executed
+
+    Note, no spaces between the option flag and value are allowed!
+    """
+
+
+@macro.command("list")
+def macro_list():
+    from mus_macro import find_saved_macros
+    for name, val in find_saved_macros().items():
+        echo(style(name, fg="green") +  ": " + val)
+
+
+@macro.command("edit")
+@click.argument('name')
+def macro_edit(name):
+    """Drop into EDITOR with the macro of choice"""
+    from subprocess import call
+
+    from mus_macro import MACRO_SAVE_PATH
+
+    filename = Path(MACRO_SAVE_PATH).expanduser() / f"{name}.mmc"
+    EDITOR = os.environ.get('EDITOR', 'vim')
+    call([EDITOR, filename])
+
+
+@macro.command("stdin-exe", hidden=True)
+def macro_cli_exe():
+
+    import multiprocessing
+    import re
+
+    from mus_macro import Macro
+
+    raw_macro = sys.stdin.read()
+    _ = raw_macro.strip().split(None, 2)
+    if len(_) < 3:
+        return
+    raw_macro = _[2]
+
+    # find & define parameters by parsing start of string
+    # stop parsing as soon as no args are found
+    no_threads = multiprocessing.cpu_count()
+    save_name = None
+    load_name = None
+    dry_run = False
+
+    while raw_macro:
+
+        if ' ' in raw_macro:
+            maybe_arg, macro_rest = raw_macro.split(None, 1)
+        else:
+            maybe_arg, macro_rest = raw_macro, ''
+
+        if m := re.match('-j([0-9]+)', maybe_arg):
+            no_threads = int(m.groups()[0])
+        elif m := re.match(r'-s([a-zA-Z]\w*)', maybe_arg):
+            save_name = m.groups()[0]
+        elif m := re.match(r'-l([a-zA-Z]\w*)', maybe_arg):
+            load_name = m.groups()[0]
+        elif maybe_arg == '-d':
+            dry_run = True
+        elif m := re.match(r'-(vv*)', maybe_arg):
+            verbose = len(m.groups()[0])
+            if verbose == 1:
+                lg.setLevel(logging.INFO)
+            elif verbose > 1:
+                lg.setLevel(logging.DEBUG)
+        else:
+            break
+
+        # we reach this line only if an argument matched
+        raw_macro = macro_rest.strip()
+
+    if raw_macro and load_name:
+        lg.warning("specified both a macro to load and macro string"
+                   " - unsure what to do")
+        return
+
+    macro_args = dict(dry_run=dry_run)
+
+    if raw_macro:
+        macro = Macro(raw=raw_macro, **macro_args)
+    elif load_name:
+        macro = Macro(name=load_name, **macro_args)
+    else:
+        raise click.UsageError("No macro defined")
+
+    if save_name is not None:
+        macro.save(save_name)
+
+    lg.info(f"Executing macro: {macro.raw}")
+    lg.info(f"No threads: {no_threads}")
+
+    macro.execute(no_threads)
+
+
+# DB relat
+@cli.group()
+def db():
+    pass
+
+
+@db.command("path")
+def db_path():
+    print(get_db_path())
+
+
+# CONFIGURATION
+@cli.group()
+def conf():
+    pass
+
+
+@conf.command("set", context_settings=dict(ignore_unknown_options=True))
+@click.argument("key")
+@click.argument("val")
+def conf_set(key, val):
+    save_kv_to_local_config(key, val)
+
+
+@conf.command("show")
+@click.option("-l", '--local', is_flag=True, default=False,
+              help="show only local config.")
+def conf_show(local):
+    if local:
+        conf = get_local_config()
+    else:
+        conf = get_config()
+
+    print(conf)
 
 
 @cli.command("log")
@@ -15,13 +188,15 @@ cli = click.Group()
 @click.option('-h', '--host')
 @click.option('-u', '--user')
 @click.option('-a', '--age')
-def log(filter_str, host, user, age):
+@click.option('-p', '--project')
+@click.option('-n', '--no', type=int, default=20)
+def log(filter_str, host, user, age, project, no):
 
     filter_str_2 = " ".join(filter_str).strip()
 
     db = get_db_connection()
     sql = """
-        SELECT host, user, time, type,
+        SELECT host, cwd, user, time, type,
             message, status, project, tag
         FROM muslog
         """
@@ -37,8 +212,12 @@ def log(filter_str, host, user, age):
         sqlargs.append("%" + host + "%")
 
     if user:
-        where_elements.append("`user` like ?")
+        where_elements.append("user like ?")
         sqlargs.append("%" + user + "%")
+
+    if project:
+        where_elements.append("project like ?")
+        sqlargs.append("%|" + project + '|%')
 
     if age:
         age = age.strip()
@@ -56,17 +235,31 @@ def log(filter_str, host, user, age):
     if where_elements:
         sql += "WHERE " + " AND ".join(where_elements)
 
-    sql += """
+    sql += f"""
         ORDER BY time DESC
-        LIMIT 20 """
+        LIMIT {no} """
 
-    #print(sql)
-    #print(sqlargs)
     query = db.execute(sql, sqlargs)
 
-    for rec in query.fetchall():
-        print(rec)
+    allrecs = list(query.fetchall())
+    i = 1
+    no_print = 0
+    while True:
+        if no_print > no:
+            break
+        if i >= len(allrecs):
+            break
 
+        rec = allrecs[i-1]
+        j = i
+        while allrecs[j].message == rec.message:
+            if j == len(allrecs)-1:
+                break
+            j += 1
+        no_rep = j - i + 1
+        print(rec.nice(no_rep = no_rep))
+        no_print += 1
+        i = j + 1
 
 if __name__ == "__main__":
     cli()

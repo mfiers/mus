@@ -1,50 +1,167 @@
 
 import os
 import sqlite3
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from textwrap import wrap
+from typing import Optional
 
-
-class RECORD():
-    def __str__(self):
-        return (
-            f"{self.host} {self.user} {int(self.time)} "
-            f"{self.message}"
-        )
+from mus_util import msec2nice
 
 
 def record_factory(cursor, row):
-    rv = RECORD()
+    rv = Record()
     for idx, col in enumerate(cursor.description):
         setattr(rv, col[0], row[idx])
     return rv
+
+
+def get_db_path() -> str:
+    mus_folder = Path('~').expanduser() / '.local' / 'mus'
+    if not mus_folder.exists():
+        mus_folder.mkdir(parents= True)
+
+    return os.path.join(mus_folder, 'mus.db')
 
 
 def get_db_connection() -> sqlite3.Connection:
     """ Return a database connection.
     Create if it does not exist
     """
-
-    cache_folder = os.path.expanduser('~/.cache')
-    db = os.path.join(cache_folder, 'mus.db')
+    db = get_db_path()
     if os.path.exists(db):
         conn = sqlite3.connect(db)
-
     else:
-        if not os.path.exists(cache_folder):
-            os.makedirs(cache_folder)
-
         conn = sqlite3.connect(db)
         conn.execute("""
         CREATE TABLE IF NOT EXISTS muslog (
             host TEXT,
+            cwd TEXT,
             user TEXT,
             time INTEGER,
             type TEXT,
             message TEXT,
             status INTEGER,
             project TEXT,
-            tag TEXT
+            tag TEXT,
+            data json
             )""")
         conn.commit()
 
     conn.row_factory = record_factory
     return conn
+
+@dataclass(init=False)
+class Record():
+
+    type: str
+    message: str
+    host: str
+    cwd: str
+    user: str
+    project: str
+    tag: str
+    status: int
+    data: dict
+    time: float
+
+    def __str__(self):
+        return (
+            f"{self.host} {self.user} {int(self.time)} "
+            f"{self.cwd} "
+            f"{self.project} {self.tag} - "
+            f"{self.message}"
+        )
+
+    def nice(self, no_rep: Optional[int] = None):
+        """Return a colorama formatted string for this record
+
+        Args:
+            no_rep (int, optional): No of times this command was repeated.
+                Defaults to None.
+
+        Returns:
+            str: ANSI color formatted string
+        """
+        import shutil
+
+        from click import style
+
+        twdith = shutil.get_terminal_size((80, 24)).columns
+
+        ntime = msec2nice(1000 * int(time.time() - self.time))
+        if self.type == 'history':
+            tmark = style('H', fg="green")
+        else:
+            tmark = style('?', fg='grey')
+
+        if self.status == 0:
+            smark = ' '
+        else:
+            smark = style(f"!", bg="red", fg="white")
+
+        if no_rep is not None and no_rep > 1:
+            srep = style(f" ({no_rep}x)", fg="white", bold=False)
+        else:
+            srep = ""
+
+        message = "\n".join(
+            wrap(self.message, twdith - 10,
+                 subsequent_indent=" " * 8))
+        message = style(message, fg='white', bold=True)
+        return f"{tmark}{smark} {ntime:>8s} {message}{srep}"
+
+    def prepare(self):
+        """Prepare record with default values
+
+        Returns: None
+        """
+
+        import os
+
+        from mus_config import get_config
+
+        self.cwd = os.getcwd()
+        self.time = time.time()
+        # Gather information!
+        if 'MUS_HOST' in os.environ:
+            self.host = os.environ['MUS_HOST']
+        else:
+            import socket
+            self.host = socket.gethostname()
+
+        if 'MUS_USER' in os.environ:
+            self.user = os.environ['MUS_USER']
+        else:
+            import getpass
+            self.user = getpass.getuser()
+
+        config = get_config()
+        if 'tag' in config:
+            self.tags = "|" + "|".join(config['tag']) + "|"
+        else:
+            self.tags = ""
+
+        if 'project' in config:
+            self.projects = "|" + "|".join(config['project']) + "|"
+        else:
+            self.projects = ""
+
+    def save(self):
+        db = get_db_connection()
+        db.execute(
+            """INSERT INTO muslog(
+                host, cwd, user, time, type, message, status,
+                tag, project)
+                VALUES (?,?,?,?,?,?,?,?,?) """,
+            (self.host,
+             self.cwd,
+             self.user,
+             self.time,
+             self.type,
+             self.message,
+             self.status,
+             self.tags,
+             self.projects))
+        db.commit()
