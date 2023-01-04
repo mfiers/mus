@@ -13,7 +13,16 @@ from mus_util import msec2nice
 def record_factory(cursor, row):
     rv = Record()
     for idx, col in enumerate(cursor.description):
-        setattr(rv, col[0], row[idx])
+        if col[0] == 'data':
+            val = row[idx]
+            if val is not None:
+                import json
+                setattr(rv, col[0], json.loads(val))
+            else:
+                setattr(rv, col[0], {})
+        else:
+            setattr(rv, col[0], row[idx])
+
     return rv
 
 
@@ -52,6 +61,7 @@ def get_db_connection() -> sqlite3.Connection:
     conn.row_factory = record_factory
     return conn
 
+
 @dataclass(init=False)
 class Record():
 
@@ -65,6 +75,10 @@ class Record():
     status: int
     data: dict
     time: float
+
+    def __init__(self):
+        self.data = {}
+        self.status = 0
 
     def __str__(self):
         return (
@@ -93,8 +107,12 @@ class Record():
         ntime = msec2nice(1000 * int(time.time() - self.time))
         if self.type == 'history':
             tmark = style('H', fg="green")
+        elif self.type == 'log':
+            tmark = style('L', bg="blue", fg='black')
+        elif self.type == 'macro-exe':
+            tmark = style('m', fg='white', bold=False)
         else:
-            tmark = style('?', fg='grey')
+            tmark = style('?', fg='white', bold=False)
 
         if self.status == 0:
             smark = ' '
@@ -106,11 +124,17 @@ class Record():
         else:
             srep = ""
 
+        extra = ""
+        if self.type == "macro-exe":
+            if 'runtime' in self.data:
+                rt = msec2nice(self.data["runtime"]*1000)
+                extra = f' duration: {rt}'
+
         message = "\n".join(
             wrap(self.message, twdith - 10,
                  subsequent_indent=" " * 8))
         message = style(message, fg='white', bold=True)
-        return f"{tmark}{smark} {ntime:>8s} {message}{srep}"
+        return f"{tmark}{smark} {ntime:>8s} {message}{srep}{extra}"
 
     def prepare(self):
         """Prepare record with default values
@@ -124,6 +148,7 @@ class Record():
 
         self.cwd = os.getcwd()
         self.time = time.time()
+
         # Gather information!
         if 'MUS_HOST' in os.environ:
             self.host = os.environ['MUS_HOST']
@@ -149,19 +174,31 @@ class Record():
             self.projects = ""
 
     def save(self):
+        import json
         db = get_db_connection()
-        db.execute(
-            """INSERT INTO muslog(
-                host, cwd, user, time, type, message, status,
-                tag, project)
-                VALUES (?,?,?,?,?,?,?,?,?) """,
-            (self.host,
-             self.cwd,
-             self.user,
-             self.time,
-             self.type,
-             self.message,
-             self.status,
-             self.tags,
-             self.projects))
+
+        rdata = [self.host,
+                 self.cwd,
+                 self.user,
+                 self.time,
+                 self.type,
+                 self.message,
+                 self.status,
+                 self.tags,
+                 self.projects]
+
+        if self.data :
+            rdata.append(json.dumps(self.data))
+            sql =  """INSERT INTO muslog(
+                    host, cwd, user, time, type, message, status,
+                    tag, project, data)
+                    VALUES (?,?,?,?,?,?,?,?,?,?) """
+        else:
+            sql =  """INSERT INTO muslog(
+                    host, cwd, user, time, type, message, status,
+                    tag, project) VALUES (?,?,?,?,?,?,?,?,?) """
+
+        #print(sql)
+        #print(rdata)
+        db.execute(sql, tuple(rdata))
         db.commit()

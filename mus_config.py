@@ -1,7 +1,9 @@
 
 import json
 import os
+from functools import lru_cache
 from pathlib import Path
+from typing import List, TypedDict
 
 LIST_KEYS = ['project', 'tag']
 
@@ -20,8 +22,11 @@ def list_add(lst, val):
     lst.append(val)
 
 
+
+@lru_cache(1)
 def get_config() -> dict:
     """Get recursive config"""
+
     config = {}
 
     # find configs

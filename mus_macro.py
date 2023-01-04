@@ -13,6 +13,7 @@ from uuid import uuid4
 
 import click
 
+from mus_db import Record
 from mus_util import msec2nice
 
 lg = logging.getLogger("mus")
@@ -29,6 +30,7 @@ def find_saved_macros() -> Dict[str, str]:
     for macrofile in save_folder.glob('*.mmc'):
         name = macrofile.name[:-4]
         peek = open(macrofile).read()
+        peek = " ".join(peek.split())[:100]
         rv[name] = peek
     return rv
 
@@ -102,7 +104,10 @@ class MacroJob:
         self.inputfile = inputfile
 
     def start(self):
-        self.starttime = time.time()
+        self.rec = Record()
+        self.starttime = self.rec.time = time.time()
+        self.rec.prepare()
+        self.rec.type = 'macro-exe'
 
     def stop(self, returncode):
         self.stoptime = time.time()
@@ -110,6 +115,12 @@ class MacroJob:
         self.runtimeNice = msec2nice(self.runtime)
         self.returncode = returncode
 
+
+        self.rec.time = self.starttime
+        self.rec.message = self.cl
+        self.rec.status = returncode
+        self.rec.data['runtime'] = self.runtime
+        self.rec.save()
 
 class Macro:
     def __init__(self,

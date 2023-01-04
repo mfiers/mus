@@ -49,13 +49,21 @@ class ColorLogger(logging.Logger):
         self.addHandler(console)
 
 
-
 def msec2nice(mtime):
+
     if mtime < 1000:
         return f"{mtime:.0f}ms"
     elif mtime < 60 * 1000:
-        return f"{mtime / 1000:.1f}s"
+        # seconds
+        return f"{mtime / 1000:02.1f}s"
+    # elif mtime < 5 * 60 * 1000:
+    #     # minutes+seconds when smaller than 5 minutes
+    #     allseconds = int(mtime // 1000)
+    #     minutes = allseconds // 60
+    #     seconds = allseconds % 60
+    #     return f"{minutes}m:{seconds:02d}s"
     elif mtime < 60 * 60 * 1000:
+        # minutes when smaller than 60 minutes
         allseconds = int(mtime // 1000)
         minutes = allseconds // 60
         seconds = allseconds % 60
