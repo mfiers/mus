@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
-Minimal script to store history in the mus sqlite database - this tool is supposed
-to be executed as prompt_command. Maybe rewrite in nim or so?
+Minimal script to store history in the mus sqlite database - this tool is
+supposed to be executed as prompt_command. Maybe rewrite in nim or so?
 """
 
 

@@ -115,12 +115,12 @@ class MacroJob:
         self.runtimeNice = msec2nice(self.runtime)
         self.returncode = returncode
 
-
         self.rec.time = self.starttime
         self.rec.message = self.cl
         self.rec.status = returncode
         self.rec.data['runtime'] = self.runtime
         self.rec.save()
+
 
 class Macro:
     def __init__(self,
@@ -151,7 +151,7 @@ class Macro:
     def get_save_file(self, save_name):
         save_folder = Path(MACRO_SAVE_PATH).expanduser()
         if not save_folder.exists():
-            save_folder.mkdir(parents= True)
+            save_folder.mkdir(parents=True)
         return save_folder / f"{save_name}.mmc"
 
     def save(self, save_name):
@@ -192,10 +192,7 @@ class Macro:
                 MacroElement(self, raw[up_until:pat.start()]))
 
             segment_raw = raw[pat.start():pat.end()]
-            if segment_raw == '{}':
-                self.segments.append(
-                    MacroElementPath(self, segment_raw))
-            elif '%' in segment_raw:
+            if '%' in segment_raw:
                 self.segments.append(
                     MacroElementTemplate(self, segment_raw))
             elif '*' in segment_raw:
@@ -227,7 +224,6 @@ class Macro:
                 cl=cl,
                 inputfile=fn)
 
-
     def execute(self, no_threads):
         if self.globField is None:
             self.execute_singleton()
@@ -244,11 +240,11 @@ class Macro:
             env_user = f" ({env_user})"
         self.LogScript = open("./mus.sh", "a")
         self.LogScript.write("\n\n" + "#" * 80 + "\n")
-        self.LogScript.write("# Time  : "
-                             + datetime.now().strftime("%Y-%m-%d %H:%M")
-                             + "\n")
+        self.LogScript.write(
+            "# Time  : " + datetime.now().strftime("%Y-%m-%d %H:%M" + "\n"))
         self.LogScript.write(f"# Modus : {mode}\n")
-        self.LogScript.write(f"# Host  : {socket.gethostname()}{env_hostname}\n")
+        self.LogScript.write(
+            f"# Host  : {socket.gethostname()}{env_hostname}\n")
         self.LogScript.write(f"# User  : {getpass.getuser()}{env_user}\n")
         self.LogScript.write(f"# Cwd   : {os.getcwd()}\n")
 
@@ -307,7 +303,6 @@ class Macro:
                 job.stop(P.returncode)
                 self.add_to_script_log(job)
                 lg.debug(f"Finished {job.uid}: {job.cl}")
-
 
         async def run_all():
             await asyncio.gather(

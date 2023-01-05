@@ -22,7 +22,6 @@ def list_add(lst, val):
     lst.append(val)
 
 
-
 @lru_cache(1)
 def get_config() -> dict:
     """Get recursive config"""
@@ -84,4 +83,3 @@ def save_kv_to_local_config(key, val):
         conf[key] = val
 
     save_local_config(conf)
-

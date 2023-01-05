@@ -67,7 +67,7 @@ def log(message):
 
 @cli.group(cls=AliasedGroup)
 def macro():
-     """Run a cl macro on multiple input files
+    """Run a cl macro on multiple input files
 
     To use macro's you need to prepare your shell. See the README.
 
@@ -87,7 +87,7 @@ def macro():
 def macro_list():
     from mus_macro import find_saved_macros
     for name, val in find_saved_macros().items():
-        echo(style(name, fg="green") +  ": " + val)
+        echo(style(name, fg="green") + ": " + val)
 
 
 @macro.command("edit")
@@ -289,16 +289,17 @@ def search(filter_str, host, user, age, project, no):
         if i >= len(allrecs):
             break
 
-        rec = allrecs[i-1]
+        rec = allrecs[i - 1]
         j = i
         while allrecs[j].message == rec.message:
-            if j == len(allrecs)-1:
+            if j == len(allrecs) - 1:
                 break
             j += 1
         no_rep = j - i + 1
-        print(rec.nice(no_rep = no_rep))
+        print(rec.nice(no_rep=no_rep))
         no_print += 1
         i = j + 1
+
 
 if __name__ == "__main__":
     cli()

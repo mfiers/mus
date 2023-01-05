@@ -29,7 +29,7 @@ def record_factory(cursor, row):
 def get_db_path() -> str:
     mus_folder = Path('~').expanduser() / '.local' / 'mus'
     if not mus_folder.exists():
-        mus_folder.mkdir(parents= True)
+        mus_folder.mkdir(parents=True)
 
     return os.path.join(mus_folder, 'mus.db')
 
@@ -117,7 +117,7 @@ class Record():
         if self.status == 0:
             smark = ' '
         else:
-            smark = style(f"!", bg="red", fg="white")
+            smark = style("!", bg="red", fg="white")
 
         if no_rep is not None and no_rep > 1:
             srep = style(f" ({no_rep}x)", fg="white", bold=False)
@@ -127,7 +127,7 @@ class Record():
         extra = ""
         if self.type == "macro-exe":
             if 'runtime' in self.data:
-                rt = msec2nice(self.data["runtime"]*1000)
+                rt = msec2nice(self.data["runtime"] * 1000)
                 extra = f' duration: {rt}'
 
         message = "\n".join(
@@ -187,18 +187,16 @@ class Record():
                  self.tags,
                  self.projects]
 
-        if self.data :
+        if self.data:
             rdata.append(json.dumps(self.data))
-            sql =  """INSERT INTO muslog(
+            sql = """INSERT INTO muslog(
                     host, cwd, user, time, type, message, status,
                     tag, project, data)
                     VALUES (?,?,?,?,?,?,?,?,?,?) """
         else:
-            sql =  """INSERT INTO muslog(
+            sql = """INSERT INTO muslog(
                     host, cwd, user, time, type, message, status,
                     tag, project) VALUES (?,?,?,?,?,?,?,?,?) """
 
-        #print(sql)
-        #print(rdata)
         db.execute(sql, tuple(rdata))
         db.commit()
