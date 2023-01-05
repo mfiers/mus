@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 import logging
 import os
@@ -22,7 +22,7 @@ lg.setLevel(logging.WARNING)
 logging.getLogger('asyncio').setLevel(logging.WARNING)
 
 # late import to make sure logging is set properly.
-from mus_config import (  # NOQA: E402
+from mus_config import ( # NOQA: E402
     get_config,
     get_local_config,
     save_kv_to_local_config,
