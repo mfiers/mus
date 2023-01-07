@@ -17,7 +17,8 @@ def record_factory(cursor, row):
             val = row[idx]
             if val is not None:
                 import json
-                setattr(rv, col[0], json.loads(val))
+                val = json.loads(row[idx])
+                setattr(rv, col[0], val)
             else:
                 setattr(rv, col[0], {})
         else:
@@ -54,6 +55,7 @@ def get_db_connection() -> sqlite3.Connection:
             status INTEGER,
             project TEXT,
             tag TEXT,
+            uid TEXT,
             data json
             )""")
         conn.commit()
@@ -75,26 +77,32 @@ class Record():
     status: int
     data: dict
     time: float
+    uid: str
 
     def __init__(self):
         self.data = {}
         self.status = 0
 
     def __str__(self):
-        return (
-            f"{self.host} {self.user} {int(self.time)} "
-            f"{self.cwd} "
-            f"{self.project} {self.tag} - "
-            f"{self.message}"
-        )
+        try:
+            return (
+                f"{self.host} {self.user} {int(self.time)} "
+                f"{self.cwd} "
+                f"{self.project} {self.tag} - "
+                f"{self.message}"
+            )
+        except:
+            return 'xx'
 
-    def nice(self, no_rep: Optional[int] = None):
+    def nice(self,
+             no_rep: Optional[int] = None,
+             full: bool = False):
         """Return a colorama formatted string for this record
 
         Args:
             no_rep (int, optional): No of times this command was repeated.
                 Defaults to None.
-
+            full (float): Return a multi-line full output
         Returns:
             str: ANSI color formatted string
         """
@@ -109,18 +117,23 @@ class Record():
             tmark = style('H', fg="green")
         elif self.type == 'log':
             tmark = style('L', bg="blue", fg='black')
+        elif self.type == 'tag':
+            tmark = style('T', bg="cyan", fg='black')
         elif self.type == 'macro-exe':
             tmark = style('m', fg='white', bold=False)
         else:
             tmark = style('?', fg='white', bold=False)
 
         if self.status == 0:
-            smark = ' '
+            smark = " "
+            smark_long = '       '
         else:
             smark = style("!", bg="red", fg="white")
+            smark_long = style(f" {self.status:>5d}!",
+                               fg="red", bold=False, bg="black")
 
         if no_rep is not None and no_rep > 1:
-            srep = style(f" ({no_rep}x)", fg="white", bold=False)
+            srep = style(f" ({no_rep}x)", fg="white", bold=True)
         else:
             srep = ""
 
@@ -130,11 +143,22 @@ class Record():
                 rt = msec2nice(self.data["runtime"] * 1000)
                 extra = f' duration: {rt}'
 
-        message = "\n".join(
-            wrap(self.message, twdith - 10,
-                 subsequent_indent=" " * 8))
+        if full:
+            subsequent_indent = ""
+        else:
+            subsequent_indent = "      "
+        message = " \\\n".join(
+            wrap(self.message, twdith - 20,
+                    subsequent_indent=subsequent_indent))
         message = style(message, fg='white', bold=True)
-        return f"{tmark}{smark} {ntime:>8s} {message}{srep}{extra}"
+
+        if full:
+            return (
+                f"{tmark}{smark_long} {ntime:>8s} "
+                f"| {self.user}@{self.host}:{self.cwd}\n"
+                f"{message}{srep}{extra}")
+        else:
+            return f"{tmark}{smark} {ntime:>8s} {message}{srep}{extra}"
 
     def prepare(self):
         """Prepare record with default values
@@ -143,11 +167,13 @@ class Record():
         """
 
         import os
+        from uuid import uuid4
 
         from mus_config import get_config
 
         self.cwd = os.getcwd()
         self.time = time.time()
+        self.uid = str(uuid4())
 
         # Gather information!
         if 'MUS_HOST' in os.environ:
@@ -185,18 +211,20 @@ class Record():
                  self.message,
                  self.status,
                  self.tags,
-                 self.projects]
+                 self.projects,
+                 self.uid]
 
         if self.data:
             rdata.append(json.dumps(self.data))
             sql = """INSERT INTO muslog(
                     host, cwd, user, time, type, message, status,
-                    tag, project, data)
-                    VALUES (?,?,?,?,?,?,?,?,?,?) """
+                    tag, project, uid, data)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?) """
         else:
             sql = """INSERT INTO muslog(
                     host, cwd, user, time, type, message, status,
-                    tag, project) VALUES (?,?,?,?,?,?,?,?,?) """
+                    tag, project, uid)
+                    VALUES (?,?,?,?,?,?,?,?,?, ?) """
 
         db.execute(sql, tuple(rdata))
         db.commit()

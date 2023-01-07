@@ -4,31 +4,31 @@ import logging
 
 class ColorFormatter(logging.Formatter):
     # Change this dictionary to suit your coloring needs!
-    from colorama import Back, Fore
-
-    COLORS = {
-        "WARNING": Fore.RED,
-        "ERROR": Fore.RED + Back.WHITE,
-        "DEBUG": Fore.LIGHTBLACK_EX,
-        "INFO": Fore.GREEN,
-        "CRITICAL": Fore.RED + Back.WHITE
-    }
-    LEVEL_SHORT = dict(
-        WARNING='W',
-        ERROR='E',
-        INFO='I',
-        DEBUG='D',
-        CRITICAL='C')
 
     def format(self, record):
 
+        # prevents import unless used
         from colorama import Back, Fore
+
+        colors = {
+            "WARNING": Fore.RED,
+            "ERROR": Fore.RED + Back.WHITE,
+            "DEBUG": Fore.LIGHTBLACK_EX,
+            "INFO": Fore.GREEN,
+            "CRITICAL": Fore.RED + Back.WHITE
+        }
+        level_short = dict(
+            WARNING='W',
+            ERROR='E',
+            INFO='I',
+            DEBUG='D',
+            CRITICAL='C')
 
         rc = record.relativeCreated
         record.relativeCreatedStr = '(' + msec2nice(rc) + ')'
 
-        color = self.COLORS.get(record.levelname, "")
-        record.levelShort = color + self.LEVEL_SHORT[record.levelname]
+        color = colors.get(record.levelname, "")
+        record.levelShort = color + level_short[record.levelname]
 
         if color:
             record.name = color + record.name
@@ -78,3 +78,30 @@ def msec2nice(mtime):
         days = allhours // 24
         hours = allhours % 24
         return f"{days}d:{hours:02d}h"
+
+
+def get_checksum(filename: str) -> str:
+    import subprocess as sp
+    import sys
+
+    if sys.platform == 'darwin':
+        P = sp.check_output(
+            ['shasum', '-U', '-a', '256', filename],
+            text=True)
+        checksum = P.split()[0]
+    else:
+        raise NotImplementedError()
+
+    return checksum
+
+
+def format_type_short(status):
+    from click import style
+    if status == 'tag':
+        return style('T', bg='yellow', bold=False, fg='black')
+    elif status == 'log':
+        return style('L', bg='blue', bold=False, fg='black')
+    elif status == 'history':
+        return style('H', bg='green', bold=False, fg='black')
+    else:
+        return style('?', bg='black', fg='red')

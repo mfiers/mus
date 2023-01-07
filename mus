@@ -21,8 +21,9 @@ lg = logging.getLogger('mus')
 lg.setLevel(logging.WARNING)
 logging.getLogger('asyncio').setLevel(logging.WARNING)
 
+
 # late import to make sure logging is set properly.
-from mus_config import ( # NOQA: E402
+from mus_config import (  # NOQA: E402
     get_config,
     get_local_config,
     save_kv_to_local_config,
@@ -52,6 +53,81 @@ def cli(verbose):
         lg.setLevel(logging.INFO)
     elif verbose > 1:
         lg.setLevel(logging.DEBUG)
+
+
+import mus_cli_search  # NOQA: E402
+
+cli.add_command(mus_cli_search.cmd_search)
+
+
+@cli.command("tag")
+@click.argument("filename")
+@click.argument("message", nargs=-1)
+def tag(filename, message):
+
+    import mus_util
+
+    message = " ".join(message).strip()
+    if not message:
+        echo("Must provide a message")
+        return
+
+    echo(f"tagging {filename}")
+    checksum = mus_util.get_checksum(filename)
+
+    rec = Record()
+    rec.prepare()
+    rec.type = 'tag'
+    rec.message = message
+    rec.data['checksum'] = checksum
+    rec.data['filename'] = str(Path(filename).resolve())
+    rec.save()
+
+
+@cli.command("file")
+@click.argument("filename")
+def file_(filename):
+
+    from datetime import datetime
+
+    import mus_util
+
+    db = get_db_connection()
+
+    filename = str(Path(filename).resolve())
+    checksum = mus_util.get_checksum(filename)
+
+    echo(f"Checking file {filename}")
+    echo(f"Checksum: {checksum}")
+
+    sql = """
+        select *
+        from muslog
+        where json_extract(data, '$.filename') = ?
+           OR json_extract(data, '$.checksum') = ?
+        order by time desc
+        limit 10 """
+
+    result = db.execute(sql, [filename, checksum])
+    for rec in result.fetchall():
+        rtime =  mus_util.msec2nice(1000*(time.time() - rec.time))
+        if Path(rec.data['filename']) == Path(filename):
+            same_path_marker = 'p'
+            dpath = ''
+        else:
+            same_path_marker = '.'
+            print('x' * 80)
+            dpath = style(rec.data['filename'],
+                          fg='white', bold=False)
+        if rec.data['checksum'] == checksum:
+            same_checksum_marker = 'c'
+        else:
+            same_checksum_marker = '.'
+
+        rtype = mus_util.format_type_short(rec.type)
+        message = style(rec.message, fg='white', bold=True)
+        echo(f"{rtype}{same_checksum_marker}{same_path_marker} "
+             f"{rtime:>7} {message} {dpath}")
 
 
 @cli.command("log")
@@ -220,85 +296,6 @@ def conf_show(local):
         conf = get_config()
 
     print(conf)
-
-
-@cli.command("search")
-@click.argument('filter_str', nargs=-1)
-@click.option('-h', '--host')
-@click.option('-u', '--user')
-@click.option('-a', '--age')
-@click.option('-p', '--project')
-@click.option('-n', '--no', type=int, default=20)
-def search(filter_str, host, user, age, project, no):
-
-    filter_str_2 = " ".join(filter_str).strip()
-
-    db = get_db_connection()
-    sql = """
-        SELECT host, cwd, user, time, type,
-            message, status, project, tag, data
-        FROM muslog
-        """
-
-    where_elements = []
-    sqlargs = []
-    if filter_str:
-        where_elements.append("`message` like ?")
-        sqlargs.append("%" + filter_str_2 + "%")
-
-    if host:
-        where_elements.append("`host` like ?")
-        sqlargs.append("%" + host + "%")
-
-    if user:
-        where_elements.append("user like ?")
-        sqlargs.append("%" + user + "%")
-
-    if project:
-        where_elements.append("project like ?")
-        sqlargs.append("%|" + project + '|%')
-
-    if age:
-        age = age.strip()
-        if age.endswith('d'):
-            delta_age = float(age[:-1]) * 60 * 60 * 24
-        elif age.endswith('h'):
-            delta_age = float(age[:-1]) * 60 * 60
-        elif age.endswith('m'):
-            delta_age = float(age[:-1]) * 60
-        else:
-            delta_age = float(age)
-        where_elements.append("time > ?")
-        sqlargs.append(time.time() - delta_age)
-
-    if where_elements:
-        sql += "WHERE " + " AND ".join(where_elements)
-
-    sql += f"""
-        ORDER BY time DESC
-        LIMIT {no} """
-
-    query = db.execute(sql, sqlargs)
-
-    allrecs = list(query.fetchall())
-    i = 1
-    no_print = 0
-    while True:
-        if no_print > no:
-            break
-        if i >= len(allrecs):
-            break
-
-        rec = allrecs[i - 1]
-        j = i
-        while allrecs[j].message == rec.message:
-            if j == len(allrecs) - 1:
-                break
-            j += 1
-        no_rep = j - i + 1
-        print(rec.nice(no_rep=no_rep))
-        no_print += 1
-        i = j + 1
 
 
 if __name__ == "__main__":

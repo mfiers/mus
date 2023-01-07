@@ -3,6 +3,7 @@ import json
 import os
 from functools import lru_cache
 from pathlib import Path
+from typing import Any, Dict
 
 LIST_KEYS = ['project', 'tag']
 
@@ -25,7 +26,7 @@ def list_add(lst, val):
 def get_config() -> dict:
     """Get recursive config"""
 
-    config = {}
+    config: Dict[str, Any] = {}
 
     # find configs
     config_files = []
