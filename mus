@@ -72,15 +72,11 @@ def tag(filename, message):
         echo("Must provide a message")
         return
 
-    echo(f"tagging {filename}")
-    checksum = mus_util.get_checksum(filename)
-
     rec = Record()
-    rec.prepare()
-    rec.type = 'tag'
+    rec.prepare(
+        filename=Path(filename),
+        rectype='tag')
     rec.message = message
-    rec.data['checksum'] = checksum
-    rec.data['filename'] = str(Path(filename).resolve())
     rec.save()
 
 
@@ -94,7 +90,7 @@ def file_(filename):
 
     db = get_db_connection()
 
-    filename = str(Path(filename).resolve())
+    filename = Path(filename).resolve()
     checksum = mus_util.get_checksum(filename)
 
     echo(f"Checking file {filename}")
@@ -103,29 +99,29 @@ def file_(filename):
     sql = """
         select *
         from muslog
-        where json_extract(data, '$.filename') = ?
-           OR json_extract(data, '$.checksum') = ?
+        where filename = ?
+          OR checksum = ?
         order by time desc
         limit 10 """
 
-    result = db.execute(sql, [filename, checksum])
+    result = db.execute(sql, [str(filename), checksum])
     for rec in result.fetchall():
-        rtime =  mus_util.msec2nice(1000*(time.time() - rec.time))
-        if Path(rec.data['filename']) == Path(filename):
+        rtime = mus_util.msec2nice(1000 * (time.time() - rec.time))
+        if Path(rec.filename) == Path(filename):
             same_path_marker = 'p'
             dpath = ''
         else:
             same_path_marker = '.'
-            print('x' * 80)
-            dpath = style(rec.data['filename'],
+            dpath = style(rec.filename,
                           fg='white', bold=False)
-        if rec.data['checksum'] == checksum:
+        if rec.checksum == checksum:
             same_checksum_marker = 'c'
         else:
             same_checksum_marker = '.'
 
         rtype = mus_util.format_type_short(rec.type)
         message = style(rec.message, fg='white', bold=True)
+
         echo(f"{rtype}{same_checksum_marker}{same_path_marker} "
              f"{rtime:>7} {message} {dpath}")
 
@@ -190,6 +186,7 @@ def macro_cli_exe():
     raw_macro = sys.stdin.read()
     _ = raw_macro.strip().split(None, 2)
     if len(_) < 3:
+        echo("Please specify something to execute")
         return
     raw_macro = _[2]
 
@@ -199,6 +196,7 @@ def macro_cli_exe():
     save_name = None
     load_name = None
     dry_run = False
+    explain_macro = False
 
     while raw_macro:
 
@@ -215,6 +213,8 @@ def macro_cli_exe():
             load_name = m.groups()[0]
         elif maybe_arg == '-d':
             dry_run = True
+        elif maybe_arg == '-M':
+            explain_macro = True
         elif m := re.match(r'-(vv*)', maybe_arg):
             verbose = len(m.groups()[0])
             if verbose == 1:
@@ -243,6 +243,11 @@ def macro_cli_exe():
 
     if save_name is not None:
         macro.save(save_name)
+
+    if explain_macro:
+        macro.explain()
+        return
+
 
     lg.info(f"Executing macro: {macro.raw}")
     lg.info(f"No threads: {no_threads}")

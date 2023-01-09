@@ -1,5 +1,6 @@
 
 import logging
+from pathlib import Path
 
 
 class ColorFormatter(logging.Formatter):
@@ -80,7 +81,7 @@ def msec2nice(mtime):
         return f"{days}d:{hours:02d}h"
 
 
-def get_checksum(filename: str) -> str:
+def get_checksum(filename: Path) -> str:
     import subprocess as sp
     import sys
 

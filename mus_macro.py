@@ -3,6 +3,7 @@ import getpass
 import logging
 import os
 import re
+import shlex
 import socket
 import time
 from datetime import datetime
@@ -35,7 +36,7 @@ def find_saved_macros() -> Dict[str, str]:
     return rv
 
 
-class MacroElement():
+class MacroElementBase():
     """ Base element - just returns the elements as a string"""
     def __init__(self, macro, fragment: str) -> None:
         self.fragment = fragment
@@ -43,9 +44,6 @@ class MacroElement():
 
     def expand(self):
         raise Exception("Only for glob segments")
-
-    def render(self, filename: Path):
-        return self.fragment
 
 
 def getBasenameNoExtension(filename: Path) -> str:
@@ -57,14 +55,13 @@ def getBasenameNoExtension(filename: Path) -> str:
 
 
 TEMPLATE_ELEMENTS = {
-    '%%': lambda x: '%%',
-    '%f': lambda x: str(x),
-    '%F': lambda x: str(x.resolve()),
-    '%n': lambda x: str(x.name),
-    '%p': lambda x: str(x.resolve().parent),
-    '%P': lambda x: str(x.resolve().parent.parent),
-    '%.': getBasenameNoExtension,
-}
+    '@@': lambda x: '@',
+    '@f': lambda x: str(x),
+    '@F': lambda x: str(x.resolve()),
+    '@n': lambda x: str(x.name),
+    '@p': lambda x: str(x.resolve().parent),
+    '@P': lambda x: str(x.resolve().parent.parent),
+    '@.': getBasenameNoExtension, }
 
 
 def resolve_template(
@@ -77,22 +74,35 @@ def resolve_template(
     return template
 
 
-class MacroElementTemplate(MacroElement):
+class MacroElementText(MacroElementBase):
     """Expand % in a macro"""
     def render(self, filename: Path) -> str:
-        template = self.fragment.lstrip('{').rstrip('}')
-        return resolve_template(filename, template)
+        return resolve_template(filename, self.fragment)
+
+    def __str__(self):
+        return f"Text   : '{self.fragment}'"
 
 
-class MacroElementGlob(MacroElement):
+class MacroElementGlob(MacroElementBase):
+
     def expand(self):
-        """Convert the glob to a list of files"""
+        """If there is a glob, expand - otherwise assume
+           it is just one file"""
         gfield = self.fragment.lstrip('{').rstrip('}')
         for fn in Path('.').glob(gfield):
             yield fn
 
     def render(self, filename):
         return str(filename)
+
+    def __str__(self):
+        return f"InGlob : '{self.fragment}'"
+
+
+class MacroElementOutput(MacroElementText):
+
+    def __str__(self):
+        return f"Output : '{self.fragment}'"
 
 
 class MacroJob:
@@ -129,7 +139,7 @@ class Macro:
                  dry_run: bool = False) -> None:
 
         self._globField = None
-        self.segments: List[MacroElement] = []
+        self.segments: List[MacroElementBase] = []
         self.LogScript: Optional[TextIOWrapper] = None
         self.dry_run = dry_run
 
@@ -147,6 +157,10 @@ class Macro:
             self.load(name)
 
         self.process_raw()
+
+    def explain(self):
+        for seg in self.segments:
+            print(seg)
 
     def get_save_file(self, save_name):
         save_folder = Path(MACRO_SAVE_PATH).expanduser()
@@ -175,60 +189,62 @@ class Macro:
         assert self._globField is None
         self._globField = value
 
+    def add_segment(self, subclass, fragment):
+        lg.debug(f'segment add {subclass.__name__} {fragment}')
+        if len(self.segments) > 0 \
+                and subclass == MacroElementText \
+                and isinstance(self.segments[-1], MacroElementText):
+            self.segments[-1].fragment += " " + fragment
+        else:
+            self.segments.append(subclass(self, fragment))
+            if subclass == MacroElementGlob:
+                self.globField = self.segments[-1]
+
     def process_raw(self):
         lg.debug("Parsing raw macro")
         # find patterns:
         up_until = 0
-        no_segments = 0
-
         raw = self.raw
-        parse_fail = False
+
         # parse macro - find expandable parts
-        for pat in re.finditer(r'\{.*?\}|%.', raw):
-            no_segments += 1
+        for pat in re.finditer(r'\{.*?\}', raw):
+            # store whatever leads up to this match
+            self.add_segment(MacroElementText, raw[up_until:pat.start()])
 
-            # store string segment up until this element
-            self.segments.append(
-                MacroElement(self, raw[up_until:pat.start()]))
-
-            segment_raw = raw[pat.start():pat.end()]
-            if '%' in segment_raw:
-                self.segments.append(
-                    MacroElementTemplate(self, segment_raw))
-            elif '*' in segment_raw:
-                self.globField = MacroElementGlob(self, segment_raw)
-                self.segments.append(self.globField)
+            fragment = raw[pat.start() + 2:pat.end() - 1]
+            fragtype = raw[pat.start() + 1:pat.start() + 2]
+            if fragtype == '<':
+                # input file/files
+                self.add_segment(
+                    MacroElementGlob, fragment)
+            elif fragtype == '>':
+                self.add_segment(
+                    MacroElementOutput, fragment)
             else:
-                lg.warning(f"Unsure about: {segment_raw}")
-                parse_fail = True
+                raise click.UsageError(f"do not know fragment type {fragtype}")
 
             up_until = pat.end()
 
         # ensure the last bit of the macro is added!
-        self.segments.append(
-            MacroElement(self, raw[up_until:]))
-
-        if parse_fail:
-            raise click.UsageError("Failed to parse macro")
+        self.add_segment(
+            MacroElementText, raw[up_until:])
 
     def expand(self):
         if self.globField is None:
+            lg.debug('Executing singleton command')
             # if there is no glob to expand -
-            raise Exception("i don't think this code is ever reached?")
-            yield self.raw
+            yield MacroJob(
+                cl=self.raw,
+                inputfile=None)
+            return
 
         for fn in self.globField.expand():
             _cl = [x.render(fn) for x in self.segments]
             cl = "".join(_cl)
-            yield MacroJob(
+            rv = MacroJob(
                 cl=cl,
                 inputfile=fn)
-
-    def execute(self, no_threads):
-        if self.globField is None:
-            self.execute_singleton()
-        else:
-            self.execute_glob(no_threads)
+            yield rv
 
     def open_script_log(self, mode):
         assert self.LogScript is None
@@ -263,23 +279,7 @@ class Macro:
         self.LogScript.write(f"# Time  : {job.runtime:.4f}s\n")
         self.LogScript.write(f"# RC    : {job.returncode}\n\n")
 
-    def execute_singleton(self):
-        # nothing to expand? Execute the raw string
-
-        if self.dry_run:
-            print(self.raw)
-        else:
-            import subprocess as sp
-            self.open_script_log(mode='singleton')
-            job = MacroJob(cl=self.raw)
-            job.start()
-            P = sp.Popen(job.cl, shell=True)
-            P.communicate()
-            job.stop(P.returncode)
-            self.add_to_script_log(job)
-            self.close_script_log()
-
-    def execute_glob(self, no_threads):
+    def execute(self, no_threads):
 
         if self.dry_run:
             for job in self.expand():

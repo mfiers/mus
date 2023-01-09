@@ -56,6 +56,9 @@ def get_db_connection() -> sqlite3.Connection:
             project TEXT,
             tag TEXT,
             uid TEXT,
+            filename TEXT,
+            checksum TEXT,
+            child_of TEXT,
             data json
             )""")
         conn.commit()
@@ -67,32 +70,32 @@ def get_db_connection() -> sqlite3.Connection:
 @dataclass(init=False)
 class Record():
 
-    type: str
+    type: Optional[str]
     message: str
     host: str
     cwd: str
     user: str
-    project: str
-    tag: str
+    project: Optional[str]
+    tag: Optional[str]
     status: int
     data: dict
     time: float
     uid: str
+    filename: Optional[str]
+    checksum: Optional[str]
+    child_of: Optional[str]
 
     def __init__(self):
         self.data = {}
         self.status = 0
 
     def __str__(self):
-        try:
-            return (
-                f"{self.host} {self.user} {int(self.time)} "
-                f"{self.cwd} "
-                f"{self.project} {self.tag} - "
-                f"{self.message}"
-            )
-        except:
-            return 'xx'
+        return (
+            f"{self.host} {self.user} {int(self.time)} "
+            f"{self.cwd} "
+            f"{self.project} {self.tag} - "
+            f"{self.message}"
+        )
 
     def nice(self,
              no_rep: Optional[int] = None,
@@ -149,7 +152,7 @@ class Record():
             subsequent_indent = "      "
         message = " \\\n".join(
             wrap(self.message, twdith - 20,
-                    subsequent_indent=subsequent_indent))
+                 subsequent_indent=subsequent_indent))
         message = style(message, fg='white', bold=True)
 
         if full:
@@ -160,7 +163,11 @@ class Record():
         else:
             return f"{tmark}{smark} {ntime:>8s} {message}{srep}{extra}"
 
-    def prepare(self):
+    def prepare(self,
+                filename: Optional[Path] = None,
+                rectype: Optional[str] = None,
+                message: Optional[str] = None,
+                ):
         """Prepare record with default values
 
         Returns: None
@@ -169,11 +176,22 @@ class Record():
         import os
         from uuid import uuid4
 
+        import mus_util
         from mus_config import get_config
 
+        if filename is not None:
+            self.filename = str(Path(filename).resolve())
+            self.checksum = mus_util.get_checksum(filename)
+        else:
+            self.filename = None
+            self.checksum = None
+        self.child_of = None
         self.cwd = os.getcwd()
         self.time = time.time()
+        self.type = rectype
         self.uid = str(uuid4())
+        if message is not None:
+            self.message = message
 
         # Gather information!
         if 'MUS_HOST' in os.environ:
@@ -212,19 +230,22 @@ class Record():
                  self.status,
                  self.tags,
                  self.projects,
-                 self.uid]
+                 self.uid,
+                 self.filename,
+                 self.checksum,
+                 self.child_of]
 
         if self.data:
             rdata.append(json.dumps(self.data))
             sql = """INSERT INTO muslog(
                     host, cwd, user, time, type, message, status,
-                    tag, project, uid, data)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?) """
+                    tag, project, uid, filename, checksum, child_of, data)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) """
         else:
             sql = """INSERT INTO muslog(
                     host, cwd, user, time, type, message, status,
-                    tag, project, uid)
-                    VALUES (?,?,?,?,?,?,?,?,?, ?) """
+                    tag, project, uid, filename, checksum, child_of)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) """
 
         db.execute(sql, tuple(rdata))
         db.commit()
