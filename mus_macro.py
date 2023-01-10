@@ -345,23 +345,28 @@ class Macro:
 
         self.open_script_log(mode='map')
 
-        # to ensure the max no subprocesses
-        sem = asyncio.Semaphore(no_threads)
-
-        async def run_one(job):
-            async with sem:
-                lg.info(f"Executing {job.uid}: {job.cl}")
-                job.start()
-                P = await asyncio.create_subprocess_shell(job.cl)
-                await P.communicate()
-                job.stop(P.returncode)
-                self.add_to_script_log(job)
-                lg.debug(f"Finished {job.uid}: {job.cl}")
-
         async def run_all():
-            await asyncio.gather(
-                *[run_one(job) for job in self.expand()]
-            )
+
+            # to ensure the max no subprocesses
+            sem = asyncio.Semaphore(no_threads)
+
+            async def run_one(job):
+                async with sem:
+                    lg.info(f"Executing {job.uid}: {job.cl}")
+                    job.start()
+                    P = await asyncio.create_subprocess_shell(job.cl)
+                    await P.communicate()
+                    job.stop(P.returncode)
+                    self.add_to_script_log(job)
+                    lg.debug(f"Finished {job.uid}: {job.cl}")
+
+            async def run_all():
+                await asyncio.gather(
+                    *[run_one(job) for job in self.expand()]
+                )
+
+            await run_all()
 
         asyncio.run(run_all())
+
         self.close_script_log()
