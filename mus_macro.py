@@ -23,6 +23,7 @@ MACRO_SAVE_PATH = "~/.local/mus/macro"
 
 
 def find_saved_macros() -> Dict[str, str]:
+    """Return a list of saved macro's."""
     save_folder = Path(MACRO_SAVE_PATH).expanduser()
     if not save_folder.exists():
         return {}
@@ -34,6 +35,43 @@ def find_saved_macros() -> Dict[str, str]:
         peek = " ".join(peek.split())[:100]
         rv[name] = peek
     return rv
+
+
+class Executor():
+    """Base class of all executors."""
+    def __init__(self, no_threads):
+        self.no_threads = no_threads
+
+
+class AsyncioExecutor(Executor):
+
+    def execute(self, jobiterator):
+
+        import asyncio
+
+        async def run_all():
+
+            # to ensure the max no subprocesses
+            sem = asyncio.Semaphore(self.no_threads)
+
+            async def run_one(job):
+                async with sem:
+                    lg.info(f"Executing {job.uid}: {job.cl}")
+                    job.start()
+                    P = await asyncio.create_subprocess_shell(job.cl)
+                    await P.communicate()
+                    job.stop(P.returncode)
+                    # self.add_to_script_log(job)
+                    lg.debug(f"Finished {job.uid}: {job.cl}")
+
+            async def run_all():
+                await asyncio.gather(
+                    *[run_one(job) for job in jobiterator()]
+                )
+
+            await run_all()
+
+        asyncio.run(run_all())
 
 
 class MacroElementBase():
@@ -67,7 +105,7 @@ TEMPLATE_ELEMENTS = {
 def resolve_template(
         filename: Path,
         template: str) -> str:
-    "Expand a % template based on a filename"
+    """Expand a % template based on a filename."""
     for k, v in TEMPLATE_ELEMENTS.items():
         template = template.replace(
             k, str(v(filename)))
@@ -177,9 +215,12 @@ class Macro:
     def __init__(self,
                  raw: Optional[str] = None,
                  name: Optional[str] = None,
-                 dry_run: bool = False) -> None:
+                 dry_run: bool = False,
+                 executor: Type[Executor] = AsyncioExecutor
+                 ) -> None:
 
         self._globField = None
+        self.executor = executor
         self.segments: List[MacroElementBase] = []
         self.LogScript: Optional[TextIOWrapper] = None
         self.dry_run = dry_run
@@ -339,32 +380,9 @@ class Macro:
             return
 
         # if not dry run:
-        import asyncio
-
         self.open_script_log(mode='map')
 
-        async def run_all():
-
-            # to ensure the max no subprocesses
-            sem = asyncio.Semaphore(no_threads)
-
-            async def run_one(job):
-                async with sem:
-                    lg.info(f"Executing {job.uid}: {job.cl}")
-                    job.start()
-                    P = await asyncio.create_subprocess_shell(job.cl)
-                    await P.communicate()
-                    job.stop(P.returncode)
-                    self.add_to_script_log(job)
-                    lg.debug(f"Finished {job.uid}: {job.cl}")
-
-            async def run_all():
-                await asyncio.gather(
-                    *[run_one(job) for job in self.expand()]
-                )
-
-            await run_all()
-
-        asyncio.run(run_all())
+        xct = self.executor(no_threads)
+        xct.execute(self.expand)
 
         self.close_script_log()
