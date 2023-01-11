@@ -93,13 +93,13 @@ def getBasenameNoExtension(filename: Path) -> str:
 
 
 TEMPLATE_ELEMENTS = {
-    '@@': lambda x: '@',
-    '@f': lambda x: str(x),
-    '@F': lambda x: str(x.resolve()),
-    '@n': lambda x: str(x.name),
-    '@p': lambda x: str(x.resolve().parent),
-    '@P': lambda x: str(x.resolve().parent.parent),
-    '@.': getBasenameNoExtension, }
+    '!!': lambda x: '##EXCLAMATION##PLACEHOLDER##',
+    '!f': lambda x: str(x),
+    '!F': lambda x: str(x.resolve()),
+    '!n': lambda x: str(x.name),
+    '!p': lambda x: str(x.resolve().parent),
+    '!P': lambda x: str(x.resolve().parent.parent),
+    '!.': getBasenameNoExtension, }
 
 
 def resolve_template(
@@ -109,49 +109,38 @@ def resolve_template(
     for k, v in TEMPLATE_ELEMENTS.items():
         template = template.replace(
             k, str(v(filename)))
+    template = template.replace(
+        '##EXCLAMATION##PLACEHOLDER##', '!')
     return template
-
-
-class MacroElementText(MacroElementBase):
-    """Expand % in a macro."""
-    def render(self, filename: Path) -> str:
-        return resolve_template(filename, self.fragment)
-
-    def __str__(self):
-        return f"Text   : '{self.fragment}'"
-
-
-class MacroElementGlob(MacroElementBase):
-
-    def expand(self):
-        """If there is a glob, expand - otherwise assume
-           it is just one file"""
-        gfield = self.fragment.lstrip('{').rstrip('}')
-        for fn in Path('.').glob(gfield):
-            yield fn
-
-    def render(self, filename):
-        return str(filename)
-
-    def __str__(self):
-        return f"InGlob : '{self.fragment}'"
-
-
-class MacroElementOutput(MacroElementText):
-
-    def __str__(self):
-        return f"Output : '{self.fragment}'"
 
 
 class MacroJob:
     def __init__(self,
-                 cl: str,
+                 cl: Optional[str] = None,
                  inputfile: Optional[Path] = None):
         self.uid = str(uuid4()).split('-')[0]
         self.cl = cl
+
+        # only one real inputfile
         self.inputfile = inputfile
+        self.outputfiles: List[Path] = []
+        # these are extraneous input files - should be
+        # present, but not taken into account for the
+        # mapping.
+        self.extrafiles: List[Path] = []
 
     def start(self):
+        if self.inputfile:
+            lg.debug(f"job start, map: {self.inputfile}")
+            for o in self.outputfiles:
+                lg.debug(f"  to: {o}")
+        else:
+            lg.debug(f"job start - singleton")
+
+
+
+        lg.debug("refer start")
+        lg.debug("job start")
         self.rec = Record()
         self.starttime = self.rec.time = time.time()
         self.rec.prepare()
@@ -168,6 +157,60 @@ class MacroJob:
         self.rec.status = returncode
         self.rec.data['runtime'] = self.runtime
         self.rec.save()
+
+
+class MacroElementText(MacroElementBase):
+    """Expand % in a macro"""
+    def render(self,
+               job: Type[MacroJob],
+               filename: Path) -> str:
+        return resolve_template(filename, self.fragment)
+
+    def __str__(self):
+        return f"Text   : '{self.fragment}'"
+
+
+class MacroElementGlob(MacroElementBase):
+
+    def expand(self):
+        """If there is a glob, expand - otherwise assume
+           it is just one file"""
+        gfield = self.fragment.lstrip('{').rstrip('}')
+        for fn in Path('.').glob(gfield):
+            yield fn
+
+    def render(self, job, filename):
+        job.inputfile = filename
+        return str(filename)
+
+    def __str__(self):
+        return f"InGlob : '{self.fragment}'"
+
+
+class MacroElementOutput(MacroElementText):
+
+    def __str__(self):
+        return f"Output : '{self.fragment}'"
+
+    def render(self,
+               job: Type[MacroJob],
+               filename: Path) -> str:
+        rv = super().render(job, filename)
+        job.outputfiles.append(Path(rv))
+        return rv
+
+
+class MacroElementExtrafile(MacroElementText):
+
+    def __str__(self):
+        return f"Output : '{self.fragment}'"
+
+    def render(self,
+               job: Type[MacroJob],
+               filename: Path) -> str:
+        rv = super().render(job, filename)
+        job.extrafiles.append(Path(rv))
+        return rv
 
 
 class Macro:
@@ -252,8 +295,20 @@ class Macro:
             # store whatever leads up to this match
             self.add_segment(MacroElementText, raw[up_until:pat.start()])
 
-            fragment = raw[pat.start() + 2:pat.end() - 1]
-            fragtype = raw[pat.start() + 1:pat.start() + 2]
+            fragment = raw[pat.start() + 1:pat.end() - 1]
+
+            if fragment[0] in '<>':
+                fragtype = fragment[0]
+                fragment = fragment[1:]
+            elif '*' in fragment:
+                # shortcut - if no <> is specified - fragments
+                # with a * must be a glob
+                fragtype = '<'
+            elif '!' in fragment:
+                fragtype = '>'
+            #elif Path(fragment).exists() and self.globField is None:
+
+
             if fragtype == '<':
                 # input file/files
                 self.add_segment(
@@ -280,12 +335,11 @@ class Macro:
             return
 
         for fn in self.globField.expand():
-            _cl = [x.render(fn) for x in self.segments]
-            cl = "".join(_cl)
-            rv = MacroJob(
-                cl=cl,
-                inputfile=fn)
-            yield rv
+            job = MacroJob(inputfile=fn)
+            _cl = [sg.render(job, fn) for sg in self.segments]
+            job.cl = "".join(_cl)
+            yield job
+
 
     def open_script_log(self, mode):
         assert self.LogScript is None
