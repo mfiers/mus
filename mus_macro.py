@@ -99,8 +99,6 @@ class MacroJob:
         else:
             lg.debug(f"job start - singleton")
 
-
-
         lg.debug("refer start")
         lg.debug("job start")
         self.rec = Record()

@@ -22,8 +22,7 @@ ignore_patterns = [
     'ls',
     'ls -[ltrahS]+',
     'pwd',
-    'mus log .*',
-    'mus tag .*', ]
+    'mus .*']
 
 ignore_regex = re.compile("|".join(ignore_patterns))
 
