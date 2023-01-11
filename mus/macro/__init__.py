@@ -3,7 +3,6 @@ import getpass
 import logging
 import os
 import re
-import shlex
 import socket
 import time
 from datetime import datetime
@@ -14,8 +13,8 @@ from uuid import uuid4
 
 import click
 
-from mus_db import Record
-from mus_util import msec2nice
+from mus.db import Record
+from mus.util import msec2nice
 
 lg = logging.getLogger("mus")
 
@@ -135,7 +134,7 @@ class MacroJob:
             for o in self.outputfiles:
                 lg.debug(f"  to: {o}")
         else:
-            lg.debug(f"job start - singleton")
+            lg.debug("job start - singleton")
 
         lg.debug("refer start")
         lg.debug("job start")
@@ -304,8 +303,7 @@ class Macro:
                 fragtype = '<'
             elif '!' in fragment:
                 fragtype = '>'
-            #elif Path(fragment).exists() and self.globField is None:
-
+            # elif Path(fragment).exists() and self.globField is None:
 
             if fragtype == '<':
                 # input file/files
@@ -337,7 +335,6 @@ class Macro:
             _cl = [sg.render(job, fn) for sg in self.segments]
             job.cl = "".join(_cl)
             yield job
-
 
     def open_script_log(self, mode):
         assert self.LogScript is None

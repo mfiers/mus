@@ -3,7 +3,7 @@ import time
 
 import click
 
-from mus_db import get_db_connection
+from mus.db import get_db_connection
 
 
 @click.command("search")

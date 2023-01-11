@@ -7,7 +7,7 @@ from pathlib import Path
 from textwrap import wrap
 from typing import Optional
 
-from mus_util import msec2nice
+from .util import msec2nice
 
 
 def record_factory(cursor, row):
@@ -176,12 +176,12 @@ class Record():
         import os
         from uuid import uuid4
 
-        import mus_util
-        from mus_config import get_config
+        from mus.config import get_config
+        from mus.util import get_checksum
 
         if filename is not None:
             self.filename = str(Path(filename).resolve())
-            self.checksum = mus_util.get_checksum(filename)
+            self.checksum = get_checksum(filename)
         else:
             self.filename = None
             self.checksum = None
