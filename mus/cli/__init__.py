@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 
 import logging
-import os
-import sys
-import time
 from pathlib import Path
 
 import click
@@ -41,6 +38,7 @@ def cli(verbose):
         lg.setLevel(logging.DEBUG)
 
 
+from mus.cli import db as dbcli  # NOQA: E402
 from mus.cli import files  # NOQA: E402
 from mus.cli import macro  # NOQA: E402
 from mus.cli import search  # NOQA: E402
@@ -49,6 +47,7 @@ cli.add_command(search.cmd_search)
 cli.add_command(files.tag)
 cli.add_command(files.file_)
 cli.add_command(macro.macro)
+cli.add_command(dbcli.db)
 
 
 @cli.command("log")
@@ -60,17 +59,6 @@ def log(message):
     rec.message = " ".join(message)
     rec.type = 'log'
     rec.save()
-
-
-# DB relat
-@cli.group()
-def db():
-    pass
-
-
-@db.command("path")
-def db_path():
-    print(get_db_path())
 
 
 # CONFIGURATION

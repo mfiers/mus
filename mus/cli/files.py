@@ -30,8 +30,6 @@ def tag(filename, message):
 @click.argument("filename")
 def file_(filename):
 
-    from datetime import datetime
-
     import mus.util
 
     db = get_db_connection()

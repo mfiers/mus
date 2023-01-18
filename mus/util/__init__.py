@@ -28,21 +28,6 @@ def msec2nice(mtime):
         return f"{days}d:{hours:02d}h"
 
 
-def get_checksum(filename: Path) -> str:
-    import subprocess as sp
-    import sys
-
-    if sys.platform == 'darwin':
-        P = sp.check_output(
-            ['shasum', '-U', '-a', '256', filename],
-            text=True)
-        checksum = P.split()[0]
-    else:
-        raise NotImplementedError()
-
-    return checksum
-
-
 def format_type_short(status):
     from click import style
     if status == 'tag':

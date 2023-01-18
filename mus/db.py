@@ -90,11 +90,13 @@ class Record():
         self.status = 0
 
     def __str__(self):
+        proj = getattr(self, "projects", "?")
+        message = getattr(self, "message", "-")
         return (
             f"{self.host} {self.user} {int(self.time)} "
             f"{self.cwd} "
-            f"{self.project} {self.tag} - "
-            f"{self.message}"
+            f"{proj} {self.tags} - "
+            f"{message}"
         )
 
     def nice(self,
@@ -146,14 +148,22 @@ class Record():
                 rt = msec2nice(self.data["runtime"] * 1000)
                 extra = f' duration: {rt}'
 
+        if self.uid:
+            uid = style(self.uid[:4], fg='blue', bold=False,
+                        bg='black')
+        else:
+            uid = style('????', fg='red', bold=False)
         if full:
             subsequent_indent = ""
         else:
             subsequent_indent = "      "
-        message = " \\\n".join(
-            wrap(self.message, twdith - 20,
-                 subsequent_indent=subsequent_indent))
-        message = style(message, fg='white', bold=True)
+        if self.message is None:
+            message = ""
+        else:
+            message = " \\\n".join(
+                wrap(self.message, twdith - 20,
+                     subsequent_indent=subsequent_indent))
+            message = style(message, fg='white', bold=True)
 
         if full:
             return (
@@ -161,12 +171,13 @@ class Record():
                 f"| {self.user}@{self.host}:{self.cwd}\n"
                 f"{message}{srep}{extra}")
         else:
-            return f"{tmark}{smark} {ntime:>8s} {message}{srep}{extra}"
+            return f"{tmark}{smark} {uid} {ntime:>8s} {message}{srep}{extra}"
 
     def prepare(self,
                 filename: Optional[Path] = None,
                 rectype: Optional[str] = None,
                 message: Optional[str] = None,
+                child_of: Optional[str] = None,
                 ):
         """Prepare record with default values
 
@@ -177,7 +188,7 @@ class Record():
         from uuid import uuid4
 
         from mus.config import get_config
-        from mus.util import get_checksum
+        from mus.util.files import get_checksum
 
         if filename is not None:
             self.filename = str(Path(filename).resolve())
@@ -185,13 +196,12 @@ class Record():
         else:
             self.filename = None
             self.checksum = None
-        self.child_of = None
+        self.child_of = child_of
         self.cwd = os.getcwd()
         self.time = time.time()
         self.type = rectype
         self.uid = str(uuid4())
-        if message is not None:
-            self.message = message
+        self.message = message
 
         # Gather information!
         if 'MUS_HOST' in os.environ:

@@ -13,7 +13,10 @@ from uuid import uuid4
 
 import click
 
+import mus.macro.elements as mme
 from mus.db import Record
+from mus.macro.executors import AsyncioExecutor, Executor
+from mus.macro.job import MacroJob
 from mus.util import msec2nice
 
 lg = logging.getLogger("mus")
@@ -36,180 +39,6 @@ def find_saved_macros() -> Dict[str, str]:
     return rv
 
 
-class Executor():
-    """Base class of all executors."""
-    def __init__(self, no_threads):
-        self.no_threads = no_threads
-
-
-class AsyncioExecutor(Executor):
-
-    def execute(self, jobiterator):
-
-        import asyncio
-
-        async def run_all():
-
-            # to ensure the max no subprocesses
-            sem = asyncio.Semaphore(self.no_threads)
-
-            async def run_one(job):
-                async with sem:
-                    lg.info(f"Executing {job.uid}: {job.cl}")
-                    job.start()
-                    P = await asyncio.create_subprocess_shell(job.cl)
-                    await P.communicate()
-                    job.stop(P.returncode)
-                    # self.add_to_script_log(job)
-                    lg.debug(f"Finished {job.uid}: {job.cl}")
-
-            async def run_all():
-                await asyncio.gather(
-                    *[run_one(job) for job in jobiterator()]
-                )
-
-            await run_all()
-
-        asyncio.run(run_all())
-
-
-class MacroElementBase():
-    """ Base element - just returns the elements as a string"""
-    def __init__(self, macro, fragment: str) -> None:
-        self.fragment = fragment
-        self.macro = macro
-
-    def expand(self):
-        raise Exception("Only for glob segments")
-
-
-def getBasenameNoExtension(filename: Path) -> str:
-    rv = filename.name
-    if '.' in rv:
-        return rv.rsplit('.', 1)[0]
-    else:
-        return rv
-
-
-TEMPLATE_ELEMENTS = {
-    '!!': lambda x: '##EXCLAMATION##PLACEHOLDER##',
-    '!f': lambda x: str(x),
-    '!F': lambda x: str(x.resolve()),
-    '!n': lambda x: str(x.name),
-    '!p': lambda x: str(x.resolve().parent),
-    '!P': lambda x: str(x.resolve().parent.parent),
-    '!.': getBasenameNoExtension, }
-
-
-def resolve_template(
-        filename: Path,
-        template: str) -> str:
-    """Expand a % template based on a filename."""
-    for k, v in TEMPLATE_ELEMENTS.items():
-        template = template.replace(
-            k, str(v(filename)))
-    template = template.replace(
-        '##EXCLAMATION##PLACEHOLDER##', '!')
-    return template
-
-
-class MacroJob:
-    def __init__(self,
-                 cl: Optional[str] = None,
-                 inputfile: Optional[Path] = None):
-        self.uid = str(uuid4()).split('-')[0]
-        self.cl = cl
-
-        # only one real inputfile
-        self.inputfile = inputfile
-        self.outputfiles: List[Path] = []
-        # these are extraneous input files - should be
-        # present, but not taken into account for the
-        # mapping.
-        self.extrafiles: List[Path] = []
-
-    def start(self):
-        if self.inputfile:
-            lg.debug(f"job start, map: {self.inputfile}")
-            for o in self.outputfiles:
-                lg.debug(f"  to: {o}")
-        else:
-            lg.debug("job start - singleton")
-
-        lg.debug("refer start")
-        lg.debug("job start")
-        self.rec = Record()
-        self.starttime = self.rec.time = time.time()
-        self.rec.prepare()
-        self.rec.type = 'macro-exe'
-
-    def stop(self, returncode):
-        self.stoptime = time.time()
-        self.runtime = self.stoptime - self.starttime
-        self.runtimeNice = msec2nice(self.runtime)
-        self.returncode = returncode
-
-        self.rec.time = self.starttime
-        self.rec.message = self.cl
-        self.rec.status = returncode
-        self.rec.data['runtime'] = self.runtime
-        self.rec.save()
-
-
-class MacroElementText(MacroElementBase):
-    """Expand % in a macro"""
-    def render(self,
-               job: Type[MacroJob],
-               filename: Path) -> str:
-        return resolve_template(filename, self.fragment)
-
-    def __str__(self):
-        return f"Text   : '{self.fragment}'"
-
-
-class MacroElementGlob(MacroElementBase):
-
-    def expand(self):
-        """If there is a glob, expand - otherwise assume
-           it is just one file"""
-        gfield = self.fragment.lstrip('{').rstrip('}')
-        for fn in Path('.').glob(gfield):
-            yield fn
-
-    def render(self, job, filename):
-        job.inputfile = filename
-        return str(filename)
-
-    def __str__(self):
-        return f"InGlob : '{self.fragment}'"
-
-
-class MacroElementOutput(MacroElementText):
-
-    def __str__(self):
-        return f"Output : '{self.fragment}'"
-
-    def render(self,
-               job: Type[MacroJob],
-               filename: Path) -> str:
-        rv = super().render(job, filename)
-        job.outputfiles.append(Path(rv))
-        return rv
-
-
-class MacroElementExtrafile(MacroElementText):
-
-    def __str__(self):
-        return f"Output : '{self.fragment}'"
-
-    def render(self,
-               job: Type[MacroJob],
-               filename: Path) -> str:
-        rv = super().render(job, filename)
-        job.extrafiles.append(Path(rv))
-        return rv
-
-
 class Macro:
     def __init__(self,
                  raw: Optional[str] = None,
@@ -220,7 +49,8 @@ class Macro:
 
         self._globField = None
         self.executor = executor
-        self.segments: List[MacroElementBase] = []
+
+        self.segments: List[mme.MacroElementBase] = []
         self.LogScript: Optional[TextIOWrapper] = None
         self.dry_run = dry_run
 
@@ -236,6 +66,12 @@ class Macro:
             self.raw = raw
         else:
             self.load(name)
+
+        self.record = Record()
+        self.record.prepare(
+            message=self.raw,
+            rectype="macro")
+        self.record.save()
 
         self.process_raw()
 
@@ -273,12 +109,12 @@ class Macro:
     def add_segment(self, subclass, fragment):
         lg.debug(f'segment add {subclass.__name__} {fragment}')
         if len(self.segments) > 0 \
-                and subclass == MacroElementText \
-                and isinstance(self.segments[-1], MacroElementText):
+                and subclass == mme.MacroElementText \
+                and isinstance(self.segments[-1], mme.MacroElementText):
             self.segments[-1].fragment += " " + fragment
         else:
             self.segments.append(subclass(self, fragment))
-            if subclass == MacroElementGlob:
+            if subclass == mme.MacroElementGlob:
                 self.globField = self.segments[-1]
 
     def process_raw(self):
@@ -290,7 +126,7 @@ class Macro:
         # parse macro - find expandable parts
         for pat in re.finditer(r'\{.*?\}', raw):
             # store whatever leads up to this match
-            self.add_segment(MacroElementText, raw[up_until:pat.start()])
+            self.add_segment(mme.MacroElementText, raw[up_until:pat.start()])
 
             fragment = raw[pat.start() + 1:pat.end() - 1]
 
@@ -303,15 +139,19 @@ class Macro:
                 fragtype = '<'
             elif '!' in fragment:
                 fragtype = '>'
-            # elif Path(fragment).exists() and self.globField is None:
+            elif Path(fragment).exists() and self.globField is None:
+                # assume a single input file
+                fragtype = '<'
+            else:
+                fragtype = '>'
 
             if fragtype == '<':
                 # input file/files
                 self.add_segment(
-                    MacroElementGlob, fragment)
+                    mme.MacroElementGlob, fragment)
             elif fragtype == '>':
                 self.add_segment(
-                    MacroElementOutput, fragment)
+                    mme.MacroElementOutput, fragment)
             else:
                 raise click.UsageError(f"do not know fragment type {fragtype}")
 
@@ -319,7 +159,7 @@ class Macro:
 
         # ensure the last bit of the macro is added!
         self.add_segment(
-            MacroElementText, raw[up_until:])
+            mme.MacroElementText, raw[up_until:])
 
     def expand(self):
         if self.globField is None:
@@ -327,11 +167,12 @@ class Macro:
             # if there is no glob to expand -
             yield MacroJob(
                 cl=self.raw,
-                inputfile=None)
+                inputfile=None,
+                macro=self)
             return
 
         for fn in self.globField.expand():
-            job = MacroJob(inputfile=fn)
+            job = MacroJob(inputfile=fn, macro=self)
             _cl = [sg.render(job, fn) for sg in self.segments]
             job.cl = "".join(_cl)
             yield job

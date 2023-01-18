@@ -8,8 +8,10 @@ from mus.db import get_db_connection
 
 @click.command("search")
 @click.argument('filter_str', nargs=-1)
+@click.option('--remove', is_flag=True, default=False)
 @click.option('-h', '--host')
 @click.option('-u', '--user')
+@click.option('-U', '--uid')
 @click.option('-a', '--age')
 @click.option('-p', '--project',
               help="Filter on project")
@@ -17,16 +19,58 @@ from mus.db import get_db_connection
               help='Full output')
 @click.option('-n', '--no', type=int, default=20,
               help='No results to show')
-def cmd_search(filter_str, host, user, age, project, no, full):
+def cmd_search(filter_str, uid, host, user, age, project, no, full,
+               remove):
     "Search the mus database."
+
+    from datetime import datetime
+
     filter_str_2 = " ".join(filter_str).strip()
 
     db = get_db_connection()
-    sql = """
-        SELECT host, cwd, user, time, type,
+
+    if uid is not None:
+        if remove:
+            sql = f"""DELETE FROM muslog WHERE uid LIKE "{uid}%" """
+            query = db.execute(sql)
+            db.commit()
+            return
+
+        sql = f"""
+        SELECT uid, host, cwd, user, time, type,
             message, status, project, tag, data
         FROM muslog
+        WHERE uid LIKE "{uid}%"
+        ORDER BY time desc
+        LIMIT 1
         """
+        query = db.execute(sql)
+
+        rec = query.fetchone()
+
+        mfl = max([
+            len(x) for x in rec.__dataclass_fields__])
+        fmt_string = '{:%ds} {}' % mfl
+        for fld in rec.__dataclass_fields__:
+            if hasattr(rec, fld):
+                val = getattr(rec, fld)
+                if fld == 'data' and not val:
+                    continue
+                if fld == 'time':
+                    val = datetime.fromtimestamp(val)
+
+                print(fmt_string.format(
+                    fld, val))
+        return
+
+    if remove:
+        sql = "DELETE FROM muslog"
+    else:
+        sql = """
+            SELECT uid, host, cwd, user, time, type,
+                message, status, project, tag, data
+            FROM muslog
+            """
 
     where_elements = []
     sqlargs = []
@@ -60,7 +104,13 @@ def cmd_search(filter_str, host, user, age, project, no, full):
         sqlargs.append(time.time() - delta_age)
 
     if where_elements:
-        sql += "WHERE " + " AND ".join(where_elements)
+        sql += " WHERE " + " AND ".join(where_elements)
+
+    if remove:
+        print(sql)
+        db.execute(sql, sqlargs)
+        db.commit()
+        return
 
     sql += f"""
         ORDER BY time DESC
