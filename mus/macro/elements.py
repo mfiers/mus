@@ -24,13 +24,13 @@ def getBasenameNoExtension(filename: Path) -> str:
 
 
 TEMPLATE_ELEMENTS = {
-    '!!': lambda x: '##EXCLAMATION##PLACEHOLDER##',
-    '!f': lambda x: str(x),
-    '!F': lambda x: str(x.resolve()),
-    '!n': lambda x: str(x.name),
-    '!p': lambda x: str(x.resolve().parent),
-    '!P': lambda x: str(x.resolve().parent.parent),
-    '!.': getBasenameNoExtension, }
+    '%%': lambda x: '##PERCENT##PLACEHOLDER##',
+    '%f': lambda x: str(x),
+    '%F': lambda x: str(x.resolve()),
+    '%n': lambda x: str(x.name),
+    '%p': lambda x: str(x.resolve().parent),
+    '%P': lambda x: str(x.resolve().parent.parent),
+    '%.': getBasenameNoExtension, }
 
 
 def resolve_template(
@@ -41,7 +41,7 @@ def resolve_template(
         template = template.replace(
             k, str(v(filename)))
     template = template.replace(
-        '##EXCLAMATION##PLACEHOLDER##', '!')
+        '##PERCENT##PLACEHOLDER##', '%')
     return template
 
 

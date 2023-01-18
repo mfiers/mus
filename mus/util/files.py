@@ -1,6 +1,9 @@
 
+import logging
+
 from pathlib import Path
 
+lg = logging.getLogger()
 
 def get_checksum(filename: Path) -> str:
     import subprocess as sp
@@ -13,7 +16,7 @@ def get_checksum(filename: Path) -> str:
         checksum = P.split()[0]
     elif sys.platform == 'linux':
         P = sp.check_output(
-            ['shasum', '-p', '-a', '256', filename],
+            ['shasum', '-U', '-a', '256', filename],
             text=True)
         checksum = P.split()[0]
     else:

@@ -137,7 +137,7 @@ class Macro:
                 # shortcut - if no <> is specified - fragments
                 # with a * must be a glob
                 fragtype = '<'
-            elif '!' in fragment:
+            elif '%' in fragment:
                 fragtype = '>'
             elif Path(fragment).exists() and self.globField is None:
                 # assume a single input file
