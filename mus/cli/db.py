@@ -13,4 +13,3 @@ def db():
 @db.command("path")
 def db_path():
     print(get_db_path())
-
