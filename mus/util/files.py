@@ -1,25 +1,21 @@
 
 import logging
-
 from pathlib import Path
 
 lg = logging.getLogger()
 
+
 def get_checksum(filename: Path) -> str:
-    import subprocess as sp
+    import hashlib
     import sys
 
-    if sys.platform == 'darwin':
-        P = sp.check_output(
-            ['shasum', '-U', '-a', '256', filename],
-            text=True)
-        checksum = P.split()[0]
-    elif sys.platform == 'linux':
-        P = sp.check_output(
-            ['shasum', '-U', '-a', '256', filename],
-            text=True)
-        checksum = P.split()[0]
-    else:
-        raise NotImplementedError(f"for sys {sys.platform}")
+    if not filename.exists():
+        raise FileExistsError()
 
-    return checksum
+    sha256_hash = hashlib.sha256()
+    with open(filename, "rb") as f:
+        # Read and update hash string value in blocks of 4K
+        for byte_block in iter(lambda: f.read(65536),b""):
+            sha256_hash.update(byte_block)
+    return sha256_hash.hexdigest()
+
