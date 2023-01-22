@@ -31,11 +31,11 @@ def tag(filename, message):
 def file_(filename):
 
     import mus.util
-
+    from mus.util.files import get_checksum
     db = get_db_connection()
 
     filename = Path(filename).resolve()
-    checksum = mus.util.get_checksum(filename)
+    checksum = get_checksum(filename)
 
     echo(f"Checking file {filename}")
     echo(f"Checksum: {checksum}")
