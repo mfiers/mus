@@ -71,7 +71,7 @@ def get_db_connection() -> sqlite3.Connection:
 class Record():
 
     type: Optional[str]
-    message: str
+    message: Optional[str]
     host: str
     cwd: str
     user: str
