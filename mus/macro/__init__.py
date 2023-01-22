@@ -110,10 +110,11 @@ class Macro:
         lg.debug(f'segment add {subclass.__name__} {fragment}')
         if len(self.segments) > 0 \
                 and subclass == mme.MacroElementText \
-                and isinstance(self.segments[-1], mme.MacroElementText):
-            self.segments[-1].fragment += " " + fragment
+                and type(self.segments[-1]) is mme.MacroElementText:
+            self.segments[-1].fragment += fragment
         else:
             self.segments.append(subclass(self, fragment))
+
             if subclass == mme.MacroElementGlob:
                 self.globField = self.segments[-1]
 
@@ -215,6 +216,10 @@ class Macro:
         if self.dry_run:
             for job in self.expand():
                 print(job.cl)
+                if job.inputfile:
+                    print(f"  < {job.inputfile}")
+                for o in job.outputfiles:
+                    print(f"  > {o}")
             return
 
         # if not dry run:
