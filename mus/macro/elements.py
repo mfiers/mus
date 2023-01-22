@@ -30,7 +30,7 @@ TEMPLATE_ELEMENTS = {
     '%n': lambda x: str(x.name),
     '%p': lambda x: str(x.resolve().parent),
     '%P': lambda x: str(x.resolve().parent.parent),
-    '%.': getBasenameNoExtension, }
+    '%b': getBasenameNoExtension, }
 
 
 def resolve_template(
@@ -40,6 +40,7 @@ def resolve_template(
     for k, v in TEMPLATE_ELEMENTS.items():
         template = template.replace(
             k, str(v(filename)))
+
     template = template.replace(
         '##PERCENT##PLACEHOLDER##', '%')
     return template
@@ -50,7 +51,8 @@ class MacroElementText(MacroElementBase):
     def render(self,
                job: Type[MacroJob],
                filename: Path) -> str:
-        return resolve_template(filename, self.fragment)
+        rv = resolve_template(filename, self.fragment)
+        return rv
 
     def __str__(self):
         return f"Text   : '{self.fragment}'"
