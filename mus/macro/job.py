@@ -34,18 +34,20 @@ class MacroJob:
         self.extrafiles: List[Path] = []
 
     def start(self):
+        from mus.util.files import get_checksum
         if self.inputfile:
             lg.debug(f"job start, map: {self.inputfile}")
+
+            # record input files prior to run - we assume they do not change
             if self.inputfile.is_file():
-                filerec = Record()
-                filerec.prepare(
+                self.inputfile_rec = Record()
+                self.inputfile_rec.prepare(
                     filename=self.inputfile,
                     rectype='inputfile',
                     child_of=self.record.uid)
-                filerec.save()
+                self.inputfile_rec.save()
             elif self.inputfile.is_dir():
-                self.record.data
-
+                lg.debug(f"No checksum for input folders {self.inputfile}?")
         else:
             lg.debug("job start - singleton")
 
@@ -65,3 +67,13 @@ class MacroJob:
         self.record.status = returncode
         self.record.data['runtime'] = self.runtime
         self.record.save()
+
+        for o in self.outputfiles:
+            print(o, type(o))
+            if o.is_file():
+                orec = Record()
+                orec.prepare(
+                    filename=o,
+                    rectype='outputfile',
+                    child_of=self.record.uid)
+                orec.save()

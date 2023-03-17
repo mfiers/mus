@@ -14,6 +14,8 @@ class AsyncioExecutor(Executor):
     def execute(self, jobiterator):
 
         import asyncio
+        import subprocess as sp
+        import sys
 
         async def run_all():
 
@@ -24,10 +26,12 @@ class AsyncioExecutor(Executor):
                 async with sem:
                     lg.info(f"Executing {job.record.uid}: {job.cl}")
                     job.start()
-                    P = await asyncio.create_subprocess_shell(job.cl)
-                    await P.communicate()
+                    P = await asyncio.create_subprocess_shell(
+                        job.cl, stdout=sp.PIPE, stderr=sp.PIPE)
+                    out, err = await P.communicate()
+                    sys.stdout.write(out.decode())
+                    sys.stderr.write(err.decode())
                     job.stop(P.returncode)
-                    # self.add_to_script_log(job)
                     lg.debug(f"Finished {job.record.uid}: {job.cl}")
 
             async def run_all():

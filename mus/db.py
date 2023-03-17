@@ -35,16 +35,9 @@ def get_db_path() -> str:
     return os.path.join(mus_folder, 'mus.db')
 
 
-def get_db_connection() -> sqlite3.Connection:
-    """ Return a database connection.
-    Create if it does not exist
-    """
-    db = get_db_path()
-    if os.path.exists(db):
-        conn = sqlite3.connect(db)
-    else:
-        conn = sqlite3.connect(db)
-        conn.execute("""
+def init_muslog_table(conn: sqlite3.Connection):
+    "Create the muslog table"
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS muslog (
             host TEXT,
             cwd TEXT,
@@ -61,7 +54,38 @@ def get_db_connection() -> sqlite3.Connection:
             child_of TEXT,
             data json
             )""")
-        conn.commit()
+    conn.commit()
+
+
+def init_hashcache_table(conn: sqlite3.Connection):
+    """Create the hash cache table.
+
+    Not storing host - assuming this is host specific
+    """
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS hashcache (
+            filename TEXT,
+            mtime INTEGER,
+            hash TEXT)""")
+    conn.commit()
+    conn.execute("""
+                 CREATE UNIQUE INDEX IF NOT EXISTS hashcache_filename
+                 ON hashcache ( filename ) """)
+    conn.commit()
+
+
+def get_db_connection() -> sqlite3.Connection:
+    """ Return a database connection.
+    Create if it does not exist
+    """
+    db = get_db_path()
+    if os.path.exists(db):
+        conn = sqlite3.connect(db)
+    else:
+        conn = sqlite3.connect(db)
+        init_muslog_table(conn)
+        init_hashcache_table(conn)
 
     conn.row_factory = record_factory
     return conn
@@ -90,14 +114,19 @@ class Record():
         self.status = 0
 
     def __str__(self):
-        proj = getattr(self, "projects", "?")
-        message = getattr(self, "message", "-")
-        return (
-            f"{self.host} {self.user} {int(self.time)} "
-            f"{self.cwd} "
-            f"{proj} {self.tags} - "
-            f"{message}"
-        )
+
+        if hasattr(self, 'host'):
+            proj = getattr(self, "projects", "?")
+            message = getattr(self, "message", "-")
+            tags = getattr(self, "tags", '-')
+            return (
+                f"{self.host} {self.user} {int(self.time)} "
+                f"{self.cwd} "
+                f"{proj} {tags} - "
+                f"{message}"
+            )
+        elif hasattr(self, 'hash'):
+            return f"{self.filename} {self.hash}"
 
     def nice(self,
              no_rep: Optional[int] = None,
@@ -184,7 +213,6 @@ class Record():
         Returns: None
         """
 
-        import os
         from uuid import uuid4
 
         from mus.config import get_config
