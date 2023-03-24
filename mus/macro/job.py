@@ -25,13 +25,18 @@ class MacroJob:
         self.record.child_of = self.macro.record.uid
         self.cl = cl
 
-        # only one real inputfile
+        #if the macro defined a wrapper - apply it here.
+        if self.macro.wrapper:
+            self.cl = self.macro.wrapper.format(cl=self.cl)
+
+        # only one real i nputfile
         self.inputfile = inputfile
         self.outputfiles: List[Path] = []
         # these are extraneous input files - should be
         # present, but not taken into account for the
         # mapping.
         self.extrafiles: List[Path] = []
+
 
     def start(self):
         from mus.util.files import get_checksum
@@ -55,6 +60,7 @@ class MacroJob:
         lg.debug("job start")
         self.starttime = self.record.time = time.time()
         self.record.type = 'macro-exe'
+
 
     def stop(self, returncode):
         self.stoptime = time.time()
