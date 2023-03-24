@@ -17,5 +17,5 @@ def run_macro(macro):
 def test_run_macro_ls():
     "Test"
     result = run_macro('ls test/data')
-    assert 'test.txt' in result.output
+    assert 'test01.txt' in result.output
     assert result.exit_code == 0
