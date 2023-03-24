@@ -1,4 +1,5 @@
 
+
 import getpass
 import logging
 import os
@@ -22,6 +23,7 @@ from mus.util import msec2nice
 lg = logging.getLogger("mus")
 
 MACRO_SAVE_PATH = "~/.local/mus/macro"
+WRAPPER_SAVE_PATH = "~/.local/mus/wrappers"
 
 
 def find_saved_macros() -> Dict[str, str]:
@@ -39,17 +41,44 @@ def find_saved_macros() -> Dict[str, str]:
     return rv
 
 
+def find_saved_wrappers() -> Dict[str, str]:
+    """Return a list of saved macro's."""
+    save_folder = Path(WRAPPER_SAVE_PATH).expanduser()
+    if not save_folder.exists():
+        return {}
+
+    rv = {}
+    for wrapperfile in save_folder.glob('*.mwr'):
+        name = wrapperfile.name[:-4]
+        peek = open(wrapperfile).read()
+        peek = " ".join(peek.split())[:100]
+        rv[name] = peek
+    return rv
+
+
+def load_wrapper(wrapper_name: str) -> str:
+    filename = Path(WRAPPER_SAVE_PATH).expanduser() \
+            / f"{wrapper_name}.mwr"
+
+    if not filename.exists():
+        raise FileExistsError(filename)
+
+    with open(filename) as F:
+        return F.read()
+
+
 class Macro:
     def __init__(self,
                  raw: Optional[str] = None,
                  name: Optional[str] = None,
+                 wrapper: Optional[str] = None,
                  dry_run: bool = False,
                  executor: Type[Executor] = AsyncioExecutor
                  ) -> None:
 
         self._globField = None
         self.executor = executor
-
+        self.wrapper = wrapper
         self.segments: List[mme.MacroElementBase] = []
         self.LogScript: Optional[TextIOWrapper] = None
         self.dry_run = dry_run
@@ -75,9 +104,11 @@ class Macro:
 
         self.process_raw()
 
+
     def explain(self):
         for seg in self.segments:
             print(seg)
+
 
     def get_save_file(self, save_name):
         save_folder = Path(MACRO_SAVE_PATH).expanduser()
@@ -85,16 +116,19 @@ class Macro:
             save_folder.mkdir(parents=True)
         return save_folder / f"{save_name}.mmc"
 
+
     def save(self, save_name):
         save_file = self.get_save_file(save_name)
         with open(save_file, 'wt') as F:
             F.write(self.raw)
+
 
     def load(self, name):
         macro_file = self.get_save_file(name)
         lg.debug(f"Load macro from {macro_file}")
         with open(macro_file, 'rt') as F:
             self.raw = F.read()
+
 
     @property
     def globField(self):
@@ -117,6 +151,7 @@ class Macro:
 
             if subclass == mme.MacroElementGlob:
                 self.globField = self.segments[-1]
+
 
     def process_raw(self):
         lg.debug("Parsing raw macro")
@@ -161,6 +196,7 @@ class Macro:
         # ensure the last bit of the macro is added!
         self.add_segment(
             mme.MacroElementText, raw[up_until:])
+
 
     def expand(self):
         if self.globField is None:
