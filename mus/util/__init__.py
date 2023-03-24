@@ -1,6 +1,15 @@
 
 import logging
+import os
 from pathlib import Path
+
+
+def get_host():
+    if 'MUS_HOST' in os.environ:
+        return os.environ['MUS_HOST']
+    else:
+        import socket
+        return socket.gethostname()
 
 
 def msec2nice(mtime):

@@ -7,7 +7,7 @@ from pathlib import Path
 from textwrap import wrap
 from typing import Optional
 
-from .util import msec2nice
+from .util import get_host, msec2nice
 
 
 def record_factory(cursor, row):
@@ -232,11 +232,7 @@ class Record():
         self.message = message
 
         # Gather information!
-        if 'MUS_HOST' in os.environ:
-            self.host = os.environ['MUS_HOST']
-        else:
-            import socket
-            self.host = socket.gethostname()
+        self.host = get_host()
 
         if 'MUS_USER' in os.environ:
             self.user = os.environ['MUS_USER']
