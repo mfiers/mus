@@ -37,6 +37,18 @@ def macro_list():
         echo(style(name, fg="green") + ": " + val)
 
 
+@macro.group('wrapper')
+def wrapper():
+    pass
+
+
+@wrapper.command("list")
+def wrapper_list():
+    from mus.macro import find_saved_wrappers
+    for name, val in find_saved_wrappers().items():
+        echo(style(name, fg="green") + ": " + val)
+
+
 @macro.command("edit")
 @click.argument('name')
 def macro_edit(name):
@@ -45,9 +57,30 @@ def macro_edit(name):
 
     from mus.macro import MACRO_SAVE_PATH
 
+    if not os.path.exists(MACRO_SAVE_PATH):
+        os.makedirs(MACRO_SAVE_PATH)
+
     filename = Path(MACRO_SAVE_PATH).expanduser() / f"{name}.mmc"
-    EDITOR = os.environ.get('EDITOR', 'vim')
-    call([EDITOR, filename])
+    cl = f"{editor} {filename}"
+    call(cl, shell=True)
+
+
+@wrapper.command("edit")
+@click.argument('name')
+def wrapper_edit(name):
+    """Drop into EDITOR with the wrapper of choice"""
+    from subprocess import call
+
+    from mus.macro import WRAPPER_SAVE_PATH
+
+    if not os.path.exists(WRAPPER_SAVE_PATH):
+        os.makedirs(WRAPPER_SAVE_PATH)
+
+    filename = Path(WRAPPER_SAVE_PATH).expanduser() / f"{name}.mwr"
+    editor = os.environ.get('EDITOR', 'vim')
+    cl = f"{editor} {filename}"
+    print(cl)
+    call(cl, shell=True)
 
 
 @macro.command("stdin-exe", hidden=True)
@@ -56,7 +89,7 @@ def macro_cli_exe():
     import multiprocessing
     import re
 
-    from mus.macro import Macro
+    from mus.macro import Macro, load_wrapper
 
     raw_macro = sys.stdin.read()
     _ = raw_macro.strip().split(None, 2)
@@ -72,6 +105,7 @@ def macro_cli_exe():
     load_name = None
     dry_run = False
     explain_macro = False
+    wrapper_name = None
 
     while raw_macro:
 
@@ -80,39 +114,55 @@ def macro_cli_exe():
         else:
             maybe_arg, macro_rest = raw_macro, ''
 
-        if m := re.match('-j([0-9]+)', maybe_arg):
+
+        if re.match('-j([0-9]+)', maybe_arg):
+            m = re.match('-j([0-9]+)', maybe_arg)
             no_threads = int(m.groups()[0])
-        elif m := re.match(r'-s([a-zA-Z]\w*)', maybe_arg):
+        elif re.match(r'-s([a-zA-Z]\w*)', maybe_arg):
+            m = re.match(r'-s([a-zA-Z]\w*)', maybe_arg)
             save_name = m.groups()[0]
-        elif m := re.match(r'-l([a-zA-Z]\w*)', maybe_arg):
+        elif re.match(r'-w([a-zA-Z]\w*)', maybe_arg):
+            m = re.match(r'-w([a-zA-Z]\w*)', maybe_arg)
+            wrapper_name = m.groups()[0]
+        elif re.match(r'-l([a-zA-Z]\w*)', maybe_arg):
+            m = re.match(r'-l([a-zA-Z]\w*)', maybe_arg)
             load_name = m.groups()[0]
         elif maybe_arg == '-d':
             dry_run = True
         elif maybe_arg == '-M':
             explain_macro = True
-        elif m := re.match(r'-(vv*)', maybe_arg):
+        elif re.match(r'-(vv*)', maybe_arg):
+            m = re.match(r'-(vv*)', maybe_arg)
             verbose = len(m.groups()[0])
             if verbose == 1:
                 lg.setLevel(logging.INFO)
             elif verbose > 1:
                 lg.setLevel(logging.DEBUG)
         else:
+            # did not recognize - must not be a mus/macro argument
+            # stop parsing
             break
 
         # we reach this line only if an argument matched
         raw_macro = macro_rest.strip()
+        # continue parsing.
+
 
     if raw_macro and load_name:
         lg.warning("specified both a macro to load and macro string"
                    " - unsure what to do")
         return
 
+    wrapper = None
+    if wrapper_name:
+        wrapper = load_wrapper(wrapper_name)
+
     macro_args = dict(dry_run=dry_run)
 
     if raw_macro:
-        macro = Macro(raw=raw_macro, **macro_args)
+        macro = Macro(raw=raw_macro, wrapper=wrapper, **macro_args)
     elif load_name:
-        macro = Macro(name=load_name, **macro_args)
+        macro = Macro(name=load_name, wrapper=wrapper, **macro_args)
     else:
         raise click.UsageError("No macro defined")
 
