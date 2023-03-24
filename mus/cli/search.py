@@ -1,9 +1,11 @@
 
+import os
 import time
 
 import click
 
 from mus.db import get_db_connection
+from mus.util import get_host
 
 
 @click.command("search")
@@ -24,7 +26,6 @@ def cmd_search(filter_str, uid, host, user, age, project, no, full,
     "Search the mus database."
 
     from datetime import datetime
-
     filter_str_2 = " ".join(filter_str).strip()
 
     db = get_db_connection()
@@ -75,19 +76,27 @@ def cmd_search(filter_str, uid, host, user, age, project, no, full,
     where_elements = []
     sqlargs = []
     if filter_str:
-        where_elements.append("`message` like ?")
-        sqlargs.append("%" + filter_str_2 + "%")
+        #special case - if filter_str == '.'
+        if filter_str == '.':
+            where_elements.append("`host` = ?")
+            sqlargs.append(get_host())
+            where_elements.append("`cwd` LIKE ?")
+            sqlargs.append(os.getcwd() + '%')
+
+        else:
+            where_elements.append("`message` LIKE ?")
+            sqlargs.append("%" + filter_str_2 + "%")
 
     if host:
-        where_elements.append("`host` like ?")
+        where_elements.append("`host` LIKE ?")
         sqlargs.append("%" + host + "%")
 
     if user:
-        where_elements.append("user like ?")
+        where_elements.append("user LIKE ?")
         sqlargs.append("%" + user + "%")
 
     if project:
-        where_elements.append("project like ?")
+        where_elements.append("project LIKE ?")
         sqlargs.append("%|" + project + '|%')
 
     if age:
