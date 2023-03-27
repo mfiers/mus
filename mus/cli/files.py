@@ -12,6 +12,7 @@ from mus.db import Record, get_db_connection
 @click.argument("filename")
 @click.argument("message", nargs=-1)
 def tag(filename, message):
+    """Add a tag record to the specified file"""
 
     message = " ".join(message).strip()
     if not message:

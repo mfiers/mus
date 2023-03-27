@@ -29,8 +29,8 @@ class AsyncioExecutor(Executor):
                     P = await asyncio.create_subprocess_shell(
                         job.cl, stdout=sp.PIPE, stderr=sp.PIPE)
                     out, err = await P.communicate()
-                    sys.stdout.write(out.decode())
-                    sys.stderr.write(err.decode())
+                    sys.stdout.write(out.decode(encoding='utf-8'))
+                    sys.stderr.write(err.decode(encoding='utf-8'))
                     job.stop(P.returncode)
                     lg.debug(f"Finished {job.record.uid}: {job.cl}")
 

@@ -61,14 +61,16 @@ def macro_edit(name):
         os.makedirs(MACRO_SAVE_PATH)
 
     filename = Path(MACRO_SAVE_PATH).expanduser() / f"{name}.mmc"
+    editor = os.environ.get('EDITOR', 'vi')
     cl = f"{editor} {filename}"
     call(cl, shell=True)
 
 
 @wrapper.command("edit")
 @click.argument('name')
-def wrapper_edit(name):
-    """Drop into EDITOR with the wrapper of choice"""
+def wrapper_edit(name: str):
+    """Drop into an EDITOR with the wrapper of choice"""
+
     from subprocess import call
 
     from mus.macro import WRAPPER_SAVE_PATH
@@ -77,29 +79,32 @@ def wrapper_edit(name):
         os.makedirs(WRAPPER_SAVE_PATH)
 
     filename = Path(WRAPPER_SAVE_PATH).expanduser() / f"{name}.mwr"
-    editor = os.environ.get('EDITOR', 'vim')
+    editor = os.environ.get('EDITOR', 'vi')
     cl = f"{editor} {filename}"
-    print(cl)
     call(cl, shell=True)
 
 
 @macro.command("stdin-exe", hidden=True)
 def macro_cli_exe():
+    """Take a line hijacked from bash/zsh history and execute it as a macro
 
+    Raises:
+        click.UsageError: Invalid macro/configuration
+    """
     import multiprocessing
     import re
 
     from mus.macro import Macro, load_wrapper
-
     raw_macro = sys.stdin.read()
     _ = raw_macro.strip().split(None, 2)
     if len(_) < 3:
         echo("Please specify something to execute")
         return
-    raw_macro = _[2]
 
+    raw_macro = _[2]
+    lg.info(f"Raw macro: {raw_macro}")
     # find & define parameters by parsing start of string
-    # stop parsing as soon as no args are found
+    # stop parsing as soon as no args are being recognized anymore
     no_threads = multiprocessing.cpu_count()
     save_name = None
     load_name = None
@@ -114,23 +119,31 @@ def macro_cli_exe():
         else:
             maybe_arg, macro_rest = raw_macro, ''
 
-
+        # No threads to use
         if re.match('-j([0-9]+)', maybe_arg):
             m = re.match('-j([0-9]+)', maybe_arg)
             no_threads = int(m.groups()[0])
+            lg.debug(f"Using {no_threads}")
+        # Save macro to {save_name}
         elif re.match(r'-s([a-zA-Z]\w*)', maybe_arg):
             m = re.match(r'-s([a-zA-Z]\w*)', maybe_arg)
             save_name = m.groups()[0]
+            lg.debug(f"Saving to '{save_name}'")
+        # Apply wrapper {wrapper_name}
         elif re.match(r'-w([a-zA-Z]\w*)', maybe_arg):
             m = re.match(r'-w([a-zA-Z]\w*)', maybe_arg)
             wrapper_name = m.groups()[0]
+        # Load macro from {load_name}
         elif re.match(r'-l([a-zA-Z]\w*)', maybe_arg):
             m = re.match(r'-l([a-zA-Z]\w*)', maybe_arg)
             load_name = m.groups()[0]
+        # Dry run - print but do not execute
         elif maybe_arg == '-d':
             dry_run = True
+        # Explain macro elements
         elif maybe_arg == '-M':
             explain_macro = True
+        # More verbose output
         elif re.match(r'-(vv*)', maybe_arg):
             m = re.match(r'-(vv*)', maybe_arg)
             verbose = len(m.groups()[0])
@@ -143,10 +156,9 @@ def macro_cli_exe():
             # stop parsing
             break
 
-        # we reach this line only if an argument matched
+        # we reach this line only if an argument matched -
         raw_macro = macro_rest.strip()
         # continue parsing.
-
 
     if raw_macro and load_name:
         lg.warning("specified both a macro to load and macro string"
