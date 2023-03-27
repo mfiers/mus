@@ -44,8 +44,9 @@ def fn_resolver(match: re.Match,
     Returns:
         str: resolved template elements
     """
+
     mg0 = match.groups()[0]
-    matchno = '1' if mg0 is None else mg0
+    matchno = '1' if not mg0 else mg0
     filename = job.data[matchno]
     return resfunc(filename)
 
