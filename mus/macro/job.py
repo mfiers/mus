@@ -22,6 +22,9 @@ class MacroJob:
         self.record.prepare(
             rectype='job',
             message=cl)
+
+        self.inputfiles = []
+
         self.record.child_of = self.macro.record.uid
         self.cl = cl
 
@@ -39,7 +42,7 @@ class MacroJob:
 
     def start(self):
         from mus.util.files import get_checksum
-        if self.inputfile:
+        if False and self.inputfile:
             lg.debug(f"job start, map: {self.inputfile}")
 
             # record input files prior to run - we assume they do not change
