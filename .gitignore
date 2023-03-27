@@ -131,3 +131,5 @@ sub
 mus.config
 mus.sh
 mus.config.gz
+.vscode
+.DS_Store
