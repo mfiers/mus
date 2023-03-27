@@ -91,6 +91,14 @@ def get_db_connection() -> sqlite3.Connection:
     return conn
 
 
+def find_by_uid(uid):
+    conn = get_db_connection()
+    req = conn.execute(
+        'SELECT * FROM muslog WHERE uid LIKE ? LIMIT 1', [uid + '%'])
+    rec = req.fetchone()
+    return rec
+
+
 @dataclass(init=False)
 class Record():
 
