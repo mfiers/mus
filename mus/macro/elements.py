@@ -117,9 +117,10 @@ class MacroElementGlob(MacroElementGenerator):
     def expand(self):
         """If there is a glob, expand - otherwise assume
            it is just one file"""
-        gfield = self.fragment.lstrip('{').rstrip('}')
-        for fn in Path('.').glob(gfield):
-            yield (self.name, fn)
+        gfields = self.fragment.lstrip('{').rstrip('}')
+        for gfield in gfields.split(';'):
+            for fn in Path('.').glob(gfield):
+                yield (self.name, fn)
 
     def render(self, job):
         filename = job.data[self.name]
