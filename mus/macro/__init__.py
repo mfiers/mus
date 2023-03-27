@@ -56,8 +56,53 @@ def find_saved_wrappers() -> Dict[str, str]:
     return rv
 
 
+def load_macro(macro_name: str) -> str:
+    """Load a Macro and return it's contents
+
+    Args:
+        macro_name (str): Name of the macro
+
+    Raises:
+        FileExistsError: If the {macro_name}.mmc file is not found
+
+    Returns:
+        str: Macro contents
+    """
+    filename = Path(MACRO_SAVE_PATH).expanduser()
+    filename /= f"{macro_name}.mmc"
+
+    if not filename.exists():
+        raise FileExistsError(filename)
+
+    with open(filename, encoding='utf-8') as F:
+        macro = F.read()
+        mpeek = " ".join(macro.split())[:50]
+        lg.info(f"load macro {macro_name}: {mpeek}")
+        return macro
+
+
+def delete_macro(macro_name: str) -> bool:
+    """Delete a saved macro
+
+    Args:
+        macro_name (str): Name of the macro
+
+    Returns:
+        bool: True if succesfully deleted. False if the macro did not exists.
+
+    """
+    filename = Path(MACRO_SAVE_PATH).expanduser()
+    filename /= f"{macro_name}.mmc"
+
+    if filename.exists():
+        filename.unlink()
+        return True
+    else:
+        return False
+
+
 def load_wrapper(wrapper_name: str) -> str:
-    filename = Path(WRAPPER_SAVE_PATH).expanduser() \
+    filename = Path(WRAPPER_SAVE_PATH).expanduser()
             / f"{wrapper_name}.mwr"
 
     if not filename.exists():
