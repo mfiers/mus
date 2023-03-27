@@ -293,7 +293,7 @@ class Macro:
             if fragment[0] in '<:>':
                 fragtype = fragment[0]
                 fragment = fragment[1:]
-            elif '*' in fragment:
+            elif ('*' in fragment) or ('?' in fragment):
                 # shortcut - if no <> is specified - fragments
                 # with a * must be a glob
                 fragtype = '<'
