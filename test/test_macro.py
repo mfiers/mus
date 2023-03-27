@@ -51,7 +51,7 @@ def test_run_macro_elements():
     "Test macro with elements"
 
     test_folder = Path(tempfile.mkdtemp())
-    macro = 'cat {test/data/*.txt} | echo "{%n}" > ' + \
+    macro = 'cat {test/data/test*.txt} | echo "{%n}" > ' + \
             str(test_folder) + \
             '/{%s}.out'
 
@@ -93,3 +93,27 @@ def test_run_saved_macro():
     assert result.exit_code == 0
     assert result.output.strip() == unique_string
     delete_macro(TEST_MACRO_NAME)
+
+
+def test_run_multiglob():
+    "Can mus run a pre-saved macro?"
+
+    result = run_macro('ls {test/data/test*.txt}')
+    assert len(result.output.split()) == 2
+    assert result.exit_code == 0
+
+    result = run_macro('ls {test/data/other*.txt}')
+    assert len(result.output.split()) == 2
+    assert result.exit_code == 0
+
+    result = run_macro('ls {test/data/other*.txt;test/data/test*.txt}')
+    assert len(result.output.split()) == 4
+    assert result.exit_code == 0
+
+    result = run_macro('ls {test/data/other*.txt;test/data/test?.txt}')
+    assert len(result.output.split()) == 2
+    assert result.exit_code == 0
+
+    result = run_macro('ls {test/data/other*.txt;test/data/test??.txt}')
+    assert len(result.output.split()) == 4
+    assert result.exit_code == 0
