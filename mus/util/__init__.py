@@ -45,5 +45,7 @@ def format_type_short(status):
         return style('L', bg='blue', bold=False, fg='black')
     elif status == 'history':
         return style('H', bg='green', bold=False, fg='black')
+    elif status == 'inputfile':
+        return style('i', bg='cyan', bold=False, fg='black')
     else:
         return style('?', bg='black', fg='red')

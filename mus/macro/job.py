@@ -23,7 +23,12 @@ class MacroJob:
             rectype='job',
             message=cl)
 
-        self.inputfiles = []
+        # all inputfiles for a job
+        # as we need to refer to them later - this is a dict
+        # keys are strings: '1', '2', '3', etc...
+        self.inputfiles = {}
+
+        self.outputfiles = []
 
         self.record.child_of = self.macro.record.uid
         self.cl = cl

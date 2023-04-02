@@ -123,9 +123,12 @@ class MacroElementGlob(MacroElementGenerator):
             for fn in Path('.').glob(gfield):
                 yield (self.name, fn)
 
-    def render(self, job):
+    def render(self,
+               job: Type[MacroJob]):
+
+        assert self.name is not None
         filename = job.data[self.name]
-        job.inputfile = filename
+        job.inputfiles[self.name] = filename
         return str(filename)
 
     def __str__(self):
@@ -139,9 +142,9 @@ class MacroElementOutputFile(MacroElementText):
 
     def render(self,
                job: Type[MacroJob]) -> str:
-        rv = super().render(job)
-        job.outputfiles.append(Path(rv))
-        return rv
+        filename = Path(super().render(job))
+        job.outputfiles.append(Path(filename))
+        return str(filename)
 
 
 class MacroElementExtrafile(MacroElementText):
