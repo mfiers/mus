@@ -128,16 +128,34 @@ class Macro:
                  raw: Optional[str] = None,
                  name: Optional[str] = None,
                  wrapper: Optional[str] = None,
+                 max_no_jobs: int = -1,
                  dry_run: bool = False,
                  executor: Type[Executor] = AsyncioExecutor
                  ) -> None:
+        """
+        Class representing a macro run
 
+        Args:
+            raw (Optional[str], optional): Raw macro string. Defaults to
+                None.
+            name (Optional[str], optional): Load name of the macro.
+                Defaults to None.
+            wrapper (Optional[str], optional): Wrapper script name.
+                Defaults to None.
+            max_no_jobs (Int, optional): Do not run more jobs than this.
+                Defaults to -1.
+            dry_run (bool, optional): Only print what is to be executed.
+                Defaults to False.
+            executor (Type[Executor], optional): Executor taking care of
+                actual run. Defaults to AsyncioExecutor.
+        """
         # self._globField = None
 
         self.generators = {}
 
         self.executor = executor
         self.wrapper = wrapper
+        self.max_no_jobs = max_no_jobs
         self.segments: List[mme.MacroElementBase] = []
         self.LogScript: Optional[TextIOWrapper] = None
         self.dry_run = dry_run
@@ -396,6 +414,6 @@ class Macro:
         self.open_script_log(mode='map')
 
         xct = self.executor(no_threads)
-        xct.execute(self.expand)
+        xct.execute(self.expand, max_no_jobs=self.max_no_jobs)
 
         self.close_script_log()

@@ -11,11 +11,16 @@ class Executor():
 
 class AsyncioExecutor(Executor):
 
-    def execute(self, jobiterator):
+    def execute(self,
+                jobiterator,
+                max_no_jobs: int = -1):
 
         import asyncio
         import subprocess as sp
         import sys
+
+        if max_no_jobs == -1:
+            max_no_jobs = 1e9
 
         async def run_all():
 
@@ -36,7 +41,10 @@ class AsyncioExecutor(Executor):
 
             async def run_all():
                 await asyncio.gather(
-                    *[run_one(job) for job in jobiterator()]
+                    *[run_one(job)
+                      for (i, job)
+                      in enumerate(jobiterator())
+                      if i < max_no_jobs]
                 )
 
             await run_all()

@@ -24,6 +24,7 @@ def macro():
         -j<INT>  : no parallel processes to use
         -s<NAME> : save macro for later use
         -l<NAME> : load and run macro
+        -s<INT>  : No jobs to run at most
         -d       : dry-run - show what would be executed
 
     Note, no spaces between the option flag and value are allowed!
@@ -109,6 +110,7 @@ def macro_cli_exe():
     save_name = None
     load_name = None
     dry_run = False
+    max_no_jobs = -1
     explain_macro = False
     wrapper_name = None
 
@@ -133,6 +135,10 @@ def macro_cli_exe():
         elif re.match(r'-w([a-zA-Z]\w*)', maybe_arg):
             m = re.match(r'-w([a-zA-Z]\w*)', maybe_arg)
             wrapper_name = m.groups()[0]
+        # Max no jobs to run
+        elif re.match(r'-n([0-9]+)', maybe_arg):
+            m = re.match(r'-n([0-9]+)', maybe_arg)
+            max_no_jobs = int(m.groups()[0])
         # Load macro from {load_name}
         elif re.match(r'-l([a-zA-Z]\w*)', maybe_arg):
             m = re.match(r'-l([a-zA-Z]\w*)', maybe_arg)
@@ -169,12 +175,14 @@ def macro_cli_exe():
     if wrapper_name:
         wrapper = load_wrapper(wrapper_name)
 
-    macro_args = dict(dry_run=dry_run)
+    macro_args = dict(dry_run=dry_run,
+                      max_no_jobs=max_no_jobs,
+                      wrapper=wrapper)
 
     if raw_macro:
-        macro = Macro(raw=raw_macro, wrapper=wrapper, **macro_args)
+        macro = Macro(raw=raw_macro, **macro_args)
     elif load_name:
-        macro = Macro(name=load_name, wrapper=wrapper, **macro_args)
+        macro = Macro(name=load_name, **macro_args)
     else:
         raise click.UsageError("No macro defined")
 
