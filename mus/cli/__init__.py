@@ -6,11 +6,13 @@ import click
 import colorama
 from click import echo, style
 
+from mus import hooks
+from mus.util.cli import AliasedGroup  # NOQA: E402
+from mus.util.log import ColorLogger  # NOQA: E402
+
 # Set up color logging
 colorama.init(autoreset=True)
 
-from mus.util.cli import AliasedGroup  # NOQA: E402
-from mus.util.log import ColorLogger  # NOQA: E402
 
 logging.setLoggerClass(ColorLogger)
 lg = logging.getLogger('mus')

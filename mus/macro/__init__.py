@@ -17,6 +17,7 @@ import click
 
 import mus.macro.elements as mme
 from mus.db import Record
+from mus.hooks import call_hook, register_hook
 from mus.macro.executors import AsyncioExecutor, Executor
 from mus.macro.job import MacroJob
 from mus.util import msec2nice
@@ -181,6 +182,8 @@ class Macro:
 
         self.process_raw()
 
+        call_hook('create_job', job=self)
+
     def explain(self):
         for seg in self.segments:
             print(seg)
@@ -205,16 +208,6 @@ class Macro:
         lg.debug(f"Load macro from {macro_file}")
         with open(macro_file, 'rt') as F:
             self.raw = F.read()
-
-    # @property
-    # def globField(self):
-    #     return self._globField
-
-    # @globField.setter
-    # def globField(self, value):
-    #     # allow only one glob
-    #     assert self._globField is None
-    #     self._globField = value
 
     def add_segment(self,
                     element_class: mme.MacroElementBase,
@@ -300,6 +293,10 @@ class Macro:
             raw = self.raw = rec.message
 
         # parse macro - find expandable parts
+        # all expandable parts are inbetween {}
+        # types:
+        #    < inputfile
+        #    > outputfile
         for pat in re.finditer(r'\{.*?\}', raw):
             # store whatever leads up to this match
             self.add_segment(element_class=mme.MacroElementText,
