@@ -7,7 +7,7 @@ from pathlib import Path
 from textwrap import wrap
 from typing import Optional
 
-from .util import get_host, msec2nice
+from mus.util import get_host, msec2nice
 
 
 def record_factory(cursor, row):
