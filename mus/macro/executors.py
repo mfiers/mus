@@ -9,6 +9,35 @@ class Executor():
         self.no_threads = no_threads
 
 
+class SimpleExecutor(Executor):
+    """Execute in order, not parallel."""
+    def execute(self,
+                jobiterator,
+                max_no_jobs: int = -1):
+
+        import subprocess as sp
+        import sys
+
+        if max_no_jobs == -1:
+            max_no_jobs = 1e9
+
+        def run_one(job):
+            lg.info(f"Executing {job.record.uid}: {job.cl}")
+            job.start()
+            P = sp.Popen(
+                job.cl, stdout=sp.PIPE, stderr=sp.PIPE)
+            out, err = P.communicate()
+            sys.stdout.write(out.decode(encoding='utf-8'))
+            sys.stderr.write(err.decode(encoding='utf-8'))
+            job.stop(P.returncode)
+            lg.debug(f"Finished {job.record.uid}: {job.cl}")
+
+        for i, job in enumerate(jobiterator()):
+            if i >= max_no_jobs:
+                break
+            run_one(job)
+
+
 class AsyncioExecutor(Executor):
 
     def execute(self,
