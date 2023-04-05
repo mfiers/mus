@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import mus.macro
 from mus.db import Record
+from mus.hooks import call_hook
 from mus.util import msec2nice
 
 lg = logging.getLogger("mus")

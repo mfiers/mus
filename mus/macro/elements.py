@@ -5,20 +5,7 @@ from pathlib import Path
 from typing import List, Optional, Type
 
 from mus.macro.job import MacroJob
-
-
-class MacroElementBase():
-    """ Base element - just returns the elements as a string"""
-    def __init__(self,
-                 macro,
-                 fragment: str,
-                 name: Optional[str]) -> None:
-        self.fragment = fragment
-        self.macro = macro
-        self.name = name
-
-    def expand(self):
-        raise Exception("Only for glob segments")
+from mus.util import ssp
 
 
 def getBasenameNoExtension(filename: Path) -> str:
@@ -54,11 +41,11 @@ def fn_resolver(match: re.Match,
 # expandable template elements
 TEMPLATE_ELEMENTS = [
     ('%([1-9]?)f', lambda x: str(x)),
-    ('%([1-9]?)F', lambda x: str(x.resolve())),
-    ('%([1-9]?)n', lambda x: str(x.name)),
-    ('%([1-9]?)s', lambda x: str(x.stem)),
-    ('%([1-9]?)p', lambda x: str(x.resolve().parent)),
-    ('%([1-9]?)P', lambda x: str(x.resolve().parent.parent)),
+    ('%([1-9]?)F', lambda x: str(Path(x).resolve())),
+    ('%([1-9]?)n', lambda x: str(Path(x).name)),
+    ('%([1-9]?)s', lambda x: str(Path(x).stem)),
+    ('%([1-9]?)p', lambda x: str(Path(x).resolve().parent)),
+    ('%([1-9]?)P', lambda x: str(Path(x).resolve().parent.parent)),
 ]
 
 
@@ -84,8 +71,22 @@ def resolve_template(
     return template
 
 
+class MacroElementBase():
+    """ Base element - just returns the elements as a string"""
+    def __init__(self,
+                 macro,
+                 fragment: str,
+                 name: Optional[str]) -> None:
+        self.fragment = fragment
+        self.macro = macro
+        self.name = name
+
+    def expand(self):
+        raise NotImplementedError
+
+
 class MacroElementText(MacroElementBase):
-    """Text based macro element"""
+    """Just a piece of text - but expand % macros"""
 
     def render(self,
                job: Type[MacroJob]) -> str:
@@ -105,55 +106,18 @@ class MacroElementText(MacroElementBase):
         return f"Text   : '{self.fragment}'"
 
 
-class MacroElementGenerator(MacroElementBase):
-    """All elements that are able to expand into a list.
-    """
-    def expand(self):
-        raise NotImplementedError
-
-
-class MacroElementGlob(MacroElementGenerator):
-    """File glob expands into a list of files"""
-
-    def expand(self):
-        """If there is a glob, expand - otherwise assume
-           it is just one file"""
-        gfields = self.fragment.lstrip('{').rstrip('}')
-        for gfield in gfields.split(';'):
-            for fn in Path('.').glob(gfield):
-                yield (self.name, fn)
-
-    def render(self,
-               job: Type[MacroJob]):
-
-        assert self.name is not None
-        filename = job.data[self.name]
-        job.inputfiles[self.name] = filename
-        return str(filename)
-
-    def __str__(self):
-        return f"InGlob : '{self.fragment}'"
-
-
-class MacroElementOutputFile(MacroElementText):
+class MacroElementSSP(MacroElementText):
 
     def __str__(self):
         return f"Output : '{self.fragment}'"
 
     def render(self,
                job: Type[MacroJob]) -> str:
-        filename = Path(super().render(job))
-        job.outputfiles.append(Path(filename))
-        return str(filename)
+        item = job.data[self.name]
+        item = resolve_template(item, job)
+        return str(item)
 
-
-class MacroElementExtrafile(MacroElementText):
-
-    def __str__(self):
-        return f"Output : '{self.fragment}'"
-
-    def render(self,
-               job: Type[MacroJob]) -> str:
-        rv = super().render(job)
-        job.extrafiles.append(Path(rv))
-        return rv
+    def expand(self):
+        ssp_expand = ssp.SSP(self.fragment)
+        yield from [(self.name, x)
+                    for x in ssp_expand.stack]

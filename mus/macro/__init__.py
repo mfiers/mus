@@ -240,10 +240,9 @@ class Macro:
                               fragment=fragment,
                               name=name))
 
-            if issubclass(element_class, mme.MacroElementGenerator):
+            if element_class != mme.MacroElementText:
                 assert name is not None
                 self.generators[name] = self.segments[-1]
-                # self.globField = self.segments[-1]
 
     def process_raw(self):
         """
@@ -255,22 +254,27 @@ class Macro:
 
         Generators:
 
+             : glob - if unspecified when a * is in the
+            f: read in from a file (space separated)
+            r : range
+
+        File tracking:
             < : input file - MacroElementGlob
             > : output file - (MacroElementOutputFile)
-            % : text output (but render macro elements) - MacroElementText
+
 
         For certain output macro elements the element might need to refer to
         an input element - so - it's possible to name these.
 
-
         Input elements are automatically numbered in order of appearance:
 
-            ls {*.txt} {.py}
+            ls {*.txt} {*.py}
+
 
         Will have:
 
             1 : {*.txt}
-            2 : {.py}
+            2 : {*.py}
 
         Output elements can refer to specific element.
 
@@ -286,6 +290,8 @@ class Macro:
         # element_name = None
 
         if re.match(r'\![0-9a-f]+', raw):
+            # recognize !`{UID}` as a request to get
+            # command back from mus history
             from mus.db import find_by_uid
             rec = find_by_uid(raw.lstrip('!'))
             if rec is None:
@@ -297,56 +303,37 @@ class Macro:
         # types:
         #    < inputfile
         #    > outputfile
-        for pat in re.finditer(r'\{.*?\}', raw):
+        for pat in re.finditer(r'\{.*?\}', raw
+                               ):
             # store whatever leads up to this match
             self.add_segment(element_class=mme.MacroElementText,
                              fragment=raw[up_until:pat.start()],
                              name=None)
 
+            # matched fragment excluding {}
+            generator_number += 1
             fragment = raw[pat.start() + 1:pat.end() - 1]
 
-            if fragment[0] in '<:>':
-                fragtype = fragment[0]
-                fragment = fragment[1:]
-            elif ('*' in fragment) or ('?' in fragment):
-                # shortcut - if no <> is specified - fragments
-                # with a * must be a glob
-                fragtype = '<'
-            elif '%' in fragment:
-                # assuming these are output files.
-                fragtype = '>'
-            elif Path(fragment).exists():
-                # assume a single input file
-                fragtype = '<'
-            else:
-                # not tracking this as a file
-                fragtype = '-'
+            if '&' not in fragment:
+                # if functinos are defined - we'll trust the writer
+                # to be correct
 
-            if fragtype == '<':
-                # input file/files
-                generator_number += 1
-                self.add_segment(
-                    element_class=mme.MacroElementGlob,
-                    fragment=fragment,
-                    name=str(generator_number))
-            elif fragtype == '>':
-                self.add_segment(
-                    element_class=mme.MacroElementOutputFile,
-                    fragment=fragment,
-                    name=None)
-            else:
-                raise click.UsageError(f"do not know fragment type {fragtype}")
+                if '*' in fragment or '?' in fragment:
+                    # assume glob of type {*.txt}
+                    fragment += '&g'  # for ssp
+            self.add_segment(element_class=mme.MacroElementSSP,
+                             fragment=fragment,
+                             name=str(generator_number))
 
             up_until = pat.end()
 
-        # ensure the last bit of the macro is added!
+        # ensure the last bit of the matcro is added!
         self.add_segment(
             element_class=mme.MacroElementText,
             fragment=raw[up_until:],
             name=None)
 
     def expand(self):
-
         if len(self.generators) == 0:
             lg.debug('Executing singleton command')
             # if there is no glob to expand -
@@ -401,16 +388,19 @@ class Macro:
         if self.dry_run:
             for job in self.expand():
                 print(job.cl)
-                if job.inputfile:
-                    print(f"  < {job.inputfile}")
+                for name, inputfile in job.inputfiles.items():
+                    print(f"  <{name:2} | {inputfile}")
                 for o in job.outputfiles:
-                    print(f"  > {o}")
+                    print(f"  >   | {o}")
             return
 
         # if not dry run:
+        call_hook('start_execution', macro=self)
         self.open_script_log(mode='map')
 
         xct = self.executor(no_threads)
         xct.execute(self.expand, max_no_jobs=self.max_no_jobs)
+
+        call_hook('finish_execution', macro=self)
 
         self.close_script_log()
