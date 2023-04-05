@@ -50,6 +50,11 @@ cli.add_command(files.file_)
 cli.add_command(macro.macro)
 cli.add_command(dbcli.db)
 
+@cli.command("version")
+def version():
+    from importlib.metadata import version
+    print(version('mus'))
+
 
 @cli.command("log")
 @click.argument("message", nargs=-1)
