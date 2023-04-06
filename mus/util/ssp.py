@@ -3,7 +3,7 @@
 #
 
 import re
-from functools import partial
+from functools import partial, wraps
 from pathlib import Path
 from typing import Callable, Dict, List
 
@@ -12,6 +12,34 @@ class Atom(str):
     pass
 
 
+SSP_FUNCTIONS: Dict[str, Callable] = {}
+
+
+def register_function(letter):
+    def register_decorator(func):
+        @wraps(func)
+        def wrapped_function(*args, **kwargs):
+            return func(*args, **kwargs)
+        SSP_FUNCTIONS[letter] = func
+        return wrapped_function
+    return register_decorator
+
+
+@register_function('o')
+def open_file(stack: list) -> None:
+    """
+    Open file & read space separated contents
+
+    Args:
+        stack (list): Stack
+    """
+    assert len(stack) > 0
+    to_open = stack.pop()
+    to_inject = open(to_open).read().split()
+    stack.extend(to_inject)
+
+
+@register_function('g')
 def glob(stack: list) -> None:
     """
     Expand the last item of the stack as a path glob
@@ -33,8 +61,8 @@ def glob(stack: list) -> None:
     expand = map(str, Path('.').glob(str(stack.pop())))
     stack.extend(list(expand))
 
-
-def stringfilter(
+@register_function('f')
+def string_filter(
         stack: List[Atom],
         negative: bool = False) -> None:
     """
@@ -44,11 +72,11 @@ def stringfilter(
     >>> stack="a|b|c|ab|b".split('|')
     >>> len(stack) == 5
     True
-    >>> stringfilter(stack)
+    >>> string_filter(stack)
     >>> stack
     ['b', 'ab']
     >>> stack="a|b|c|ab|b".split('|')
-    >>> stringfilter(stack, negative=True)
+    >>> string_filter(stack, negative=True)
     >>> stack
     ['a', 'c']
 
@@ -76,6 +104,10 @@ def stringfilter(
         while tod in stack:
             stack.remove(tod)
 
+@register_function('d')
+def string_filter_discard(stack: List[Atom]):
+    return string_filter(stack, negative=True)
+
 
 class SSP:
     """
@@ -99,17 +131,12 @@ class SSP:
         self.raw = raw
         self.stack: List[Atom] = []
 
-        self.functions: Dict[str, Callable] = dict(
-            g=glob,
-            f=stringfilter,
-            r=partial(stringfilter, negative=True), )
-
         up_until = 0
         next_is_func = False
 
         def process_item(next_is_func, last_element):
             if next_is_func:
-                func = self.functions[last_element]
+                func = SSP_FUNCTIONS[last_element]
                 func(self.stack)
             else:
                 self.stack.append(Atom(last_element))
@@ -122,7 +149,7 @@ class SSP:
 
         last_element = self.raw[up_until:].strip()
         if last_element:
-            if next_is_func:
-                self.functions[last_element](self.stack)
-            else:
-                self.stack.append(Atom(last_element))
+            process_item(next_is_func, last_element)
+
+
+#print(SSP('*&g').stack)
