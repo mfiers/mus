@@ -1,6 +1,7 @@
 
 import os
 import time
+from pathlib import Path
 
 import click
 
@@ -11,6 +12,9 @@ from mus.util import get_host
 @click.command("search")
 @click.argument('filter_str', nargs=-1)
 @click.option('--remove', is_flag=True, default=False)
+@click.option('-r', '--recursive', is_flag=True, default=False,
+              help='Use with path specifications to get recursive'
+              + 'search results')
 @click.option('-h', '--host')
 @click.option('-u', '--user')
 @click.option('-U', '--uid')
@@ -22,11 +26,10 @@ from mus.util import get_host
 @click.option('-n', '--no', type=int, default=20,
               help='No results to show')
 def cmd_search(filter_str, uid, host, user, age, project, no, full,
-               remove):
+               remove, recursive):
     "Search the mus database."
 
     from datetime import datetime
-    filter_str_2 = " ".join(filter_str).strip()
 
     db = get_db_connection()
 
@@ -75,17 +78,28 @@ def cmd_search(filter_str, uid, host, user, age, project, no, full,
 
     where_elements = []
     sqlargs = []
+
     if filter_str:
-        #special case - if filter_str == '.'
-        if filter_str == '.':
+        # TODO: search for files
+        # special case - if filter_str points to a path
+        filter_str_path = Path(" ".join(filter_str))
+        if filter_str_path.exists() \
+                and filter_str_path.is_dir():
             where_elements.append("`host` = ?")
             sqlargs.append(get_host())
-            where_elements.append("`cwd` LIKE ?")
-            sqlargs.append(os.getcwd() + '%')
+            if recursive:
+                where_elements.append("`cwd` LIKE ?")
+                sqlargs.append(os.getcwd() + '%')
+            else:
+                where_elements.append("`cwd` = ?")
+                sqlargs.append(os.getcwd())
 
         else:
-            where_elements.append("`message` LIKE ?")
-            sqlargs.append("%" + filter_str_2 + "%")
+            # search for individual words independently
+            for fs in [x.strip() for x in filter_str]:
+                if fs:
+                    where_elements.append("`message` LIKE ?")
+                    sqlargs.append("%" + fs + "%")
 
     if host:
         where_elements.append("`host` LIKE ?")
