@@ -106,14 +106,14 @@ def test_run_multiglob():
     assert len(result.output.split()) == 2
     assert result.exit_code == 0
 
-    result = run_macro('ls {test/data/other*.txt&g|test/data/test*.txt&g}')
+    result = run_macro('ls {test/data/other*.txt&glob|test/data/test*.txt&glob}')
     assert len(result.output.split()) == 4
     assert result.exit_code == 0
 
-    result = run_macro('ls {test/data/other*.txt&g|test/data/test?.txt&g}')
+    result = run_macro('ls {test/data/other*.txt&glob|test/data/test?.txt&glob}')
     assert len(result.output.split()) == 2
     assert result.exit_code == 0
 
-    result = run_macro('ls {test/data/other*.txt&g|test/data/test??.txt&g}')
+    result = run_macro('ls {test/data/other*.txt&glob|test/data/test??.txt&glob}')
     assert len(result.output.split()) == 4
     assert result.exit_code == 0

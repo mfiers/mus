@@ -15,17 +15,17 @@ class Atom(str):
 SSP_FUNCTIONS: Dict[str, Callable] = {}
 
 
-def register_function(letter):
+def register_function(name):
     def register_decorator(func):
         @wraps(func)
         def wrapped_function(*args, **kwargs):
             return func(*args, **kwargs)
-        SSP_FUNCTIONS[letter] = func
+        SSP_FUNCTIONS[name] = func
         return wrapped_function
     return register_decorator
 
 
-@register_function('o')
+@register_function('read')
 def open_file(stack: list) -> None:
     """
     Open file & read space separated contents
@@ -39,7 +39,7 @@ def open_file(stack: list) -> None:
     stack.extend(to_inject)
 
 
-@register_function('g')
+@register_function('glob')
 def glob(stack: list) -> None:
     """
     Expand the last item of the stack as a path glob
@@ -61,7 +61,7 @@ def glob(stack: list) -> None:
     expand = map(str, Path('.').glob(str(stack.pop())))
     stack.extend(list(expand))
 
-@register_function('f')
+@register_function('filter')
 def string_filter(
         stack: List[Atom],
         negative: bool = False) -> None:
@@ -104,7 +104,7 @@ def string_filter(
         while tod in stack:
             stack.remove(tod)
 
-@register_function('d')
+@register_function('remove')
 def string_filter_discard(stack: List[Atom]):
     return string_filter(stack, negative=True)
 
@@ -114,15 +114,15 @@ class SSP:
     Simple String Stack Processor
 
 
-    >>> x=SSP("test/data/*.txt&g")
+    >>> x=SSP("test/data/*.txt&glob")
     >>> 'test/data/test01.txt' in x.stack
     True
     >>> len(x.stack) == 4
     True
-    >>> x=SSP("test/data/*.txt&g|other&f")
+    >>> x=SSP("test/data/*.txt&glob|other&filter")
     >>> 'test/data/other01.txt' in x.stack
     True
-    >>> x=SSP("test/data/*.txt&g|other&f")
+    >>> x=SSP("test/data/*.txt&glob|other&filter")
     >>> 'test/data/other01.txt' in x.stack
     True
 

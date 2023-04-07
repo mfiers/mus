@@ -320,7 +320,7 @@ class Macro:
 
                 if '*' in fragment or '?' in fragment:
                     # assume glob of type {*.txt}
-                    fragment += '&g'  # for ssp
+                    fragment += '&glob'  # for ssp
             self.add_segment(element_class=mme.MacroElementSSP,
                              fragment=fragment,
                              name=str(generator_number))
