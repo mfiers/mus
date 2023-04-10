@@ -9,7 +9,72 @@ from typing import Callable, Dict, List
 
 
 class Atom(str):
-    pass
+
+    def tag(self, tag):
+        if not hasattr(self, '_mus_tag'):
+            self._mus_tag = set()
+        self._mus_tag.add(tag)
+
+    def has_tag(self, tag) -> bool:
+        if not hasattr(self, '_mus_tag'):
+            return False
+        if tag in self._mus_tag:
+            return True
+        return False
+
+    def update(self, new_string):
+        """Create a new string updating atom tags"""
+        new = Atom(new_string)
+        new._mus_tag = getattr(self, '_mus_tag', set())
+        return new
+
+
+def _isstack(stack) -> bool:
+    """Check if all items are Atom
+
+    >>> _isstack([Atom('a'), Atom('b')])
+    True
+    >>> _isstack([Atom('a'), 'b'])
+    False
+    """
+
+    for s in stack:
+        if not isinstance(s, Atom):
+            return False
+    return True
+
+
+def _stackify(*stack) -> List[Atom]:
+    """Convert a list of strings to a list of atoms
+
+    >>> r = _stackify('a', 'b')
+    >>> isinstance(r[0], Atom)
+    True
+    >>> isinstance(r[1], Atom)
+    True
+    >>> r2 = _stackify(*r)
+    >>> isinstance(r2[0], Atom)
+    True
+    >>> isinstance(r2[1], Atom)
+    True
+    """
+
+    rv = list(map(Atom, stack))
+    return rv
+
+
+def _cmd2stack(cmd) -> List[Atom]:
+    """Convert an ssp cmd string to a list of Atoms
+
+    >>> stack = _cmd2stack("a|b|c")
+    >>> stack
+    ['a', 'b', 'c']
+    >>> _isstack(stack)
+    True
+
+    """
+
+    return _stackify(*re.split(r'[\|&]', cmd))
 
 
 SSP_FUNCTIONS: Dict[str, Callable] = {}
@@ -25,17 +90,62 @@ def register_function(name):
     return register_decorator
 
 
+@register_function('tag')
+def tag_atom(stack: List[Atom]) -> None:
+    """Tag the stacked atoms - for later processing
+
+    >>> stack = _cmd2stack("a|b|c|testtag")
+    >>> tag_atom(stack)
+    >>> stack
+    ['a', 'b', 'c']
+    >>> stack[0].has_tag('testtag')
+    True
+    >>> stack[2].has_tag('testtag')
+    True
+    >>> stack[2].has_tag('not_testtag')
+    False
+    """
+    assert len(stack) >= 2
+    tag = stack.pop()
+    [x.tag(tag) for x in stack]
+
+
+@register_function('input')
+def tag_atom_input(stack: List[Atom]) -> None:
+    """Tag the stacked atoms as input - for later processing
+
+    >>> stack = _cmd2stack("a|b|c")
+    >>> tag_atom_input(stack)
+    >>> stack
+    ['a', 'b', 'c']
+    >>> stack[0].has_tag('input')
+    True
+    >>> stack[2].has_tag('input')
+    True
+    >>> stack[2].has_tag('not_input')
+    False
+    """
+    [x.tag('input') for x in stack]
+
+
 @register_function('read')
 def open_file(stack: list) -> None:
     """
     Open file & read space separated contents
+
+    >>> stack = _stackify("./test/data/file_list")
+    >>> open_file(stack)
+    >>> stack
+    ['./test/data/test01.txt', './test/data/other02.txt']
+    >>> _isstack(stack)
+    True
 
     Args:
         stack (list): Stack
     """
     assert len(stack) > 0
     to_open = stack.pop()
-    to_inject = open(to_open).read().split()
+    to_inject = map(Atom, open(to_open).read().split())
     stack.extend(to_inject)
 
 
@@ -44,7 +154,7 @@ def glob(stack: list) -> None:
     """
     Expand the last item of the stack as a path glob
 
-    >>> stack = ["./test/data/*.txt"]
+    >>> stack = [Atom("./test/data/*.txt")]
     >>> glob(stack)
     >>> 'test/data/test01.txt' in stack
     True
@@ -52,14 +162,17 @@ def glob(stack: list) -> None:
     True
     >>> 'test/data/test03.txt' in stack
     False
+    >>> _isstack(stack)
+    True
 
 
     Args:
         stack (list): Stack
     """
     assert len(stack) > 0
-    expand = map(str, Path('.').glob(str(stack.pop())))
-    stack.extend(list(expand))
+    expand = map(Atom, Path('.').glob(str(stack.pop())))
+    stack.extend(expand)
+
 
 @register_function('filter')
 def string_filter(
@@ -69,17 +182,18 @@ def string_filter(
     Filter a list based on the presenence of a
     filter string
 
-    >>> stack="a|b|c|ab|b".split('|')
+    >>> stack=_cmd2stack("a|b|c|ab|b")
     >>> len(stack) == 5
     True
     >>> string_filter(stack)
     >>> stack
     ['b', 'ab']
-    >>> stack="a|b|c|ab|b".split('|')
+    >>> stack=_cmd2stack("a|b|c|ab|b")
     >>> string_filter(stack, negative=True)
     >>> stack
     ['a', 'c']
-
+    >>> _isstack(stack)
+    True
 
     Args:
         stack (list): Stack to filter
@@ -104,8 +218,19 @@ def string_filter(
         while tod in stack:
             stack.remove(tod)
 
+
 @register_function('remove')
 def string_filter_discard(stack: List[Atom]):
+    """Opposite of filter - remove all matching strings
+
+    >>> stack=_cmd2stack("a|b|c|ab|b")
+    >>> string_filter_discard(stack)
+    >>> stack
+    ['a', 'c']
+    >>> _isstack(stack)
+    True
+
+    """
     return string_filter(stack, negative=True)
 
 
@@ -150,6 +275,3 @@ class SSP:
         last_element = self.raw[up_until:].strip()
         if last_element:
             process_item(next_is_func, last_element)
-
-
-#print(SSP('*&g').stack)
