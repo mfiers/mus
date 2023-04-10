@@ -388,10 +388,10 @@ class Macro:
         if self.dry_run:
             for job in self.expand():
                 print(job.cl)
-                for name, inputfile in job.inputfiles.items():
-                    print(f"  <{name:2} | {inputfile}")
-                for o in job.outputfiles:
-                    print(f"  >   | {o}")
+                #for name, inputfile in job.inputfiles.items():
+                #    print(f"  <{name:2} | {inputfile}")
+                #for o in job.outputfiles:
+                #    print(f"  >   | {o}")
             return
 
         # if not dry run:
