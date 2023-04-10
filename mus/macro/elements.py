@@ -2,10 +2,11 @@
 import re
 from functools import partial
 from pathlib import Path
-from typing import List, Optional, Type
+from typing import List, Optional, Type, Union
 
 from mus.macro.job import MacroJob
 from mus.util import ssp
+from mus.util.ssp import Atom
 
 
 def getBasenameNoExtension(filename: Path) -> str:
@@ -35,7 +36,8 @@ def fn_resolver(match: re.Match,
     mg0 = match.groups()[0]
     matchno = '1' if not mg0 else mg0
     filename = job.data[matchno]
-    return resfunc(filename)
+    rv = resfunc(filename)
+    return rv
 
 
 # expandable template elements
@@ -44,31 +46,37 @@ TEMPLATE_ELEMENTS = [
     ('%([1-9]?)F', lambda x: str(Path(x).resolve())),
     ('%([1-9]?)n', lambda x: str(Path(x).name)),
     ('%([1-9]?)s', lambda x: str(Path(x).stem)),
+    ('%([1-9]?)S', lambda x: str(Path(Path(x).stem).stem)),
     ('%([1-9]?)p', lambda x: str(Path(x).resolve().parent)),
     ('%([1-9]?)P', lambda x: str(Path(x).resolve().parent.parent)),
 ]
 
 
 def resolve_template(
-        template: str,
-        job: MacroJob) -> str:
+        template: Union[str, Atom],
+        job: MacroJob) -> Union[str, Atom]:
     """
     Expand a % template based on a filename.
 
     Args:
-        template (str): Template to expand
+        template (str|Atom): Template to expand
         job (MacroJob): Job containing relevant data
 
     Returns:
-        str: resolved template
+        str|Atom: resolved template
     """
+
     # parse over all template elements
+    new_template = template
     for rex, resfunc in TEMPLATE_ELEMENTS:
         # Prepare function to expand, pickling with job & resolving function
         resfunc_p = partial(fn_resolver, resfunc=resfunc, job=job)
-        template = re.sub(rex, resfunc_p, template)
+        new_template = re.sub(rex, resfunc_p, new_template)
 
-    return template
+    if isinstance(template, Atom):
+        return template.update(new_template)
+    else:
+        return new_template
 
 
 class MacroElementBase():
@@ -115,7 +123,7 @@ class MacroElementSSP(MacroElementText):
                job: Type[MacroJob]) -> str:
         item = job.data[self.name]
         item = resolve_template(item, job)
-        return str(item)
+        return item
 
     def expand(self):
         ssp_expand = ssp.SSP(self.fragment)
