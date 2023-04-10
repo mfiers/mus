@@ -28,6 +28,10 @@ class Atom(str):
         new._mus_tag = getattr(self, '_mus_tag', set())
         return new
 
+    def tagstr(self):
+        """Return a formatted string with all tags"""
+        return "|" + "|".join(sorted(getattr(self, '_mus_tag', []))) + "|"
+
 
 def _isstack(stack) -> bool:
     """Check if all items are Atom
@@ -85,6 +89,9 @@ def register_function(name):
         @wraps(func)
         def wrapped_function(*args, **kwargs):
             return func(*args, **kwargs)
+        if name in SSP_FUNCTIONS:
+            raise Exception("can not register SSP function - exists")
+
         SSP_FUNCTIONS[name] = func
         return wrapped_function
     return register_decorator
@@ -126,6 +133,24 @@ def tag_atom_input(stack: List[Atom]) -> None:
     False
     """
     [x.tag('input') for x in stack]
+
+
+@register_function('output')
+def tag_atom_output(stack: List[Atom]) -> None:
+    """Tag the stacked atoms as input - for later processing
+
+    >>> stack = _cmd2stack("a|b|c")
+    >>> tag_atom_output(stack)
+    >>> stack
+    ['a', 'b', 'c']
+    >>> stack[0].has_tag('output')
+    True
+    >>> stack[2].has_tag('output')
+    True
+    >>> stack[2].has_tag('input')
+    False
+    """
+    [x.tag('output') for x in stack]
 
 
 @register_function('read')
