@@ -123,6 +123,7 @@ class MacroElementSSP(MacroElementText):
                job: Type[MacroJob]) -> str:
         item = job.data[self.name]
         item = resolve_template(item, job)
+        job.rendered[self.name] = item
         return item
 
     def expand(self):

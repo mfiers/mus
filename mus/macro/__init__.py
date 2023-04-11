@@ -21,6 +21,7 @@ from mus.hooks import call_hook, register_hook
 from mus.macro.executors import AsyncioExecutor, Executor
 from mus.macro.job import MacroJob
 from mus.util import msec2nice
+from mus.util.ssp import Atom
 
 lg = logging.getLogger(__name__)
 
@@ -131,6 +132,7 @@ class Macro:
                  wrapper: Optional[str] = None,
                  max_no_jobs: int = -1,
                  dry_run: bool = False,
+                 dry_run_extra: bool = False,
                  executor: Type[Executor] = AsyncioExecutor
                  ) -> None:
         """
@@ -160,6 +162,7 @@ class Macro:
         self.segments: List[mme.MacroElementBase] = []
         self.LogScript: Optional[TextIOWrapper] = None
         self.dry_run = dry_run
+        self.dry_run_extra = dry_run_extra
 
         if not name and not raw:
             click.UsageError("Invalid macro instantation - "
@@ -300,9 +303,6 @@ class Macro:
 
         # parse macro - find expandable parts
         # all expandable parts are inbetween {}
-        # types:
-        #    < inputfile
-        #    > outputfile
         for pat in re.finditer(r'\{.*?\}', raw
                                ):
             # store whatever leads up to this match
@@ -393,10 +393,16 @@ class Macro:
         if self.dry_run:
             for job in self.expand():
                 print(job.cl)
-                #for name, inputfile in job.inputfiles.items():
-                #    print(f"  <{name:2} | {inputfile}")
-                #for o in job.outputfiles:
-                #    print(f"  >   | {o}")
+                if self.dry_run_extra:
+                    for d in job.data:
+                        dval = job.data[d]
+                        dren = job.rendered[d]
+                        if isinstance(dval, Atom):
+                            tags = " - tags " + dval.tagstr()
+                        if dval == dren:
+                            print("  +" + d, job.data[d], tags)
+                        else:
+                            print("  +" + d, dval, '->', dren, tags)
             return
 
         # if not dry run:

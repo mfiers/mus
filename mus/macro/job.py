@@ -2,13 +2,14 @@
 import logging
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Union
 from uuid import uuid4
 
 import mus.macro
 from mus.db import Record
 from mus.hooks import call_hook
 from mus.util import msec2nice
+from mus.util.ssp import Atom
 
 lg = logging.getLogger("mus")
 
@@ -27,9 +28,6 @@ class MacroJob:
         # all inputfiles for a job
         # as we need to refer to them later - this is a dict
         # keys are strings: '1', '2', '3', etc...
-        self.inputfiles = {}
-
-        self.outputfiles = []
 
         self.record.child_of = self.macro.record.uid
         self.cl = cl
@@ -40,6 +38,10 @@ class MacroJob:
 
         # only one real i nputfile
         self.data = data
+        self.rendered: Dict[str, Union[Atom, str]] = {}
+
+        # TODO: fix this - move to tag based IO tracking
+        self.inputfiles: List[Path] = []
         self.outputfiles: List[Path] = []
         # these are extraneous input files - should be
         # present, but not taken into account for the

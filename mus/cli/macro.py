@@ -26,8 +26,10 @@ def macro():
         -l<NAME> : load and run macro
         -s<INT>  : No jobs to run at most
         -d       : dry-run - show what would be executed
+        -D       : as dry-run - but show more information
 
     Note, no spaces between the option flag and value are allowed!
+    Note, no combinations of flags are allowed (such as -vd)
     """
 
 
@@ -110,6 +112,7 @@ def macro_cli_exe():
     save_name = None
     load_name = None
     dry_run = False
+    dry_run_extra = False
     max_no_jobs = -1
     explain_macro = False
     wrapper_name = None
@@ -146,6 +149,9 @@ def macro_cli_exe():
         # Dry run - print but do not execute
         elif maybe_arg == '-d':
             dry_run = True
+        elif maybe_arg == '-D':
+            dry_run = True
+            dry_run_extra = True
         # Explain macro elements
         elif maybe_arg == '-M':
             explain_macro = True
@@ -176,6 +182,7 @@ def macro_cli_exe():
         wrapper = load_wrapper(wrapper_name)
 
     macro_args = dict(dry_run=dry_run,
+                      dry_run_extra=dry_run_extra,
                       max_no_jobs=max_no_jobs,
                       wrapper=wrapper)
 
