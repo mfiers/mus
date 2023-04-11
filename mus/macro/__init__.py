@@ -315,12 +315,17 @@ class Macro:
             fragment = raw[pat.start() + 1:pat.end() - 1]
 
             if '&' not in fragment:
-                # if functinos are defined - we'll trust the writer
-                # to be correct
+                # if functions are defined - we'll trust the writer
+                # to be correct & complete.
 
                 if '*' in fragment or '?' in fragment:
                     # assume glob of type {*.txt}
-                    fragment += '&glob'  # for ssp
+                    fragment += '&glob&input'  # for ssp
+
+                elif '%' in fragment:
+                    # assume output file
+                    fragment += '&output'  # for ssp
+
             self.add_segment(element_class=mme.MacroElementSSP,
                              fragment=fragment,
                              name=str(generator_number))
