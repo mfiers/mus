@@ -117,61 +117,58 @@ def macro_cli_exe():
     explain_macro = False
     wrapper_name = None
 
+    rex = (
+        r'^-(?P<flagbool>[vdDM]+)'
+        r'|-(?P<flagint>[nj])\s*(?P<intval>[0-9]+)'
+        r'|-(?P<flagstr>[lsw])\s*(?P<strval>[A-Za-z0-9]+)'
+    )
+
     while raw_macro:
-        # Flags
-        print('x', raw_macro)
-        flag_match = re.match('^-([vdDM]+ )', raw_macro)
-        if flag_match:
-            for flag in flag_match.groups()[0]:
-                if flag == 'v':
-                    lg.debug("Increasing verbosity")
-                    if lg.getEffectiveLevel() > logging.INFO:
-                        lg.setLevel(logging.INFO)
-                    elif lg.getEffectiveLevel() > logging.DEBUG:
-                        lg.setLevel(logging.DEBUG)
-                elif flag == 'd':
-                    lg.debug("Changing to dry run mode")
-                    dry_run = True
-                elif flag == 'D':
-                    lg.debug("Setting very dry run mode")
-                    dry_run = dry_run_extra = True
-                elif flag == 'M':
-                    lg.debug("Explain macro mode")
-                    explain_macro = True
+        pmatch = re.match(rex, raw_macro)
+        if pmatch:
+            pgroups = pmatch.groupdict()
+            flagbool = pgroups.get('flagbool', '')
+            if flagbool is not None:
+                for flag in flagbool:
+                    if flag == 'v':
+                        lg.debug("Increasing verbosity")
+                        if lg.getEffectiveLevel() > logging.INFO:
+                            lg.setLevel(logging.INFO)
+                        elif lg.getEffectiveLevel() > logging.DEBUG:
+                            lg.setLevel(logging.DEBUG)
+                    elif flag == 'd':
+                        lg.debug("Changing to dry run mode")
+                        dry_run = True
+                    elif flag == 'D':
+                        lg.debug("Setting very dry run mode")
+                        dry_run = dry_run_extra = True
+                    elif flag == 'M':
+                        lg.debug("Explain macro mode")
+                        explain_macro = True
+            elif pgroups['flagint'] is not None:
+                flag = pgroups['flagint']
+                value = int(pgroups['intval'])
+                if flag == 'j':
+                    no_threads = value
+                    lg.debug(f"Using {no_threads}")
+                elif flag == 'n':
+                    no_threads = value
+                    lg.debug(f"Max jobs to run {no_threads}")
+            if pgroups['flagstr'] is not None:
+                flag = pgroups['flagstr']
+                value = pgroups['strval']
+                if flag == 's':
+                    save_name = value
+                    lg.debug(f"Saving to '{save_name}'")
+                elif flag == 'w':
+                    wrapper_name = value
+                    lg.debug(f"Apply wrapper {wrapper_name}")
+                elif flag == 'l':
+                    load_name = value
+                    lg.debug(f"Loading from '{load_name}'")
 
-            raw_macro = raw_macro[flag_match.end():].strip()
-            continue
-
-        # Integer Numerical arguments
-        num_match = re.match(r'-([jn])\s*([0-9]+)', raw_macro)
-        if num_match:
-            flag, value = num_match.groups()
-            value = int(value)
-            if flag == 'j':
-                no_threads = value
-                lg.debug(f"Using {no_threads}")
-            elif flag == 'n':
-                no_threads = value
-                lg.debug(f"Max jobs to run {no_threads}")
-            raw_macro = raw_macro[num_match.end():].strip()
-            continue
-
-        # String arguments
-        str_match = re.match(r'-([swl])\s*([A-Za-z0-9_]+)', raw_macro)
-        # Save macro to {save_name}
-        if str_match:
-            flag, value = str_match.groups()
-            if flag == 's':
-                save_name = value
-                lg.debug(f"Saving to '{save_name}'")
-            elif flag == 'w':
-                wrapper_name = value
-                lg.debug(f"Apply wrapper {wrapper_name}")
-            elif flag == 'l':
-                load_name = value
-                lg.debug(f"Loading from '{load_name}'")
-            raw_macro = raw_macro[str_match.end():].strip()
-            continue
+            raw_macro = raw_macro[pmatch.end():].strip()
+            continue  # maybe there are more parameters?
         break
 
     if raw_macro and load_name:
