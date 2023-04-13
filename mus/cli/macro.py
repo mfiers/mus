@@ -104,7 +104,7 @@ def macro_cli_exe():
         echo("Please specify something to execute")
         return
 
-    raw_macro = _[2]
+    raw_macro = _[2].strip()
     lg.info(f"Raw macro: {raw_macro}")
     # find & define parameters by parsing start of string
     # stop parsing as soon as no args are being recognized anymore
@@ -118,59 +118,61 @@ def macro_cli_exe():
     wrapper_name = None
 
     while raw_macro:
+        # Flags
+        print('x', raw_macro)
+        flag_match = re.match('^-([vdDM]+ )', raw_macro)
+        if flag_match:
+            for flag in flag_match.groups()[0]:
+                if flag == 'v':
+                    lg.debug("Increasing verbosity")
+                    if lg.getEffectiveLevel() > logging.INFO:
+                        lg.setLevel(logging.INFO)
+                    elif lg.getEffectiveLevel() > logging.DEBUG:
+                        lg.setLevel(logging.DEBUG)
+                elif flag == 'd':
+                    lg.debug("Changing to dry run mode")
+                    dry_run = True
+                elif flag == 'D':
+                    lg.debug("Setting very dry run mode")
+                    dry_run = dry_run_extra = True
+                elif flag == 'M':
+                    lg.debug("Explain macro mode")
+                    explain_macro = True
 
-        if ' ' in raw_macro:
-            maybe_arg, macro_rest = raw_macro.split(None, 1)
-        else:
-            maybe_arg, macro_rest = raw_macro, ''
+            raw_macro = raw_macro[flag_match.end():].strip()
+            continue
 
-        # No threads to use
-        if re.match('-j([0-9]+)', maybe_arg):
-            m = re.match('-j([0-9]+)', maybe_arg)
-            no_threads = int(m.groups()[0])
-            lg.debug(f"Using {no_threads}")
+        # Integer Numerical arguments
+        num_match = re.match(r'-([jn])\s*([0-9]+)', raw_macro)
+        if num_match:
+            flag, value = num_match.groups()
+            value = int(value)
+            if flag == 'j':
+                no_threads = value
+                lg.debug(f"Using {no_threads}")
+            elif flag == 'n':
+                no_threads = value
+                lg.debug(f"Max jobs to run {no_threads}")
+            raw_macro = raw_macro[num_match.end():].strip()
+            continue
+
+        # String arguments
+        str_match = re.match(r'-([swl])\s*([A-Za-z0-9_]+)', raw_macro)
         # Save macro to {save_name}
-        elif re.match(r'-s([a-zA-Z]\w*)', maybe_arg):
-            m = re.match(r'-s([a-zA-Z]\w*)', maybe_arg)
-            save_name = m.groups()[0]
-            lg.debug(f"Saving to '{save_name}'")
-        # Apply wrapper {wrapper_name}
-        elif re.match(r'-w([a-zA-Z]\w*)', maybe_arg):
-            m = re.match(r'-w([a-zA-Z]\w*)', maybe_arg)
-            wrapper_name = m.groups()[0]
-        # Max no jobs to run
-        elif re.match(r'-n([0-9]+)', maybe_arg):
-            m = re.match(r'-n([0-9]+)', maybe_arg)
-            max_no_jobs = int(m.groups()[0])
-        # Load macro from {load_name}
-        elif re.match(r'-l([a-zA-Z]\w*)', maybe_arg):
-            m = re.match(r'-l([a-zA-Z]\w*)', maybe_arg)
-            load_name = m.groups()[0]
-        # Dry run - print but do not execute
-        elif maybe_arg == '-d':
-            dry_run = True
-        elif maybe_arg == '-D':
-            dry_run = True
-            dry_run_extra = True
-        # Explain macro elements
-        elif maybe_arg == '-M':
-            explain_macro = True
-        # More verbose output
-        elif re.match(r'-(vv*)', maybe_arg):
-            m = re.match(r'-(vv*)', maybe_arg)
-            verbose = len(m.groups()[0])
-            if verbose == 1:
-                lg.setLevel(logging.INFO)
-            elif verbose > 1:
-                lg.setLevel(logging.DEBUG)
-        else:
-            # did not recognize - must not be a mus/macro argument
-            # stop parsing
-            break
-
-        # we reach this line only if an argument matched -
-        raw_macro = macro_rest.strip()
-        # continue parsing.
+        if str_match:
+            flag, value = str_match.groups()
+            if flag == 's':
+                save_name = value
+                lg.debug(f"Saving to '{save_name}'")
+            elif flag == 'w':
+                wrapper_name = value
+                lg.debug(f"Apply wrapper {wrapper_name}")
+            elif flag == 'l':
+                load_name = value
+                lg.debug(f"Loading from '{load_name}'")
+            raw_macro = raw_macro[str_match.end():].strip()
+            continue
+        break
 
     if raw_macro and load_name:
         lg.warning("specified both a macro to load and macro string"
