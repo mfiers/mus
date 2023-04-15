@@ -6,9 +6,12 @@ import click
 import colorama
 from click import echo, style
 
+import mus.plugins.job_run_check  # plugin
 from mus import hooks
 from mus.util.cli import AliasedGroup  # NOQA: E402
 from mus.util.log import ColorLogger  # NOQA: E402
+
+# load plugins - need to automate this somehow
 
 # Set up color logging
 colorama.init(autoreset=True)
