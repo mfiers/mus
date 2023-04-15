@@ -113,16 +113,15 @@ class Record():
     data: dict
     time: float
     uid: str
-    filename: Optional[str]
-    checksum: Optional[str]
-    child_of: Optional[str]
+    filename: Optional[str] = None
+    checksum: Optional[str] = None
+    child_of: Optional[str] = None
 
     def __init__(self):
         self.data = {}
         self.status = 0
 
     def __str__(self):
-
         if hasattr(self, 'host'):
             proj = getattr(self, "projects", "?")
             message = getattr(self, "message", "-")
@@ -161,7 +160,7 @@ class Record():
             tmark = style('L', bg="blue", fg='black')
         elif self.type == 'tag':
             tmark = style('T', bg="cyan", fg='black')
-        elif self.type == 'macro-exe':
+        elif self.type == 'macro':
             tmark = style('m', fg='white', bold=False)
         else:
             tmark = style('?', fg='white', bold=False)
