@@ -15,6 +15,12 @@ class Atom(str):
             self._mus_tag = set()
         self._mus_tag.add(tag)
 
+    def tags(self):
+        if not hasattr(self, '_mus_tag'):
+            return set()
+        else:
+            return self._mus_tag
+
     def has_tag(self, tag) -> bool:
         if not hasattr(self, '_mus_tag'):
             return False
