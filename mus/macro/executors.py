@@ -5,8 +5,9 @@ lg = logging.getLogger("mus")
 
 class Executor():
     """Base class of all executors."""
-    def __init__(self, no_threads):
+    def __init__(self, no_threads, force: bool = False):
         self.no_threads = no_threads
+        self.force = force
 
 
 class SimpleExecutor(Executor):
@@ -17,9 +18,8 @@ class SimpleExecutor(Executor):
 
         import subprocess as sp
         import sys
-
         if max_no_jobs == -1:
-            max_no_jobs = 1e9
+            max_no_jobs = 10000000000
 
         def run_one(job):
             lg.info(f"Executing {job.record.uid}: {job.cl}")
@@ -32,9 +32,7 @@ class SimpleExecutor(Executor):
             job.stop(P.returncode)
             lg.debug(f"Finished {job.record.uid}: {job.cl}")
 
-        for i, job in enumerate(jobiterator()):
-            if i >= max_no_jobs:
-                break
+        for job in jobiterator():
             run_one(job)
 
 
@@ -47,9 +45,6 @@ class AsyncioExecutor(Executor):
         import asyncio
         import subprocess as sp
         import sys
-
-        if max_no_jobs == -1:
-            max_no_jobs = 1e9
 
         async def run_all():
 
@@ -73,8 +68,7 @@ class AsyncioExecutor(Executor):
                     *[run_one(job)
                       for (i, job)
                       in enumerate(jobiterator())
-                      if i < max_no_jobs]
-                )
+                      ])
 
             await run_all()
 

@@ -341,19 +341,37 @@ class Macro:
         if len(self.generators) == 0:
             lg.debug('Executing singleton command')
             # if there is no glob to expand -
-            yield MacroJob(
+            job = MacroJob(
                 cl=self.raw,
                 data={},
                 macro=self)
+            job.prepare()
+            run_advise, reason = job.get_run_advise()
+            if run_advise is False:
+                lg.warning(
+                    f"skipping job {job.cl} because: {reason}")
+            else:
+                yield job
             return
 
         generators = [x.expand() for x in self.generators.values()]
 
+        i = 0
         for _ in product(*generators):
             job = MacroJob(macro=self, data=dict(_))
             _cl = [sg.render(job) for sg in self.segments]
             job.cl = "".join(_cl)
-            yield job
+            job.prepare()
+            run_advise, reason = job.get_run_advise()
+            if run_advise is False:
+                lg.warning(
+                    f"skipping job {job.cl} because: {reason}")
+            else:
+                i += 1
+                if self.max_no_jobs > 0 and \
+                        i > self.max_no_jobs:
+                    return
+                yield job
 
     def open_script_log(self, mode):
         assert self.LogScript is None
@@ -409,7 +427,7 @@ class Macro:
         self.open_script_log(mode='map')
 
         xct = self.executor(no_threads)
-        xct.execute(self.expand, max_no_jobs=self.max_no_jobs)
+        xct.execute(self.expand)
 
         call_hook('finish_execution', macro=self)
 

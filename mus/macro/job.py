@@ -2,7 +2,7 @@
 import logging
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 from uuid import uuid4
 
 import mus.macro
@@ -47,35 +47,48 @@ class MacroJob:
         # present, but not taken into account for the
         # mapping.
         self.extrafiles: List[Path] = []
+        self.run_advises: List[Tuple[bool, str]] = []
+
+    def prepare(self):
+        call_hook('prepare_job', job=self)
+
+    def set_run_advise(self,
+                       advise: bool,
+                       reason: str):
+        """
+        Set a run advice.
+
+        Allows plugins to provide suggestions whether or not to run this job.
+        For example based on whether outputfiles are newer than input files.
+
+        Args:
+            advice (bool): True - run, False - do not run
+            reason (str): Why not to run?
+        """
+        lg.debug(f"set advise to run '{advise}' beacuse '{reason}'")
+        self.run_advises.append((advise, reason))
+
+    def get_run_advise(self) -> Tuple[bool, str]:
+        final_advise = True
+        final_reason_list = []
+        for (advise, reason) in self.run_advises:
+            final_advise &= advise
+            if advise is False:
+                final_reason_list.append(reason)
+                lg.info(f"Do not run: {reason}")
+        return final_advise, ", ".join(final_reason_list)
 
     def start(self):
-        from mus.util.files import get_checksum
-        if False and self.inputfile:
-            lg.debug(f"job start, map: {self.inputfile}")
-
-            # record input files prior to run - we assume they do not change
-            if self.inputfile.is_file():
-                self.inputfile_rec = Record()
-                self.inputfile_rec.prepare(
-                    filename=self.inputfile,
-                    rectype='inputfile',
-                    child_of=self.record.uid)
-                self.inputfile_rec.save()
-            elif self.inputfile.is_dir():
-                lg.debug(f"No checksum for input folders {self.inputfile}?")
-        else:
-            lg.debug("job start - singleton")
-
-        lg.debug("refer start")
         lg.debug("job start")
         self.starttime = self.record.time = time.time()
-        self.record.type = 'macro-exe'
+        call_hook('start_job', job=self)
 
     def stop(self, returncode):
         self.stoptime = time.time()
         self.runtime = self.stoptime - self.starttime
         self.runtimeNice = msec2nice(self.runtime)
         self.returncode = returncode
+        call_hook('stop_job', job=self)
 
         self.record.time = self.starttime
         self.record.message = self.cl
@@ -83,11 +96,11 @@ class MacroJob:
         self.record.data['runtime'] = self.runtime
         self.record.save()
 
-        for o in self.outputfiles:
-            if o.is_file():
-                orec = Record()
-                orec.prepare(
-                    filename=o,
-                    rectype='outputfile',
-                    child_of=self.record.uid)
-                orec.save()
+        # for o in self.outputfiles:
+        #     if o.is_file():
+        #         orec = Record()
+        #         orec.prepare(
+        #             filename=o,
+        #             rectype='outputfile',
+        #             child_of=self.record.uid)
+        #         orec.save()
