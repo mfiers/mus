@@ -117,6 +117,7 @@ def tag_atom(stack: List[Atom]) -> None:
     [x.tag(tag) for x in stack]
 
 
+@register_function('i')
 @register_function('input')
 def tag_atom_input(stack: List[Atom]) -> None:
     """Tag the stacked atoms as input - for later processing
@@ -135,6 +136,7 @@ def tag_atom_input(stack: List[Atom]) -> None:
     [x.tag('input') for x in stack]
 
 
+@register_function('o')
 @register_function('output')
 def tag_atom_output(stack: List[Atom]) -> None:
     """Tag the stacked atoms as input - for later processing
