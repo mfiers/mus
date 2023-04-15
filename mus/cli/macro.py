@@ -152,8 +152,8 @@ def macro_cli_exe():
                     no_threads = value
                     lg.debug(f"Using {no_threads}")
                 elif flag == 'n':
-                    no_threads = value
-                    lg.debug(f"Max jobs to run {no_threads}")
+                    max_no_jobs = value
+                    lg.debug(f"Max jobs to run {max_no_jobs}")
             if pgroups['flagstr'] is not None:
                 flag = pgroups['flagstr']
                 value = pgroups['strval']
