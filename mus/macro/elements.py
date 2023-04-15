@@ -2,7 +2,7 @@
 import re
 from functools import partial
 from pathlib import Path
-from typing import List, Optional, Type, Union
+from typing import Callable, List, Optional, Type, TypeVar, Union
 
 from mus.macro.job import MacroJob
 from mus.util import ssp
@@ -19,7 +19,7 @@ def getBasenameNoExtension(filename: Path) -> str:
 
 def fn_resolver(match: re.Match,
                 job: MacroJob,
-                resfunc: callable) -> str:
+                resfunc: Callable) -> str:
     """
     Helper function to resolve the different filename
     based template functions.
@@ -84,7 +84,7 @@ class MacroElementBase():
     def __init__(self,
                  macro,
                  fragment: str,
-                 name: Optional[str]) -> None:
+                 name: str) -> None:
         self.fragment = fragment
         self.macro = macro
         self.name = name
@@ -97,7 +97,7 @@ class MacroElementText(MacroElementBase):
     """Just a piece of text - but expand % macros"""
 
     def render(self,
-               job: Type[MacroJob]) -> str:
+               job: MacroJob) -> str:
         """
         Render this text element, expand template
 
@@ -120,7 +120,7 @@ class MacroElementSSP(MacroElementText):
         return f"Output : '{self.fragment}'"
 
     def render(self,
-               job: Type[MacroJob]) -> str:
+               job: MacroJob) -> str:
         item = job.data[self.name]
         item = resolve_template(item, job)
         job.rendered[self.name] = item

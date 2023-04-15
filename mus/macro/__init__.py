@@ -152,9 +152,8 @@ class Macro:
             executor (Type[Executor], optional): Executor taking care of
                 actual run. Defaults to AsyncioExecutor.
         """
-        # self._globField = None
 
-        self.generators = {}
+        self.generators: Dict[str, mme.MacroElementBase] = {}
 
         self.executor = executor
         self.wrapper = wrapper
@@ -213,7 +212,7 @@ class Macro:
             self.raw = F.read()
 
     def add_segment(self,
-                    element_class: mme.MacroElementBase,
+                    element_class: Type[mme.MacroElementBase],
                     fragment: str,
                     name: Optional[str]):
         """
