@@ -151,8 +151,7 @@ class Record():
 
         from click import style
 
-
-        twidth = shutil.get_terminal_size((80, 24)).columns
+        terminal_width = shutil.get_terminal_size((80, 24)).columns
 
         ntime = msec2nice(1000 * int(time.time() - self.time))
         if self.type == 'history':
@@ -198,7 +197,7 @@ class Record():
             message = ""
         else:
             message = " \\\n".join(
-                wrap(self.message, twidth - 20,
+                wrap(self.message, terminal_width - 20,
                      subsequent_indent=subsequent_indent))
             message = style(message, fg='white', bold=True)
 

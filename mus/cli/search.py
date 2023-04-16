@@ -13,8 +13,8 @@ from mus.util import get_host
 @click.argument('filter_str', nargs=-1)
 @click.option('--remove', is_flag=True, default=False)
 @click.option('-r', '--recursive', is_flag=True, default=False,
-              help='Use with path specifications to get recursive'
-              + 'search results')
+              help=('Use with path specifications to get recursive'
+                    'search results'))
 @click.option('-h', '--host')
 @click.option('-u', '--user')
 @click.option('-U', '--uid')

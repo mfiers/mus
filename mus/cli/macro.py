@@ -99,12 +99,12 @@ def macro_cli_exe():
 
     from mus.macro import Macro, load_wrapper
     raw_macro = sys.stdin.read()
-    _ = raw_macro.strip().split(None, 2)
-    if len(_) < 3:
+    _macro_split = raw_macro.strip().split(None, 2)
+    if len(_macro_split) < 3:
         echo("Please specify something to execute")
         return
 
-    raw_macro = _[2].strip()
+    raw_macro = _macro_split[2].strip()
     lg.info(f"Raw macro: {raw_macro}")
     # find & define parameters by parsing start of string
     # stop parsing as soon as no args are being recognized anymore

@@ -43,7 +43,7 @@ def db_head():
     cols = []
 
     twidth = shutil.get_terminal_size((80, 24)).columns
-    mcw = int(twidth / (nocols+1)) - nocols
+    mcw = int(twidth / (nocols + 1)) - nocols
 
     for i, rec in enumerate(conn.execute(sql)):
         recd = asdict(rec)
@@ -56,7 +56,7 @@ def db_head():
                 ncol.append(str(recd[key]).split('-')[0])
             elif key == 'time':
                 dtime = time.time() - recd[key]
-                ncol.append(msec2nice(dtime*1000))
+                ncol.append(msec2nice(dtime * 1000))
             else:
                 ncol.append(str(recd[key]))
 
@@ -68,17 +68,16 @@ def db_head():
     cols = [idx] + cols
     maxcolswidth = [max(map(len, col))
                     for col in cols]
-    print(maxcolswidth)
+
     while sum(maxcolswidth) > len(cols) * mcw:
         _n = []
         if max(maxcolswidth) > mcw:
-            for _ in maxcolswidth:
-                if _ > mcw:
-                    _n.append(_-1)
+            for colwidth in maxcolswidth:
+                if colwidth > mcw:
+                    _n.append(colwidth - 1)
                 else:
-                    _n.append(_)
+                    _n.append(colwidth)
             maxcolswidth = _n
-        print(maxcolswidth)
 
     for i, row in enumerate(cols[0]):
         mrw = maxcolswidth[0]
@@ -89,5 +88,3 @@ def db_head():
             fstr = '{row:>' + str(mrw) + '}|'
             print(fstr.format(row=col[i][:mrw]), end='')
         print()
-    #print(mcw)
-    #print(maxcolswidth)
