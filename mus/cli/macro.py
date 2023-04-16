@@ -111,6 +111,7 @@ def macro_cli_exe():
     no_threads = multiprocessing.cpu_count()
     save_name = None
     load_name = None
+    force: bool = False
     dry_run = False
     dry_run_extra = False
     max_no_jobs = -1
@@ -118,7 +119,7 @@ def macro_cli_exe():
     wrapper_name = None
 
     rex = (
-        r'^-(?P<flagbool>[vdDM]+)'
+        r'^-(?P<flagbool>[vdDfM]+)'
         r'|-(?P<flagint>[nj])\s*(?P<intval>[0-9]+)'
         r'|-(?P<flagstr>[lsw])\s*(?P<strval>[A-Za-z0-9]+)'
     )
@@ -139,6 +140,9 @@ def macro_cli_exe():
                     elif flag == 'd':
                         lg.debug("Changing to dry run mode")
                         dry_run = True
+                    elif flag == 'f':
+                        lg.debug("Force run - ignore advise")
+                        force = True
                     elif flag == 'D':
                         lg.debug("Setting very dry run mode")
                         dry_run = dry_run_extra = True
@@ -181,6 +185,7 @@ def macro_cli_exe():
         wrapper = load_wrapper(wrapper_name)
 
     macro_args = dict(dry_run=dry_run,
+                      force=force,
                       dry_run_extra=dry_run_extra,
                       max_no_jobs=max_no_jobs,
                       wrapper=wrapper)

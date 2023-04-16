@@ -132,6 +132,7 @@ class Macro:
                  wrapper: Optional[str] = None,
                  max_no_jobs: int = -1,
                  dry_run: bool = False,
+                 force: bool = False,
                  dry_run_extra: bool = False,
                  executor: Type[Executor] = AsyncioExecutor
                  ) -> None:
@@ -161,6 +162,7 @@ class Macro:
         self.segments: List[mme.MacroElementBase] = []
         self.LogScript: Optional[TextIOWrapper] = None
         self.dry_run = dry_run
+        self.force = force
         self.dry_run_extra = dry_run_extra
 
         if not name and not raw:
@@ -214,7 +216,7 @@ class Macro:
     def add_segment(self,
                     element_class: Type[mme.MacroElementBase],
                     fragment: str,
-                    name: Optional[str]):
+                    name: str):
         """
         Add a segment to this macro.
 
@@ -347,7 +349,7 @@ class Macro:
                 macro=self)
             job.prepare()
             run_advise, reason = job.get_run_advise()
-            if run_advise is False:
+            if (not self.force) and run_advise is False:
                 lg.warning(
                     f"skipping job {job.cl} because: {reason}")
             else:
@@ -363,7 +365,7 @@ class Macro:
             job.cl = "".join(_cl)
             job.prepare()
             run_advise, reason = job.get_run_advise()
-            if run_advise is False:
+            if (not self.force) and run_advise is False:
                 lg.warning(
                     f"skipping job {job.cl} because: {reason}")
             else:
