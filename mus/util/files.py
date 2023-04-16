@@ -32,7 +32,7 @@ def get_checksum(filename: Path) -> str:
         # Read and update hash string value in blocks of 4K
         for byte_block in iter(lambda: f.read(65536), b""):
             sha256_hash.update(byte_block)
-    checksum = sha256_hash.hexdigest()
+    checksum = str(sha256_hash.hexdigest())
 
     sql = """INSERT INTO hashcache
                     (filename, mtime, hash)
@@ -43,3 +43,4 @@ def get_checksum(filename: Path) -> str:
     conn.execute(sql, (str(filename.resolve()),
                        mtime, checksum))
     conn.commit()
+    return checksum
