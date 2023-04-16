@@ -127,7 +127,7 @@ class Record():
             message = getattr(self, "message", "-")
             tags = getattr(self, "tags", '-')
             return (
-                f"{self.host} {self.user} {int(self.time)} "
+                f"{self.type[:3]:3} {self.host} {self.user} {int(self.time)} "
                 f"{self.cwd} "
                 f"{proj} {tags} - "
                 f"{message}"
@@ -151,7 +151,8 @@ class Record():
 
         from click import style
 
-        twdith = shutil.get_terminal_size((80, 24)).columns
+
+        twidth = shutil.get_terminal_size((80, 24)).columns
 
         ntime = msec2nice(1000 * int(time.time() - self.time))
         if self.type == 'history':
@@ -161,7 +162,7 @@ class Record():
         elif self.type == 'tag':
             tmark = style('T', bg="cyan", fg='black')
         elif self.type == 'macro':
-            tmark = style('m', fg='white', bold=False)
+            tmark = style('m', fg='red', bold=False)
         else:
             tmark = style('?', fg='white', bold=False)
 
@@ -197,7 +198,7 @@ class Record():
             message = ""
         else:
             message = " \\\n".join(
-                wrap(self.message, twdith - 20,
+                wrap(self.message, twidth - 20,
                      subsequent_indent=subsequent_indent))
             message = style(message, fg='white', bold=True)
 
