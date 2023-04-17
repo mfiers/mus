@@ -2,10 +2,10 @@
 import os
 import sqlite3
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from textwrap import wrap
-from typing import Optional, Union
+from typing import MutableSet, Optional, Union
 
 from mus.util import get_host, msec2nice
 
@@ -107,18 +107,20 @@ class Record():
     host: str
     cwd: str
     user: str
-    project: Optional[str]
-    tag: Optional[str]
+    projects: MutableSet[str]
     status: int
-    data: dict
     time: float
     uid: str
+    data: dict
+    tags: MutableSet[str]
     filename: Optional[str] = None
     checksum: Optional[str] = None
     child_of: Optional[str] = None
 
     def __init__(self):
         self.data = {}
+        self.tags = set()
+        self.projects = set()
         self.status = 0
 
     def __str__(self):
@@ -135,16 +137,6 @@ class Record():
         elif hasattr(self, 'hash'):
             return f"{self.filename} {self.hash}"
 
-    def add_tag(self, tag: str):
-        """
-        Add a tag to this record
-
-        Args:
-            tag (str): tag to be added
-        """
-        tags = set(self.tags.strip('|').split('|'))
-        tags.add(tag)
-        self.tags = '|' + '|'.join(tags) + '|'
 
     def nice(self,
              no_rep: Optional[int] = None,
@@ -272,19 +264,17 @@ class Record():
 
         config = get_config()
         tags = config.get('tag', [])
+        self.tags |= set(tags)
         if extra_tags:
-            tags = tags + list(extra_tags)
-        tags = list(set(tags))
+            self.tags |= set(extra_tags)
 
-        if tags:
-            self.tags = "|" + "|".join(tags) + "|"
-        else:
-            self.tags = ""
+        self.projects |= set(config.get('project', []))
 
-        if 'project' in config:
-            self.projects = "|" + "|".join(config['project']) + "|"
-        else:
-            self.projects = ""
+    def tagstr(self):
+        return "|".join(list(sorted(self.tags)))
+
+    def projectstr(self):
+        return "|".join(list(sorted(self.projects)))
 
     def save(self):
         import json
@@ -297,8 +287,8 @@ class Record():
                  self.type,
                  self.message,
                  self.status,
-                 self.tags,
-                 self.projects,
+                 self.tagstr(),
+                 self.projectstr(),
                  self.uid,
                  self.filename,
                  self.checksum,
