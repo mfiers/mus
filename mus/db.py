@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from textwrap import wrap
-from typing import Optional
+from typing import Optional, Union
 
 from mus.util import get_host, msec2nice
 
@@ -135,10 +135,21 @@ class Record():
         elif hasattr(self, 'hash'):
             return f"{self.filename} {self.hash}"
 
+    def add_tag(self, tag: str):
+        """
+        Add a tag to this record
+
+        Args:
+            tag (str): tag to be added
+        """
+        tags = set(self.tags.strip('|').split('|'))
+        tags.add(tag)
+        self.tags = '|' + '|'.join(tags) + '|'
+
     def nice(self,
              no_rep: Optional[int] = None,
              full: bool = False):
-        """Return a colorama formatted string for this record
+        """Return a colorama (through click) formatted string for this record
 
         Args:
             no_rep (int, optional): No of times this command was repeated.
@@ -214,6 +225,7 @@ class Record():
                 rectype: Optional[str] = None,
                 message: Optional[str] = None,
                 child_of: Optional[str] = None,
+                extra_tags: Optional[Union[list, set]] = None,
                 ):
         """Prepare record with default values
 
@@ -248,8 +260,13 @@ class Record():
             self.user = getpass.getuser()
 
         config = get_config()
-        if 'tag' in config:
-            self.tags = "|" + "|".join(config['tag']) + "|"
+        tags = config.get('tag', [])
+        if extra_tags:
+            tags = tags + list(extra_tags)
+        tags = list(set(tags))
+
+        if tags:
+            self.tags = "|" + "|".join(tags) + "|"
         else:
             self.tags = ""
 
