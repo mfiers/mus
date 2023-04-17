@@ -229,6 +229,8 @@ class Record():
                 ):
         """Prepare record with default values
 
+        Note - filename can be a directory as well.
+
         Returns: None
         """
 
@@ -237,12 +239,21 @@ class Record():
         from mus.config import get_config
         from mus.util.files import get_checksum
 
-        if filename is not None:
-            self.filename = str(Path(filename).resolve())
-            self.checksum = get_checksum(filename)
-        else:
+        if filename is None:
             self.filename = None
             self.checksum = None
+        elif filename.exists() and filename.is_file():
+            self.filename = str(Path(filename).resolve())
+            self.checksum = get_checksum(filename)
+        elif filename.exists() and filename.is_dir():
+            self.filename = str(Path(filename).resolve())
+            self.checksum = None
+            self.tags.add('folder')
+        elif not filename.exists():
+            raise FileNotFoundError(filename)
+        else:
+            raise Exception("Unsure what happened")
+
         self.child_of = child_of
         self.cwd = os.getcwd()
         self.time = time.time()
