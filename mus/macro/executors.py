@@ -46,6 +46,11 @@ class AsyncioExecutor(Executor):
         import subprocess as sp
         import sys
 
+        all_jobs = list(jobiterator())
+
+        lg.info("starting jobs")
+        [x.start() for x in all_jobs]
+
         async def run_all():
 
             # to ensure the max no subprocesses
@@ -54,22 +59,24 @@ class AsyncioExecutor(Executor):
             async def run_one(job):
                 async with sem:
                     lg.info(f"Executing {job.record.uid}: {job.cl}")
-                    job.start()
                     P = await asyncio.create_subprocess_shell(
                         job.cl, stdout=sp.PIPE, stderr=sp.PIPE)
                     out, err = await P.communicate()
-                    job.stop(P.returncode)
+                    job.set_returncode(P.returncode)
+
                     sys.stdout.write(out.decode(encoding='utf-8'))
                     sys.stderr.write(err.decode(encoding='utf-8'))
                     lg.debug(f"Finished {job.record.uid}: {job.cl}")
 
             async def run_all():
                 await asyncio.gather(
-                    *[run_one(job)
+                    *(run_one(job)
                       for (i, job)
-                      in enumerate(jobiterator())
-                      ])
+                      in enumerate(all_jobs)))
 
             await run_all()
 
         asyncio.run(run_all())
+
+        lg.info("Finishing up jobs")
+        [x.stop() for x in all_jobs]

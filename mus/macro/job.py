@@ -88,16 +88,17 @@ class MacroJob:
         self.starttime = self.record.time = time.time()
         call_hook('start_job', job=self)
 
-    def stop(self, returncode):
+    def set_returncode(self, returncode):
+        self.returncode = self.record.status = returncode
+
+    def stop(self):
         self.stoptime = time.time()
         self.runtime = self.stoptime - self.starttime
         self.runtimeNice = msec2nice(self.runtime)
-        self.returncode = returncode
         call_hook('stop_job', job=self)
 
         self.record.time = self.starttime
         self.record.message = self.cl
-        self.record.status = returncode
         self.record.data['runtime'] = self.runtime
         self.record.save()
 
