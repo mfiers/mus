@@ -6,8 +6,11 @@ import click
 import colorama
 from click import echo, style
 
-import mus.plugins.job_run_check  # plugin
 from mus import hooks
+
+# plugins
+from mus.plugins import iotracker, job_run_check
+from mus.util import pts
 from mus.util.cli import AliasedGroup  # NOQA: E402
 from mus.util.log import ColorLogger  # NOQA: E402
 
@@ -55,10 +58,10 @@ cli.add_command(dbcli.db)
 
 
 @cli.command("version")
-def version():
+def print_version():
     from importlib.metadata import version
     print(version('mus'))
-
+    pts('info', version('mus'))
 
 @cli.command("log")
 @click.argument("message", nargs=-1)

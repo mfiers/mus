@@ -36,8 +36,13 @@ class MacroJob:
         if self.macro.wrapper:
             self.cl = self.macro.wrapper.format(cl=self.cl)
 
-        # only one real i nputfile
+        # job data / data on IO elements
         self.data = data
+
+        # internal data for plugins & other systems
+        self.sysdata = {}
+
+        # in/output
         self.rendered: Dict[str, Union[Atom, str]] = {}
 
         # TODO: fix this - move to tag based IO tracking
