@@ -49,3 +49,8 @@ def format_type_short(status):
         return style('i', bg='cyan', bold=False, fg='black')
     else:
         return style('?', bg='black', fg='red')
+
+
+def pts(level, *message, **format):
+    # if level.lower() == 'debug'
+    print(logging.getLogger().getEffectiveLevel())
