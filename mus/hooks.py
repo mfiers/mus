@@ -39,6 +39,6 @@ def call_hook(name: str,
     """
     for priority, func in sorted(HOOKS.get(name, []), key=lambda x: -x[0]):
 
-        lg.warning(
+        lg.debug(
             f"Call hook {func.__name__} with priority {priority}")
         func(**kwargs)
