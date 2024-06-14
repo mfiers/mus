@@ -2,7 +2,7 @@
 import logging
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 from uuid import uuid4
 
 import mus.macro
@@ -40,7 +40,7 @@ class MacroJob:
         self.data = data
 
         # internal data for plugins & other systems
-        self.sysdata = {}
+        self.sysdata: Dict[str, Any] = {}
 
         # in/output
         self.rendered: Dict[str, Union[Atom, str]] = {}

@@ -137,7 +137,6 @@ class Record():
         elif hasattr(self, 'hash'):
             return f"{self.filename} {self.hash}"
 
-
     def nice(self,
              no_rep: Optional[int] = None,
              full: bool = False):

@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 import click
 from click import echo, style
@@ -24,6 +25,7 @@ def macro():
         -j<INT>  : no parallel processes to use
         -s<NAME> : save macro for later use
         -l<NAME> : load and run macro
+        -w<NAME> : Load and use command wrapper
         -s<INT>  : No jobs to run at most
         -d       : dry-run - show what would be executed
         -D       : as dry-run - but show more information
@@ -88,7 +90,7 @@ def wrapper_edit(name: str):
 
 
 @macro.command("stdin-exe", hidden=True)
-def macro_cli_exe():
+def macro_cli_exe() -> None:
     """Take a line hijacked from bash/zsh history and execute it as a macro
 
     Raises:
@@ -106,12 +108,13 @@ def macro_cli_exe():
 
     raw_macro = _macro_split[2].strip()
     lg.info(f"Raw macro: {raw_macro}")
+
     # find & define parameters by parsing start of string
     # stop parsing as soon as no args are being recognized anymore
-    no_threads = multiprocessing.cpu_count()
+    no_threads: int = multiprocessing.cpu_count()
     save_name = None
     load_name = None
-    force: bool = False
+    force = False
     dry_run = False
     dry_run_extra = False
     max_no_jobs = -1

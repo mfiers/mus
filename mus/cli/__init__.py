@@ -63,6 +63,7 @@ def print_version():
     print(version('mus'))
     pts('info', version('mus'))
 
+
 @cli.command("log")
 @click.argument("message", nargs=-1)
 def log(message):

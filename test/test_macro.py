@@ -55,7 +55,7 @@ def test_run_macro_elements():
             str(test_folder) + \
             '/{%s}.out'
     result = run_macro(macro)
-    # assert result.exit_code == 0
+    assert result.exit_code == 0
 
     outfiles = list(test_folder.glob('*'))
     print(outfiles)
@@ -102,18 +102,22 @@ def test_run_multiglob():
     assert len(result.output.split()) == 2
     assert result.exit_code == 0
 
-    result = run_macro('ls {test/data/other*.txt}')
+    result = run_macro(
+        'ls {test/data/other*.txt}')
     assert len(result.output.split()) == 2
     assert result.exit_code == 0
 
-    result = run_macro('ls {test/data/other*.txt&glob|test/data/test*.txt&glob}')
+    result = run_macro(
+        'ls {test/data/other*.txt&glob|test/data/test*.txt&glob}')
     assert len(result.output.split()) == 4
     assert result.exit_code == 0
 
-    result = run_macro('ls {test/data/other*.txt&glob|test/data/test?.txt&glob}')
+    result = run_macro(
+        'ls {test/data/other*.txt&glob|test/data/test?.txt&glob}')
     assert len(result.output.split()) == 2
     assert result.exit_code == 0
 
-    result = run_macro('ls {test/data/other*.txt&glob|test/data/test??.txt&glob}')
+    result = run_macro(
+        'ls {test/data/other*.txt&glob|test/data/test??.txt&glob}')
     assert len(result.output.split()) == 4
     assert result.exit_code == 0
