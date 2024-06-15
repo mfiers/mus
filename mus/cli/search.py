@@ -1,6 +1,7 @@
 
 import os
 import time
+from collections import defaultdict
 from pathlib import Path
 
 import click
@@ -12,6 +13,7 @@ from mus.util import get_host
 @click.command("search")
 @click.argument('filter_str', nargs=-1)
 @click.option('--remove', is_flag=True, default=False)
+@click.option('-t', '--tree', is_flag=True, default=False)
 @click.option('-r', '--recursive', is_flag=True, default=False,
               help=('Use with path specifications to get recursive'
                     'search results'))
@@ -25,7 +27,7 @@ from mus.util import get_host
               help='Full output')
 @click.option('-n', '--no', type=int, default=20,
               help='No results to show')
-def cmd_search(filter_str, uid, host, user, age, project, no, full,
+def cmd_search(filter_str, uid, tree, host, user, age, project, no, full,
                remove, recursive):
     "Search the mus database."
 
@@ -42,7 +44,8 @@ def cmd_search(filter_str, uid, host, user, age, project, no, full,
 
         sql = f"""
         SELECT uid, host, cwd, user, time, type,
-            message, status, project, tag, data
+            message, status, project, tag, data,
+            child_of, checksum, filename, cl
         FROM muslog
         WHERE uid LIKE "{uid}%"
         ORDER BY time desc
@@ -72,7 +75,8 @@ def cmd_search(filter_str, uid, host, user, age, project, no, full,
     else:
         sql = """
             SELECT uid, host, cwd, user, time, type,
-                message, status, project, tag, data
+                message, status, project, tag, data,
+                cl, child_of
             FROM muslog
             """
 
@@ -143,9 +147,37 @@ def cmd_search(filter_str, uid, host, user, age, project, no, full,
 
     allrecs = list(query.fetchall())
 
-    # Iterate through the results to reduce duplicates.
+    if tree:
+        treedata = defaultdict(list)
+        for a in allrecs:
+            if a.child_of is not None:
+                treedata[a.child_of].append(a.uid)
+
+        def recprint(children_of=None, depth=0, i=0):
+            for rec in allrecs:
+                if rec.child_of == children_of:
+                    i += 1
+                    if i > no:
+                        return i
+                    print(rec.nice(full=full, depth=depth))
+                    if rec.uid in treedata:
+                        i = recprint(children_of=rec.uid, depth=depth+1, i=i)
+            return i
+        recprint()
+    else:
+        for i, rec in enumerate(allrecs):
+            rec = allrecs[i]
+            print(rec.nice(full=full))
+            if i > no:
+                return
+
+    return
+
+    # old code - for the time being not storing bash history...
     #
     i = 1
+
+
     no_print = 0
     while True:
         if no_print > no:

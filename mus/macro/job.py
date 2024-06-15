@@ -23,14 +23,15 @@ class MacroJob:
         self.record = Record()
         self.record.prepare(
             rectype='job',
-            message=cl)
+            cl=cl)
 
         # all inputfiles for a job
         # as we need to refer to them later - this is a dict
         # keys are strings: '1', '2', '3', etc...
 
+        #print(f'job {self.record.uid} is child of ', self.macro.record.uid)
         self.record.child_of = self.macro.record.uid
-        self.cl = cl
+        self.cl = self.record.cl
 
         # if the macro defined a wrapper - apply it here.
         if self.macro.wrapper:

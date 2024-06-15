@@ -1,4 +1,5 @@
 
+import logging
 import time
 from pathlib import Path
 
@@ -6,6 +7,8 @@ import click
 from click import echo, style
 
 from mus.db import Record, get_db_connection
+
+lg = logging.getLogger(__name__)
 
 
 @click.command("tag")
@@ -36,10 +39,16 @@ def file_(filename):
     db = get_db_connection()
 
     filename = Path(filename).resolve()
-    checksum = get_checksum(filename)
+
 
     echo(f"Checking file {filename}")
+    if filename.is_dir():
+        # TODO: Do I need to more here?
+        return
+
+    checksum = get_checksum(filename)
     echo(f"Checksum: {checksum}")
+
 
     sql = """
         select *

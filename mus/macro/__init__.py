@@ -180,7 +180,7 @@ class Macro:
 
         self.record = Record()
         self.record.prepare(
-            message=self.raw,
+            cl=self.raw,
             rectype="macro")
         self.record.save()
 
@@ -291,6 +291,7 @@ class Macro:
         up_until = 0
         raw = self.raw
         generator_number = 0
+        output_number = 0
         # element_name = None
 
         if re.match(r'\![0-9a-f]+', raw):
@@ -312,28 +313,41 @@ class Macro:
                              name=None)
 
             # matched fragment excluding {}
-            generator_number += 1
+
             fragment = raw[pat.start() + 1:pat.end() - 1]
 
-            if '&' not in fragment:
-                # if functions are defined - we'll trust the writer
-                # to be correct & complete.
 
+            if '&' in fragment:
+                # if functions are defined - we'll trust the writer
+                # to be correct & complete - just number them
+                generator_number += 1
+                name = f"{generator_number}"
+
+            else:
+                # some magic - autorecognize element shortcuts.
                 if '*' in fragment or '?' in fragment:
                     # assume glob of type {*.txt}
+                    generator_number += 1
+                    name = f"{generator_number}"
                     fragment += '&glob&input'  # for ssp
 
                 elif '%' in fragment:
+                    output_number += 1
+                    name = f"{100-output_number}"
                     # assume output file
+                    # TODO: do we really??
                     fragment += '&output'  # for ssp
+
+                else:
+                    raise click.UsageError(f"Unrecognized element: {fragment}")
 
             self.add_segment(element_class=mme.MacroElementSSP,
                              fragment=fragment,
-                             name=str(generator_number))
+                             name=name)
 
             up_until = pat.end()
 
-        # ensure the last bit of the matcro is added!
+        # ensure the last bit of the macro is added!
         self.add_segment(
             element_class=mme.MacroElementText,
             fragment=raw[up_until:],
@@ -351,8 +365,9 @@ class Macro:
             run_advise, reason = job.get_run_advise()
             if (not self.force) and run_advise is False:
                 lg.warning(
-                    f"skipping job {job.cl} because: {reason}")
+                    f"skipping job '{job.cl}' because: '{reason}'")
             else:
+                job.record.add_message(f"Run because '{run_advise}'")
                 yield job
             return
 
@@ -367,12 +382,13 @@ class Macro:
             run_advise, reason = job.get_run_advise()
             if (not self.force) and run_advise is False:
                 lg.warning(
-                    f"skipping job {job.cl} because: {reason}")
+                    f"skipping job '{job.cl}' because: '{reason}'")
             else:
                 i += 1
                 if self.max_no_jobs > 0 and \
                         i > self.max_no_jobs:
                     return
+                job.record.add_message(f"Run because '{run_advise}'")
                 yield job
 
     def open_script_log(self, mode):
@@ -383,7 +399,7 @@ class Macro:
             env_hostname = f" ({env_hostname})"
         if env_user:
             env_user = f" ({env_user})"
-        self.LogScript = open("./mus.sh", "a")
+        self.LogScript = open("./mus.log", "a")
         self.LogScript.write("\n\n" + "#" * 80 + "\n")
         self.LogScript.write(
             "# Time  : " + datetime.now().strftime("%Y-%m-%d %H:%M" + "\n"))

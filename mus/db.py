@@ -42,6 +42,7 @@ def init_muslog_table(conn: sqlite3.Connection):
             host TEXT,
             cwd TEXT,
             user TEXT,
+            cl TEXT,3
             time INTEGER,
             type TEXT,
             message TEXT,
@@ -113,6 +114,7 @@ class Record():
     uid: str
     data: dict
     tags: MutableSet[str]
+    cl: Optional[str] = None
     filename: Optional[str] = None
     checksum: Optional[str] = None
     child_of: Optional[str] = None
@@ -139,13 +141,15 @@ class Record():
 
     def nice(self,
              no_rep: Optional[int] = None,
-             full: bool = False):
+             full: bool = False,
+             depth: int = 0):
         """Return a colorama (through click) formatted string for this record
 
         Args:
             no_rep (int, optional): No of times this command was repeated.
                 Defaults to None.
             full (float): Return a multi-line full output
+            depth (int): add indentation space for tree view
         Returns:
             str: ANSI color formatted string
         """
@@ -155,15 +159,21 @@ class Record():
 
         terminal_width = shutil.get_terminal_size((80, 24)).columns
 
+        if depth >= 1: indent_str = '  ' * (depth-1) + '+->'
+        else: indent_str = ''
+
         ntime = msec2nice(1000 * int(time.time() - self.time))
+        ntime = style(f"{ntime:>7}", fg=55)
         if self.type == 'history':
             tmark = style('H', fg="green")
         elif self.type == 'log':
             tmark = style('L', bg="blue", fg='black')
         elif self.type == 'tag':
-            tmark = style('T', bg="cyan", fg='black')
+            tmark = style('T', bg="black", fg='cyan')
         elif self.type == 'macro':
             tmark = style('m', fg='red', bold=False)
+        elif self.type == 'job':
+            tmark = style('j', fg='yellow', bold=False)
         else:
             tmark = style('?', fg='white', bold=False)
 
@@ -171,7 +181,7 @@ class Record():
             smark = " "
             smark_long = '       '
         else:
-            smark = style("!", bg="red", fg="white")
+            smark = style("!", bg=196, fg="white")
             smark_long = style(f" {self.status:>5d}!",
                                fg="red", bold=False, bg="black")
 
@@ -181,25 +191,31 @@ class Record():
             srep = ""
 
         extra = ""
-        if self.type == "macro-exe":
+        if self.type == "job":
             if 'runtime' in self.data:
                 rt = msec2nice(self.data["runtime"] * 1000)
-                extra = f' duration: {rt}'
+                extra = style(f' ({rt})', fg=70)
 
         if self.uid:
-            uid = style(self.uid[:4], fg='blue', bold=False,
-                        bg='black')
+            uid = style(self.uid[:6], fg=240, bold=False)
         else:
             uid = style('????', fg='red', bold=False)
         if full:
             subsequent_indent = ""
         else:
             subsequent_indent = "      "
-        if self.message is None:
-            message = ""
-        else:
+
+        message = ''
+        if self.cl is not None:
+            message += self.cl
+        if self.message is not None:
+            if message:
+                message += '; ' + self.message
+            else:
+                message = self.message
+        if message:
             message = " \\\n".join(
-                wrap(self.message, terminal_width - 20,
+                wrap(message, terminal_width - 20,
                      subsequent_indent=subsequent_indent))
             message = style(message, fg='white', bold=True)
 
@@ -209,12 +225,13 @@ class Record():
                 f"| {self.user}@{self.host}:{self.cwd}\n"
                 f"{message}{srep}{extra}")
         else:
-            return f"{tmark}{smark} {uid} {ntime:>8s} {message}{srep}{extra}"
+            return f"{tmark}{smark}{indent_str} {uid} {ntime:>8s} {message}{srep}{extra}"
 
     def prepare(self,
                 filename: Optional[Path] = None,
                 rectype: Optional[str] = None,
                 message: Optional[str] = None,
+                cl: Optional[str] = None,
                 child_of: Optional[str] = None,
                 extra_tags: Optional[Union[list, set]] = None,
                 ):
@@ -246,6 +263,7 @@ class Record():
             raise Exception("Unsure what happened")
 
         self.child_of = child_of
+        self.cl = cl
         self.cwd = os.getcwd()
         self.time = time.time()
         self.type = rectype
@@ -269,6 +287,16 @@ class Record():
 
         self.projects |= set(config.get('project', []))
 
+    def add_tag(self, tag):
+        self.tags.add(tag)
+
+    def add_message(self, message):
+        if self.message is None:
+            self.message = message
+        else:
+            self.message = self.message.rstrip("\n") + "\n" + message
+
+
     def tagstr(self):
         return "|".join(list(sorted(self.tags)))
 
@@ -291,19 +319,20 @@ class Record():
                  self.uid,
                  self.filename,
                  self.checksum,
-                 self.child_of]
+                 self.child_of,
+                 self.cl]
 
         if self.data:
             rdata.append(json.dumps(self.data))
             sql = """INSERT INTO muslog(
                     host, cwd, user, time, type, message, status,
-                    tag, project, uid, filename, checksum, child_of, data)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) """
+                    tag, project, uid, filename, checksum, child_of, cl, data)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) """
         else:
             sql = """INSERT INTO muslog(
                     host, cwd, user, time, type, message, status,
-                    tag, project, uid, filename, checksum, child_of)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) """
+                    tag, project, uid, filename, checksum, child_of, cl)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) """
 
         db.execute(sql, tuple(rdata))
         db.commit()

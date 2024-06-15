@@ -1,4 +1,5 @@
 
+import logging
 import shutil
 import tempfile
 from pathlib import Path
@@ -7,6 +8,8 @@ from uuid import uuid4
 from click.testing import CliRunner, Result
 
 import mus.cli
+
+lg = logging.getLogger(__name__)
 
 TEST_FOLDER = Path('./test/data')
 
@@ -24,7 +27,7 @@ def run_macro(macro: str) -> Result:
     """
     runner = CliRunner()
     to_execute = ' 42  m ' + macro
-    print(to_execute)
+    lg.warning(f"Executing: '{to_execute}'")
     result = runner.invoke(mus.cli.cli,
                            ['macro', 'stdin-exe'],
                            input=to_execute)

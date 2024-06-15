@@ -31,7 +31,7 @@ def prepare_job_needs_execution(job):
 
     for input_file in input_files:
         if not input_file.exists():
-            job.set_run_advise(False, "Input file {input_file} does not exist")
+            job.set_run_advise(False, f"Input file '{input_file}' does not exist")
         else:
             input_mtimes.append(input_file.stat().st_mtime)
     # job.set_run_advise(True, "All input files exist")
@@ -39,6 +39,10 @@ def prepare_job_needs_execution(job):
     for output_file in output_files:
         if output_file.exists():
             output_mtimes.append(output_file.stat().st_mtime)
+        else:
+            job.set_run_advise(True, "At least one output file does not exist")
+            return
+
 
     if len(output_mtimes) == 0:
         # no output files (exist):

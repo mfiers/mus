@@ -1,4 +1,5 @@
 
+import logging
 import re
 from functools import partial
 from pathlib import Path
@@ -8,6 +9,7 @@ from mus.macro.job import MacroJob
 from mus.util import ssp
 from mus.util.ssp import Atom
 
+lg = logging.getLogger()
 
 def getBasenameNoExtension(filename: Path) -> str:
     rv = filename.name
@@ -36,11 +38,12 @@ def fn_resolver(match: re.Match,
     mg0 = match.groups()[0]
     matchno = '1' if not mg0 else mg0
     filename = job.data[matchno]
+    #lg.warning(job.data)
     rv = resfunc(filename)
     return rv
 
 
-# expandable template elements
+# expandable template elements (% element)
 TEMPLATE_ELEMENTS = [
     ('%([1-9]?)f', lambda x: str(x)),
     ('%([1-9]?)F', lambda x: str(Path(x).resolve())),
@@ -73,6 +76,7 @@ def resolve_template(
         resfunc_p = partial(fn_resolver, resfunc=resfunc, job=job)
         new_template = re.sub(rex, resfunc_p, new_template)
 
+    # lg.warning(f'nt: {new_template}')
     if isinstance(template, Atom):
         return template.update(new_template)
     else:
@@ -127,6 +131,7 @@ class MacroElementSSP(MacroElementText):
         return item
 
     def expand(self):
+        #lg.warning(f"ssp expansion: {self.fragment}")
         ssp_expand = ssp.SSP(self.fragment)
         yield from [(self.name, x)
                     for x in ssp_expand.stack]
