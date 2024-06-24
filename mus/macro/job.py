@@ -23,9 +23,9 @@ class MacroJob:
         self.record = Record()
         self.record.prepare(
             rectype='job',
-            cl=cl)
+            message=cl)
 
-        # all inputfiles for a job
+        # all inputfiles for a jobww
         # as we need to refer to them later - this is a dict
         # keys are strings: '1', '2', '3', etc...
 

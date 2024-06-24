@@ -5,7 +5,7 @@
 import re
 from functools import partial, wraps
 from pathlib import Path
-from typing import Callable, Dict, List
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 
 class Atom(str):
@@ -33,6 +33,9 @@ class Atom(str):
         new = Atom(new_string)
         new._mus_tag = getattr(self, '_mus_tag', set())
         return new
+
+    def apply(self, func):
+        return self.update(func(self))
 
     def tagstr(self):
         """Return a formatted string with all tags"""
@@ -90,21 +93,32 @@ def _cmd2stack(cmd) -> List[Atom]:
 SSP_FUNCTIONS: Dict[str, Callable] = {}
 
 
+def stackmap(stack, func):
+    """Inplace map a function on a stack of atoms
+
+
+    """
+    for i in range(len(stack)):
+        stack[i] = stack[i].apply(func)
+
+
 def register_function(name):
     def register_decorator(func):
         @wraps(func)
         def wrapped_function(*args, **kwargs):
             return func(*args, **kwargs)
         if name in SSP_FUNCTIONS:
-            raise Exception("can not register SSP function - exists")
+            raise Exception(f"can not register SSP {name} function - exists")
 
         SSP_FUNCTIONS[name] = func
         return wrapped_function
     return register_decorator
 
 
+
 @register_function('tag')
-def tag_atom(stack: List[Atom]) -> None:
+def tag_atom(stack: List[Atom],
+             data: Dict[str,Any]) -> None:
     """Tag the stacked atoms - for later processing
 
     >>> stack = _cmd2stack("a|b|c|testtag")
@@ -125,7 +139,8 @@ def tag_atom(stack: List[Atom]) -> None:
 
 @register_function('i')
 @register_function('input')
-def tag_atom_input(stack: List[Atom]) -> None:
+def tag_atom_input(stack: List[Atom],
+                   data: Dict[str,Any]) -> None:
     """Tag the stacked atoms as input - for later processing
 
     >>> stack = _cmd2stack("a|b|c")
@@ -144,7 +159,8 @@ def tag_atom_input(stack: List[Atom]) -> None:
 
 @register_function('o')
 @register_function('output')
-def tag_atom_output(stack: List[Atom]) -> None:
+def tag_atom_output(stack: List[Atom],
+                    data: Dict[str,Any]) -> None:
     """Tag the stacked atoms as input - for later processing
 
     >>> stack = _cmd2stack("a|b|c")
@@ -162,7 +178,8 @@ def tag_atom_output(stack: List[Atom]) -> None:
 
 
 @register_function('read')
-def open_file(stack: list) -> None:
+def open_file(stack: list,
+              data: Dict[str,Any]) -> None:
     """
     Open file & read space separated contents
 
@@ -183,7 +200,8 @@ def open_file(stack: list) -> None:
 
 
 @register_function('glob')
-def glob(stack: list) -> None:
+def glob(stack: list,
+         data: Dict[str,Any]) -> None:
     """
     Expand the last item of the stack as a path glob
 
@@ -210,6 +228,7 @@ def glob(stack: list) -> None:
 @register_function('filter')
 def string_filter(
         stack: List[Atom],
+        data: Dict[str,Any],
         negative: bool = False) -> None:
     """
     Filter a list based on the presenence of a
@@ -253,7 +272,8 @@ def string_filter(
 
 
 @register_function('remove')
-def string_filter_discard(stack: List[Atom]):
+def string_filter_discard(stack: List[Atom],
+                          data: Dict[str,Any]):
     """Opposite of filter - remove all matching strings
 
     >>> stack=_cmd2stack("a|b|c|ab|b")
@@ -264,8 +284,99 @@ def string_filter_discard(stack: List[Atom]):
     True
 
     """
-    return string_filter(stack, negative=True)
+    return string_filter(stack, data, negative=True)
 
+
+@register_function('basename')
+@register_function('b')
+def file_basename(
+        stack: List[Atom],
+        data: Dict[str,Any]):
+    """Assume filename, return basename
+
+    >>> stack=_cmd2stack("bla.txt|test.something.txt")
+    >>> _isstack(stack)
+    True
+    >>> file_basename(stack)
+    >>> stack
+    ['bla', 'test.something']
+    >>> _isstack(stack)
+    True
+
+    """
+    stackmap(stack, lambda x: Path(x).name.rsplit('.', 1)[0])
+
+
+@register_function('parent')
+@register_function('p')
+def file_parent(
+        stack: List[Atom],
+        data: Dict[str,Any]):
+    """Assume filename, return basename
+
+    # >>> stack=_cmd2stack("bla.txt|test.something.txt")
+    # >>> _isstack(stack)
+    # True
+    # >>> file_basename(stack)
+    # >>> stack
+    # ['bla', 'test.something']
+    # >>> _isstack(stack)
+    # True
+
+    """
+    stackmap(stack, lambda x: Path(x).resolve().parent)
+
+
+@register_function('name')
+@register_function('n')
+def file_filename(
+        stack: List[Atom],
+        data: Dict[str,Any]):
+    """Assume filename, return basename
+
+    # >>> stack=_cmd2stack("bla.txt|test.something.txt")
+    # >>> _isstack(stack)
+    # True
+    # >>> file_basename(stack)
+    # >>> stack
+    # ['bla', 'test.something']
+    # >>> _isstack(stack)
+    # True
+
+    """
+    stackmap(stack, lambda x: Path(x).name)
+
+
+@register_function('resolve')
+@register_function('r')
+def file_resolve(
+        stack: List[Atom],
+        data: Dict[str,Any]):
+    """Assume filename, return basename
+
+    # >>> stack=_cmd2stack("bla.txt|test.something.txt")
+    # >>> _isstack(stack)
+    # True
+    # >>> file_basename(stack)
+    # >>> stack
+    # ['bla', 'test.something']
+    # >>> _isstack(stack)
+    # True
+
+    """
+    stackmap(stack, lambda x: Path(x).resolve())
+
+
+@register_function('get')
+def getdata(
+        stack: List[Atom],
+        data: Dict[str,Any]):
+    """Return an item from data
+    """
+    assert len(stack) > 0
+    item_to_get = stack.pop()
+    to_inject = Atom(data[item_to_get])
+    stack.insert(0, to_inject)
 
 class SSP:
     """
@@ -285,8 +396,16 @@ class SSP:
     True
 
     """
-    def __init__(self, raw: str):
+    def __init__(self,
+                 raw: str,
+                 data: Dict[str,Any] | None = None
+                 ):
+
         self.raw = raw
+        if data is None:
+            self.data = {}
+        else:
+            self.data = data
         self.stack: List[Atom] = []
 
         up_until = 0
@@ -295,7 +414,7 @@ class SSP:
         def process_item(next_is_func, last_element):
             if next_is_func:
                 func = SSP_FUNCTIONS[last_element]
-                func(self.stack)
+                func(self.stack, self.data)
             else:
                 self.stack.append(Atom(last_element))
 

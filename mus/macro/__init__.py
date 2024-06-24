@@ -154,7 +154,7 @@ class Macro:
                 actual run. Defaults to AsyncioExecutor.
         """
 
-        self.generators: Dict[str, mme.MacroElementBase] = {}
+        self.macro_elements: Dict[str, mme.MacroElementBase] = {}
 
         self.executor = executor
         self.wrapper = wrapper
@@ -216,13 +216,16 @@ class Macro:
     def add_segment(self,
                     element_class: Type[mme.MacroElementBase],
                     fragment: str,
-                    name: str):
+                    name: Optional[str],
+                    expandable: bool = False,
+                    ):
         """
         Add a segment to this macro.
 
         Args:
             name (Optional(str)): Name of the element - only relevant for
-                generators
+                macro_elements
+            expandable (bool): Evaluate just before execution?
             ElementClass (Subclass of MacroElementBase): Type of element
             fragment (str): macro element contents
         """
@@ -242,11 +245,15 @@ class Macro:
             self.segments.append(
                 element_class(macro=self,
                               fragment=fragment,
+                              expandable=expandable,
                               name=name))
 
             if element_class != mme.MacroElementText:
+                # everything that is not a piece of text
+                # can be expanded (technically) - so we
+                # store it in macro_elements.
                 assert name is not None
-                self.generators[name] = self.segments[-1]
+                self.macro_elements[name] = self.segments[-1]
 
     def process_raw(self):
         """
@@ -256,7 +263,7 @@ class Macro:
         the first character in the definition. Note this character can be
         optional
 
-        Generators:
+        macro_elements:
 
              : glob - if unspecified when a * is in the
             f: read in from a file (space separated)
@@ -274,7 +281,6 @@ class Macro:
 
             ls {*.txt} {*.py}
 
-
         Will have:
 
             1 : {*.txt}
@@ -290,7 +296,7 @@ class Macro:
         # find patterns:
         up_until = 0
         raw = self.raw
-        generator_number = 0
+        macro_element_number = 0
         output_number = 0
         # element_name = None
 
@@ -313,36 +319,71 @@ class Macro:
                              name=None)
 
             # matched fragment excluding {}
-
             fragment = raw[pat.start() + 1:pat.end() - 1]
 
 
+            # few categories:
+            # input file
+            # {*.txt} --> renders to {*.txt&glob&input} & early evaluation
+            # {%*} --> renders to {%*}
+            #   - {%.} --> {>%&basename}
+            #   - {%.} --> {>%&basename}
+
+            expandable = False
+
             if '&' in fragment:
+                # TODO: ensure we have expandable elements here!.
                 # if functions are defined - we'll trust the writer
                 # to be correct & complete - just number them
-                generator_number += 1
-                name = f"{generator_number}"
+                macro_element_number += 1
+                name = f"{macro_element_number}"
+                raise NotImplementedError()
+
+            elif '*' in fragment or '?' in fragment:
+                # assume glob of type {*.txt}
+                macro_element_number += 1
+                name = f"{macro_element_number}"
+                fragment += '&glob&input'  # for ssp
+                expandable = True
+
+            elif fragment[0] in ['%', '>']:
+
+                # simple expansion (%) or track as output (>)
+                output_number += 1
+                name = f"{100-output_number}"
+
+                fragmatch = re.match(
+                    r'^([%>])(\d*)([pfbr\.]?)$', fragment)
+                if not fragmatch:
+                    raise click.UsageError(f"Unrecognized template element {fragment}")
+
+                fwhat, fnumber, ffunc = fragmatch.groups()
+                if not fnumber:
+                    fnumber = '1'
+
+                fragment = f'%{fnumber}'
+
+                fragment += {
+                    '': '',
+                    'f': '',
+                    '.': '&basename',
+                    'b': '&basename',
+                    'n': '&filename',
+                    'r': '&resolve',
+                    'p': '&paremt',
+                }[ffunc]
+
+                if fwhat == '>':
+                    fragment += '&output'
 
             else:
-                # some magic - autorecognize element shortcuts.
-                if '*' in fragment or '?' in fragment:
-                    # assume glob of type {*.txt}
-                    generator_number += 1
-                    name = f"{generator_number}"
-                    fragment += '&glob&input'  # for ssp
+                raise click.UsageError(f"Unrecognized element: {fragment}")
 
-                elif '%' in fragment:
-                    output_number += 1
-                    name = f"{100-output_number}"
-                    # assume output file
-                    # TODO: do we really??
-                    fragment += '&output'  # for ssp
 
-                else:
-                    raise click.UsageError(f"Unrecognized element: {fragment}")
 
             self.add_segment(element_class=mme.MacroElementSSP,
                              fragment=fragment,
+                             expandable = expandable,
                              name=name)
 
             up_until = pat.end()
@@ -350,13 +391,18 @@ class Macro:
         # ensure the last bit of the macro is added!
         self.add_segment(
             element_class=mme.MacroElementText,
+            expandable = False,
             fragment=raw[up_until:],
             name=None)
 
     def expand(self):
-        if len(self.generators) == 0:
+
+        ##
+        ## Singleton
+        ##
+        if len(self.macro_elements) == 0:
             lg.debug('Executing singleton command')
-            # if there is no glob to expand -
+            # if there is nothing to expand -
             job = MacroJob(
                 cl=self.raw,
                 data={},
@@ -371,10 +417,17 @@ class Macro:
                 yield job
             return
 
-        generators = [x.expand() for x in self.generators.values()]
+        all_macro_elements = [x.expand() for x in self.macro_elements.values()]
 
+        jobdata = {}
+        for _ in product(*all_macro_elements):
+            job = MacroJob(macro=self, data=dict(_))
+            _cl = [sg.render(job) for sg in self.segments]
+            print(_cl)
+        exit()
         i = 0
-        for _ in product(*generators):
+        for _ in product(*all_macro_elements):
+
             job = MacroJob(macro=self, data=dict(_))
             _cl = [sg.render(job) for sg in self.segments]
             job.cl = "".join(_cl)

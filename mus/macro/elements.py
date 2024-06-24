@@ -43,16 +43,17 @@ def fn_resolver(match: re.Match,
     return rv
 
 
-# expandable template elements (% element)
-TEMPLATE_ELEMENTS = [
-    ('%([1-9]?)f', lambda x: str(x)),
-    ('%([1-9]?)F', lambda x: str(Path(x).resolve())),
-    ('%([1-9]?)n', lambda x: str(Path(x).name)),
-    ('%([1-9]?)s', lambda x: str(Path(x).stem)),
-    ('%([1-9]?)S', lambda x: str(Path(Path(x).stem).stem)),
-    ('%([1-9]?)p', lambda x: str(Path(x).resolve().parent)),
-    ('%([1-9]?)P', lambda x: str(Path(x).resolve().parent.parent)),
-]
+# # expandable template elements (% element)
+# TEMPLATE_ELEMENTS = [
+#     ('%([1-9]?)', lambda x: str(x)),
+#     ('%([1-9]?)f', lambda x: str(x)),
+#     ('%([1-9]?)F', lambda x: str(Path(x).resolve())),
+#     ('%([1-9]?)n', lambda x: str(Path(x).name)),
+#     ('%([1-9]?)s', lambda x: str(Path(x).stem)),
+#     ('%([1-9]?)S', lambda x: str(Path(Path(x).stem).stem)),
+#     ('%([1-9]?)p', lambda x: str(Path(x).resolve().parent)),
+#     ('%([1-9]?)P', lambda x: str(Path(x).resolve().parent.parent)),
+# ]
 
 
 def resolve_template(
@@ -69,18 +70,21 @@ def resolve_template(
         str|Atom: resolved template
     """
 
-    # parse over all template elements
-    new_template = template
-    for rex, resfunc in TEMPLATE_ELEMENTS:
-        # Prepare function to expand, pickling with job & resolving function
-        resfunc_p = partial(fn_resolver, resfunc=resfunc, job=job)
-        new_template = re.sub(rex, resfunc_p, new_template)
+    # parse over all expandable %\d elements
+    print('      ## 111 finding exp', template)
+    find_expansion = re.search(r'^%([0-9]+)', template)
+    if find_expansion:
+        print('      ## found!')
+        fno = find_expansion.groups()[0]
+        replace_by = job.data[fno]
+        template = \
+            replace_by + template[len(find_expansion.group()):]
+    print('      ## now: 2', template)
 
-    # lg.warning(f'nt: {new_template}')
     if isinstance(template, Atom):
-        return template.update(new_template)
+        return template.update(template)
     else:
-        return new_template
+        return template
 
 
 class MacroElementBase():
@@ -88,17 +92,30 @@ class MacroElementBase():
     def __init__(self,
                  macro,
                  fragment: str,
-                 name: str) -> None:
+                 name: str,
+                 expandable: bool = False,
+                 ) -> None:
         self.fragment = fragment
+        self.expandable = expandable
         self.macro = macro
         self.name = name
+
+        self.expanded = False
+
+    def render(self,
+               job: MacroJob) -> str:
+        raise NotImplementedError
 
     def expand(self):
         raise NotImplementedError
 
 
 class MacroElementText(MacroElementBase):
-    """Just a piece of text - but expand % macros"""
+    """Just a piece of text
+
+        This used to expand %f elements - but I'm not sure
+        that is a good idea
+    """
 
     def render(self,
                job: MacroJob) -> str:
@@ -111,8 +128,8 @@ class MacroElementText(MacroElementBase):
         Returns:
             str: Rendered fragment
         """
-        rv = resolve_template(self.fragment, job)
-        return rv
+        #return resolve_template(self.fragment, job)
+        return self.fragment
 
     def __str__(self):
         return f"Text   : '{self.fragment}'"
@@ -125,13 +142,34 @@ class MacroElementSSP(MacroElementText):
 
     def render(self,
                job: MacroJob) -> str:
+
+        rv = list(ssp.SSP(self.fragment).stack)
+        print('x' * 80)
+        print(rv)
+
+#             print(self.fragment)
+#             fragment = resolve_template(self.fragment, job)
+
+#             ssp_expand = ssp.SSP(self.fragment, )
+#             exit()
+# #                        ssp_expand = ssp.SSP(self.fragment, )
+
+            #result = from [(self.name, x)
+            #            for x in ssp_expand.stack]
+
+        # lg.warning(f'render {self.fragment}')
         item = job.data[self.name]
         item = resolve_template(item, job)
         job.rendered[self.name] = item
         return item
 
     def expand(self):
-        #lg.warning(f"ssp expansion: {self.fragment}")
-        ssp_expand = ssp.SSP(self.fragment)
-        yield from [(self.name, x)
-                    for x in ssp_expand.stack]
+        if not self.expandable:
+            yield (self.name, self)
+        else:
+            ssp_expand = ssp.SSP(self.fragment, )
+            yield from [(self.name, MacroElementText(macro=self.macro,
+                                                     name=self.name,
+                                                     fragment=str(x),
+                                                     expandable=False))
+                        for x in ssp_expand.stack]
