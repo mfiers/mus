@@ -14,13 +14,9 @@ def prepare_job_needs_execution(job):
        most recent inputfile
     """
 
-    input_files = []
-    output_files = []
-    for k, v in job.data.items():
-        if v.has_tag('input'):
-            input_files.append(Path(job.rendered[k]))
-        elif v.has_tag('output'):
-            output_files.append(Path(job.rendered[k]))
+    to_path_list = lambda fl: [Path(x) for x in fl]
+    input_files = to_path_list(job.file_meta.get('input', set()))
+    output_files = to_path_list(job.file_meta.get('output', set()))
 
     if len(input_files) == 0:
         # no reason to not run this job...
@@ -45,7 +41,7 @@ def prepare_job_needs_execution(job):
 
 
     if len(output_mtimes) == 0:
-        # no output files (exist):
+        # no output files (exist) - no reason not to run this job
         return
 
     if max(input_mtimes) < min(output_mtimes):

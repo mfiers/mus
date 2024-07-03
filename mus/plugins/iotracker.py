@@ -47,7 +47,7 @@ def track_iofiles_prerun(job):
             job.sysdata['output_files'][output_file] = ochk
 
 
-register_hook('start_job', track_iofiles_prerun, priority=20)
+# register_hook('start_job', track_iofiles_prerun, priority=20)
 
 
 def track_iofiles_postrun(job):
@@ -104,4 +104,4 @@ def track_iofiles_postrun(job):
             rec.save()
 
 
-register_hook('stop_job', track_iofiles_postrun, priority=20)
+# register_hook('stop_job', track_iofiles_postrun, priority=20)

@@ -9,6 +9,10 @@ class Executor():
         self.no_threads = no_threads
         self.force = force
 
+    def execute(self,
+                jobiterator,
+                max_no_jobs: int = -1):
+        raise NotImplementedError('')
 
 class SimpleExecutor(Executor):
     """Execute in order, not parallel."""

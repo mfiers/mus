@@ -25,7 +25,6 @@ lg = logging.getLogger('mus')
 lg.setLevel(logging.WARNING)
 logging.getLogger('asyncio').setLevel(logging.WARNING)
 
-
 # late import to make sure logging is set properly.
 from mus.config import (  # NOQA: E402
     get_config,
@@ -53,7 +52,7 @@ from mus.cli import search  # NOQA: E402
 cli.add_command(search.cmd_search)
 cli.add_command(files.tag)
 cli.add_command(files.file_)
-cli.add_command(macro.macro)
+cli.add_command(macro.cli_macro)
 cli.add_command(dbcli.db)
 
 

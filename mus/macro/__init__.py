@@ -1,6 +1,6 @@
 
-
 import getpass
+import itertools
 import logging
 import os
 import re
@@ -15,19 +15,24 @@ from uuid import uuid4
 
 import click
 
-import mus.macro.elements as mme
 from mus.db import Record
 from mus.hooks import call_hook, register_hook
 from mus.macro.executors import AsyncioExecutor, Executor
 from mus.macro.job import MacroJob
 from mus.util import msec2nice
-from mus.util.ssp import Atom
 
 lg = logging.getLogger(__name__)
+lg.propagate = False  # I do not know why this is required?
 
 DEBUG = True
 MACRO_SAVE_PATH = "~/.local/mus/macro"
-WRAPPER_SAVE_PATH = "~/.local/mus/wrappers"
+#wrapperWRAPPER_SAVE_PATH = "~/.local/mus/wrappers"
+
+# Example macros
+#
+###  file expansion
+# $ ls {*.txt}
+# $ ls {file?.txt}
 
 
 def find_saved_macros() -> Dict[str, str]:
@@ -49,24 +54,97 @@ def find_saved_macros() -> Dict[str, str]:
     return rv
 
 
-def find_saved_wrappers() -> Dict[str, str]:
-    """Find a list of all wrappers saved and return first 100 characters for
-    display.
+class Expandable:
+    def __init__(self, varname: str, text: str):
+        self.text = text
+        self.varname = varname
+        self.expander = None
 
-    Returns:
-        Dict[str, str]: Dictionary of name: first parts of the wrappers
+
+    def yielder(self, iterator):
+        return [(self.varname, x) for x in iterator]
+
+
+    def expand(self):
+
+        # simplistic for now
+        if m := re.match(r'\s*range\(([\d\,]+)\)\s*', self.text):
+            match = m.groups()[0]
+            args = list(map(int, match.split(',')))
+            return self.yielder(range(*args))
+
+        elif '*' in self.text or '?' in self.text:
+            # assume glob
+            lg.debug(f"glob {self.text}")
+            return self.yielder(Path('.').glob(self.text))
+
+
+def render2jinja(text: str):
     """
-    save_folder = Path(WRAPPER_SAVE_PATH).expanduser()
-    if not save_folder.exists():
-        return {}
+    Convert a shortcut renderable element to a jinja2 template
 
-    rv = {}
-    for wrapperfile in save_folder.glob('*.mwr'):
-        name = wrapperfile.name[:-4]
-        peek = open(wrapperfile, encoding='utf-8').read()
-        peek = " ".join(peek.split())[:100]
-        rv[name] = peek
-    return rv
+    1 letter:
+    '%'    -> {{ a|output }}
+
+    any other case:
+
+    %b%  -> {{ b|output }}
+
+    >>> render2jinja("%")
+    'a|fmt("%")|output'
+    >>> render2jinja("%.gz")
+    'a|fmt("%.gz")|output'
+    >>> render2jinja("%b%")
+    'b|fmt("%")|output'
+    >>> render2jinja("%q.%")
+    'q|basename|fmt("%")|output'
+
+    """
+    text = text.strip()
+
+    if '"' in text:
+        text = text.replace('"', r'\"')
+
+    if text.count('%') == 1:
+        return 'a|fmt("'+text+'")|output'
+
+    match = re.match(r'%([a-z]?)([\./]?)%', text)
+
+    if match is None:
+        raise Exception("Invalid template?")
+
+    upto = text[:match.start()]
+    after = text[match.end():]
+
+    pname, pmod = match.groups()
+    if pname == '':
+        pname = 'a'
+
+    pfilt = ''
+    if pmod == '.':
+        pfilt = '|basename'
+    elif pmod == '/':
+        pfilt = '|resolve'
+    return f'{pname}{pfilt}|fmt("{upto}%{after}")|output'
+
+# def find_saved_wrappers() -> Dict[str, str]:
+#     """Find a list of all wrappers saved and return first 100 characters for
+#     display.
+
+#     Returns:
+#         Dict[str, str]: Dictionary of name: first parts of the wrappers
+#     """
+#     save_folder = Path(WRAPPER_SAVE_PATH).expanduser()
+#     if not save_folder.exists():
+#         return {}
+
+#     rv = {}
+#     for wrapperfile in save_folder.glob('*.mwr'):
+#         name = wrapperfile.name[:-4]
+#         peek = open(wrapperfile, encoding='utf-8').read()
+#         peek = " ".join(peek.split())[:100]
+#         rv[name] = peek
+#     return rv
 
 
 def load_macro(macro_name: str) -> str:
@@ -114,22 +192,11 @@ def delete_macro(macro_name: str) -> bool:
         return False
 
 
-def load_wrapper(wrapper_name: str) -> str:
-    filename = Path(WRAPPER_SAVE_PATH).expanduser()
-    filename /= f"{wrapper_name}.mwr"
-
-    if not filename.exists():
-        raise FileExistsError(filename)
-
-    with open(filename) as F:
-        return F.read()
-
-
 class Macro:
     def __init__(self,
                  raw: Optional[str] = None,
                  name: Optional[str] = None,
-                 wrapper: Optional[str] = None,
+                 # wrapper: Optional[str] = None,
                  max_no_jobs: int = -1,
                  dry_run: bool = False,
                  force: bool = False,
@@ -144,8 +211,6 @@ class Macro:
                 None.
             name (Optional[str], optional): Load name of the macro.
                 Defaults to None.
-            wrapper (Optional[str], optional): Wrapper script name.
-                Defaults to None.
             max_no_jobs (Int, optional): Do not run more jobs than this.
                 Defaults to -1.
             dry_run (bool, optional): Only print what is to be executed.
@@ -154,15 +219,12 @@ class Macro:
                 actual run. Defaults to AsyncioExecutor.
         """
 
-        self.macro_elements: Dict[str, mme.MacroElementBase] = {}
-
         self.executor = executor
-        self.wrapper = wrapper
         self.max_no_jobs = max_no_jobs
-        self.segments: List[mme.MacroElementBase] = []
         self.LogScript: Optional[TextIOWrapper] = None
         self.dry_run = dry_run
         self.force = force
+        self.expandables = []
         self.dry_run_extra = dry_run_extra
 
         if not name and not raw:
@@ -188,10 +250,6 @@ class Macro:
 
         call_hook('create_job', job=self)
 
-    def explain(self):
-        for seg in self.segments:
-            print(seg)
-
     def get_save_file(self, save_name):
         save_folder = Path(MACRO_SAVE_PATH).expanduser()
         if not save_folder.exists():
@@ -213,200 +271,71 @@ class Macro:
         with open(macro_file, 'rt') as F:
             self.raw = F.read()
 
-    def add_segment(self,
-                    element_class: Type[mme.MacroElementBase],
-                    fragment: str,
-                    name: Optional[str],
-                    expandable: bool = False,
-                    ):
-        """
-        Add a segment to this macro.
-
-        Args:
-            name (Optional(str)): Name of the element - only relevant for
-                macro_elements
-            expandable (bool): Evaluate just before execution?
-            ElementClass (Subclass of MacroElementBase): Type of element
-            fragment (str): macro element contents
-        """
-        lg.debug(f'segment add {element_class} {fragment}')
-
-        # Automatically merge multiple text elements.
-        # do this when
-        #    - there is already one other element,
-        #    - this element is a text element, and
-        #    - the previous element is a text element
-        if len(self.segments) > 0 \
-                and element_class == mme.MacroElementText \
-                and type(self.segments[-1]) is mme.MacroElementText:
-            self.segments[-1].fragment += fragment
-        else:
-            # otherwise, simply append the element
-            self.segments.append(
-                element_class(macro=self,
-                              fragment=fragment,
-                              expandable=expandable,
-                              name=name))
-
-            if element_class != mme.MacroElementText:
-                # everything that is not a piece of text
-                # can be expanded (technically) - so we
-                # store it in macro_elements.
-                assert name is not None
-                self.macro_elements[name] = self.segments[-1]
 
     def process_raw(self):
         """
-        Process the raw macro string into elements
+        Process the raw macro string
 
-        Macro language defines a number of element types - indicated by
-        the first character in the definition. Note this character can be
-        optional
-
-        macro_elements:
-
-             : glob - if unspecified when a * is in the
-            f: read in from a file (space separated)
-            r : range
-
-        File tracking:
-            < : input file - MacroElementGlob
-            > : output file - (MacroElementOutputFile)
-
-
-        For certain output macro elements the element might need to refer to
-        an input element - so - it's possible to name these.
-
-        Input elements are automatically numbered in order of appearance:
-
-            ls {*.txt} {*.py}
-
-        Will have:
-
-            1 : {*.txt}
-            2 : {*.py}
-
-        Output elements can refer to specific element.
-
+        Find expandable & renderable items
         Raises:
             click.UsageError: Invalid macro
         """
 
-        lg.debug("Parsing raw macro")
-        # find patterns:
-        up_until = 0
-        raw = self.raw
-        macro_element_number = 0
-        output_number = 0
-        # element_name = None
+        lg.info("Parsing raw macro")
+        # Find expandable elements (not Jinja)
+        # find by {}
 
-        if re.match(r'\![0-9a-f]+', raw):
-            # recognize !`{UID}` as a request to get
-            # command back from mus history
-            from mus.db import find_by_uid
-            rec = find_by_uid(raw.lstrip('!'))
-            if rec is None:
-                raise click.UsageError('Not found in history')
-            raw = self.raw = rec.message
+        self.expandables = []
+        macro_parts = []
+        upto = 0
+        for i, match in enumerate(
+                re.finditer(
+                    r'(?<!{){(?![%#])\s*([^{}]*?)\s*}',
+                    self.raw)):
 
-        # parse macro - find expandable parts
-        # all expandable parts are inbetween {}
-        for pat in re.finditer(r'\{.*?\}', raw
-                               ):
-            # store whatever leads up to this match
-            self.add_segment(element_class=mme.MacroElementText,
-                             fragment=raw[up_until:pat.start()],
-                             name=None)
+            # get a variable name
+            assert i < 27
+            varname = chr(i+97)
 
-            # matched fragment excluding {}
-            fragment = raw[pat.start() + 1:pat.end() - 1]
+            # add the previous bit
+            macro_parts.append(self.raw[upto: match.start()])
+            fragment = match.groups()[0]
 
 
-            # few categories:
-            # input file
-            # {*.txt} --> renders to {*.txt&glob&input} & early evaluation
-            # {%*} --> renders to {%*}
-            #   - {%.} --> {>%&basename}
-            #   - {%.} --> {>%&basename}
+            filters = ''
+            if '|' in fragment:
+                fragment, filters = fragment.split('|',1)
+                filters = '|' + filters
 
-            expandable = False
-
-            if '&' in fragment:
-                # TODO: ensure we have expandable elements here!.
-                # if functions are defined - we'll trust the writer
-                # to be correct & complete - just number them
-                macro_element_number += 1
-                name = f"{macro_element_number}"
-                raise NotImplementedError()
-
-            elif '*' in fragment or '?' in fragment:
-                # assume glob of type {*.txt}
-                macro_element_number += 1
-                name = f"{macro_element_number}"
-                fragment += '&glob&input'  # for ssp
-                expandable = True
-
-            elif fragment[0] in ['%', '>']:
-
-                # simple expansion (%) or track as output (>)
-                output_number += 1
-                name = f"{100-output_number}"
-
-                fragmatch = re.match(
-                    r'^([%>])(\d*)([pfbr\.]?)$', fragment)
-                if not fragmatch:
-                    raise click.UsageError(f"Unrecognized template element {fragment}")
-
-                fwhat, fnumber, ffunc = fragmatch.groups()
-                if not fnumber:
-                    fnumber = '1'
-
-                fragment = f'%{fnumber}'
-
-                fragment += {
-                    '': '',
-                    'f': '',
-                    '.': '&basename',
-                    'b': '&basename',
-                    'n': '&filename',
-                    'r': '&resolve',
-                    'p': '&paremt',
-                }[ffunc]
-
-                if fwhat == '>':
-                    fragment += '&output'
-
+            if '%' in fragment:
+                # assume this snippet will be rendered (not expanded)
+                renderable = render2jinja(fragment)
+                macro_parts.append(f"{{{{ {renderable}{filters} }}}}")
             else:
-                raise click.UsageError(f"Unrecognized element: {fragment}")
+                # for now assuming globs - but could be any expandable feature
+                # we'll think about formatting later
+                lg.debug(f"Expandable: {varname} {fragment}")
+                self.expandables.append(Expandable(varname, fragment))
+                macro_parts.append(f"{{{{ {varname}{filters} }}}}")
+            upto = match.end()
 
-
-
-            self.add_segment(element_class=mme.MacroElementSSP,
-                             fragment=fragment,
-                             expandable = expandable,
-                             name=name)
-
-            up_until = pat.end()
-
-        # ensure the last bit of the macro is added!
-        self.add_segment(
-            element_class=mme.MacroElementText,
-            expandable = False,
-            fragment=raw[up_until:],
-            name=None)
+        # add the last bit:
+        macro_parts.append(self.raw[upto:])
+        self.macro = ''.join(macro_parts)
+        print(self.macro)
 
     def expand(self):
 
         ##
         ## Singleton
         ##
-        if len(self.macro_elements) == 0:
-            lg.debug('Executing singleton command')
+        if len(self.expandables) == 0:
+            lg.info('Executing singleton command')
             # if there is nothing to expand -
             job = MacroJob(
-                cl=self.raw,
-                data={},
-                macro=self)
+                macro=self,
+                data={})
+
             job.prepare()
             run_advise, reason = job.get_run_advise()
             if (not self.force) and run_advise is False:
@@ -417,20 +346,13 @@ class Macro:
                 yield job
             return
 
-        all_macro_elements = [x.expand() for x in self.macro_elements.values()]
+        all_macro_elements = [x.expand() for x in
+                              self.expandables]
 
-        jobdata = {}
-        for _ in product(*all_macro_elements):
-            job = MacroJob(macro=self, data=dict(_))
-            _cl = [sg.render(job) for sg in self.segments]
-            print(_cl)
-        exit()
         i = 0
         for _ in product(*all_macro_elements):
-
+            lg.info(f"{_}")
             job = MacroJob(macro=self, data=dict(_))
-            _cl = [sg.render(job) for sg in self.segments]
-            job.cl = "".join(_cl)
             job.prepare()
             run_advise, reason = job.get_run_advise()
             if (not self.force) and run_advise is False:
@@ -465,10 +387,12 @@ class Macro:
         self.LogScript.write(f"# Macro : {self.raw}\n\n")
 
     def close_script_log(self):
+        assert self.LogScript is not None   # TODO - figure out what it is supposed to be
         self.LogScript.close()
         self.LogScript = None
 
     def add_to_script_log(self, job):
+        assert self.LogScript is not None   # TODO - figure out what it is supposed to be
         ts = datetime.fromtimestamp(job.starttime).strftime("%Y-%m-%d %H:%M")
         self.LogScript.write(f"# Start : {ts} - {job.uid}\n")
         if job.inputfile is not None:
@@ -478,20 +402,21 @@ class Macro:
         self.LogScript.write(f"# RC    : {job.returncode}\n\n")
 
     def execute(self, no_threads):
-        if self.dry_run:
-            for job in self.expand():
-                print(job.cl)
-                if self.dry_run_extra:
-                    for d in job.data:
-                        dval = job.data[d]
-                        dren = job.rendered[d]
-                        if isinstance(dval, Atom):
-                            tags = " - tags " + dval.tagstr()
-                        if dval == dren:
-                            print("  +" + d, job.data[d], tags)
-                        else:
-                            print("  +" + d, dval, '->', dren, tags)
-            return
+        # TODO: Reimplenebt Dry run
+        # if self.dry_run:
+        #     for job in self.expand():
+        #         print(job.cl)
+        #         if self.dry_run_extra:
+        #             for d in job.data:
+        #                 dval = job.data[d]
+        #                 dren = job.rendered[d]
+        #                 if isinstance(dval, Atom):
+        #                     tags = " - tags " + dval.tagstr()
+        #                 if dval == dren:
+        #                     print("  +" + d, job.data[d], tags)
+        #                 else:
+        #                     print("  +" + d, dval, '->', dren, tags)
+        #     return
 
         # if not dry run:
         call_hook('start_execution', macro=self)

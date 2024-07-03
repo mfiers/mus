@@ -8,13 +8,14 @@ from typing import Optional
 import click
 from click import echo, style
 
+from mus.macro import Macro
 from mus.util.cli import AliasedGroup  # NOQA: E402
 
 lg = logging.getLogger("mus")
 
 
-@click.group(cls=AliasedGroup)
-def macro():
+@click.group("macro", cls=AliasedGroup)
+def cli_macro():
     """Run a cl macro on multiple input files
 
     To use macro's you need to prepare your shell. See the README.
@@ -25,7 +26,6 @@ def macro():
         -j<INT>  : no parallel processes to use
         -s<NAME> : save macro for later use
         -l<NAME> : load and run macro
-        -w<NAME> : Load and use command wrapper
         -s<INT>  : No jobs to run at most
         -d       : dry-run - show what would be executed
         -D       : as dry-run - but show more information
@@ -35,26 +35,26 @@ def macro():
     """
 
 
-@macro.command("list")
+@cli_macro.command("list")
 def macro_list():
     from mus.macro import find_saved_macros
     for name, val in find_saved_macros().items():
         echo(style(name, fg="green") + ": " + val)
 
 
-@macro.group('wrapper')
-def wrapper():
-    pass
+# @macro.group('wrapper')
+# def wrapper():
+#     pass
 
 
-@wrapper.command("list")
-def wrapper_list():
-    from mus.macro import find_saved_wrappers
-    for name, val in find_saved_wrappers().items():
-        echo(style(name, fg="green") + ": " + val)
+# @wrapper.command("list")
+# def wrapper_list():
+#     from mus.macro import find_saved_wrappers
+#     for name, val in find_saved_wrappers().items():
+#         echo(style(name, fg="green") + ": " + val)
 
 
-@macro.command("edit")
+@cli_macro.command("edit")
 @click.argument('name')
 def macro_edit(name):
     """Drop into EDITOR with the macro of choice"""
@@ -71,26 +71,27 @@ def macro_edit(name):
     call(cl, shell=True)
 
 
-@wrapper.command("edit")
-@click.argument('name')
-def wrapper_edit(name: str):
-    """Drop into an EDITOR with the wrapper of choice"""
+# @wrapper.command("edit")
+# @click.argument('name')
+# def wrapper_edit(name: str):
+#     """Drop into an EDITOR with the wrapper of choice"""
 
-    from subprocess import call
+#     from subprocess import call
 
-    from mus.macro import WRAPPER_SAVE_PATH
+#     from mus.macro import WRAPPER_SAVE_PATH
 
-    if not os.path.exists(WRAPPER_SAVE_PATH):
-        os.makedirs(WRAPPER_SAVE_PATH)
+#     if not os.path.exists(WRAPPER_SAVE_PATH):
+#         os.makedirs(WRAPPER_SAVE_PATH)
 
-    filename = Path(WRAPPER_SAVE_PATH).expanduser() / f"{name}.mwr"
-    editor = os.environ.get('EDITOR', 'vi')
-    cl = f"{editor} {filename}"
-    call(cl, shell=True)
+#     filename = Path(WRAPPER_SAVE_PATH).expanduser() / f"{name}.mwr"
+#     editor = os.environ.get('EDITOR', 'vi')
+#     cl = f"{editor} {filename}"
+#     call(cl, shell=True)
 
 
-@macro.command("stdin-exe", hidden=True)
-def macro_cli_exe() -> None:
+@cli_macro.command("stdin-exe", hidden=False)
+@click.pass_context
+def cli_exe(ctx) -> None:
     """Take a line hijacked from bash/zsh history and execute it as a macro
 
     Raises:
@@ -99,7 +100,7 @@ def macro_cli_exe() -> None:
     import multiprocessing
     import re
 
-    from mus.macro import Macro, load_wrapper
+    # from mus.macro import Macro, load_wrapper
     raw_macro = sys.stdin.read()
     _macro_split = raw_macro.strip().split(None, 2)
     if len(_macro_split) < 3:
@@ -118,11 +119,10 @@ def macro_cli_exe() -> None:
     dry_run = False
     dry_run_extra = False
     max_no_jobs = -1
-    explain_macro = False
-    wrapper_name = None
+    # wrapper_name = None
 
     rex = (
-        r'^-(?P<flagbool>[vdDfM]+)'
+        r'^-(?P<flagbool>[vhdDfM]+)'
         r'|-(?P<flagint>[nj])\s*(?P<intval>[0-9]+)'
         r'|-(?P<flagstr>[lsw])\s*(?P<strval>[A-Za-z0-9]+)'
     )
@@ -143,15 +143,16 @@ def macro_cli_exe() -> None:
                     elif flag == 'd':
                         lg.debug("Changing to dry run mode")
                         dry_run = True
+                    elif flag == 'h':
+                        lg.debug("Help")
+                        print(ctx.get_help())
+                        return
                     elif flag == 'f':
                         lg.debug("Force run - ignore advise")
                         force = True
                     elif flag == 'D':
                         lg.debug("Setting very dry run mode")
                         dry_run = dry_run_extra = True
-                    elif flag == 'M':
-                        lg.debug("Explain macro mode")
-                        explain_macro = True
             elif pgroups['flagint'] is not None:
                 flag = pgroups['flagint']
                 value = int(pgroups['intval'])
@@ -183,15 +184,10 @@ def macro_cli_exe() -> None:
                    " - unsure what to do")
         return
 
-    wrapper = None
-    if wrapper_name:
-        wrapper = load_wrapper(wrapper_name)
-
     macro_args = dict(dry_run=dry_run,
                       force=force,
                       dry_run_extra=dry_run_extra,
-                      max_no_jobs=max_no_jobs,
-                      wrapper=wrapper)
+                      max_no_jobs=max_no_jobs)
 
     if raw_macro:
         macro = Macro(raw=raw_macro, **macro_args)
@@ -202,10 +198,6 @@ def macro_cli_exe() -> None:
 
     if save_name is not None:
         macro.save(save_name)
-
-    if explain_macro:
-        macro.explain()
-        return
 
     lg.info(f"Executing macro: {macro.raw}")
     lg.info(f"No threads: {no_threads}")

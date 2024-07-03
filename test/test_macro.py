@@ -49,29 +49,6 @@ def test_run_macro_more_complex():
     assert output == '1 2 3 4 5'
     assert result.exit_code == 0
 
-
-def test_run_macro_elements():
-    "Test macro with elements"
-
-    test_folder = Path(tempfile.mkdtemp())
-    macro = 'ls {test/data/test*.txt} ; echo {%s} > ' + \
-            str(test_folder) + \
-            '/{%s}.out'
-    result = run_macro(macro)
-    assert result.exit_code == 0
-
-    outfiles = list(test_folder.glob('*'))
-    print(outfiles)
-    outnames = [x.name for x in outfiles]
-    contents = [open(x).read().strip() for x in outfiles]
-
-    assert 'test01.out' in outnames
-    assert 'test02.out' in outnames
-    assert 'test01' in contents
-    assert 'test02' in contents
-    assert len(outfiles) == len(contents) == 2
-
-
 def test_save_macro():
     "Can mus save a macro and return it's contents?"
 
@@ -97,30 +74,3 @@ def test_run_saved_macro():
     assert result.output.strip() == unique_string
     delete_macro(TEST_MACRO_NAME)
 
-
-def test_run_multiglob():
-    "Can mus run a pre-saved macro?"
-
-    result = run_macro('ls {test/data/test*.txt}')
-    assert len(result.output.split()) == 2
-    assert result.exit_code == 0
-
-    result = run_macro(
-        'ls {test/data/other*.txt}')
-    assert len(result.output.split()) == 2
-    assert result.exit_code == 0
-
-    result = run_macro(
-        'ls {test/data/other*.txt&glob|test/data/test*.txt&glob}')
-    assert len(result.output.split()) == 4
-    assert result.exit_code == 0
-
-    result = run_macro(
-        'ls {test/data/other*.txt&glob|test/data/test?.txt&glob}')
-    assert len(result.output.split()) == 2
-    assert result.exit_code == 0
-
-    result = run_macro(
-        'ls {test/data/other*.txt&glob|test/data/test??.txt&glob}')
-    assert len(result.output.split()) == 4
-    assert result.exit_code == 0
