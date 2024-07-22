@@ -60,7 +60,6 @@ cli.add_command(dbcli.db)
 def print_version():
     from importlib.metadata import version
     print(version('mus'))
-    pts('info', version('mus'))
 
 
 @cli.command("log")
@@ -78,7 +77,6 @@ def log(message):
 @cli.group()
 def conf():
     pass
-
 
 @conf.command("set", context_settings=dict(ignore_unknown_options=True))
 @click.argument("key")
