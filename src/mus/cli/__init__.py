@@ -55,7 +55,6 @@ cli.add_command(files.file_)
 cli.add_command(macro.cli_macro)
 cli.add_command(dbcli.db)
 
-
 @cli.command("version")
 def print_version():
     from importlib.metadata import version

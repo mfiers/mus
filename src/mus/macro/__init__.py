@@ -322,7 +322,6 @@ class Macro:
         # add the last bit:
         macro_parts.append(self.raw[upto:])
         self.macro = ''.join(macro_parts)
-        print(self.macro)
 
     def expand(self):
 
