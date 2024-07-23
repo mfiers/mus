@@ -44,7 +44,7 @@ jenv.filters['input'] = input
 
 @pass_context
 def output(context, x):
-    context['job'].tag_file(x, 'input')
+    context['job'].tag_file(x, 'output')
     return x
 jenv.filters['output'] = output
 
