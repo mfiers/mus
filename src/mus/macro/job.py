@@ -1,5 +1,6 @@
 
 import logging
+import re
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
@@ -18,35 +19,120 @@ lg = logging.getLogger("mus")
 
 jenv = Environment()
 
-def basename(x):
+
+@pass_context
+def basename(context, x):
     rv = Path(x).name
     if '.' in rv:
         rv = rv.rsplit('.')[0]
     return rv
-jenv.filters['basename'] = basename
+
+def glob2regex(a):
+    """
+    Convert glob to a regex
+
+    >>> glob2regex('*.txt') == r'^(.*?)\\.txt$'
+    True
+    >>> glob2regex('*xxx?yyy.txt') == r'^(.*?)xxx(.)yyy\\.txt$'
+    True
+
+    Args:
+        a (str): glob type str
+    """
+    star = '&&&&STAR&&&&'
+    qmark = '###QUESTIONMARK###'
+    a = (a
+         .replace('.', '\\.')
+         .replace('*', star)
+         .replace('?', qmark)
+         .replace(star, r'(.*?)')
+         .replace(qmark, r'(.)'))
+    a = f'^{a}$'
+    return a
 
 
-def resolve(x):
+def globmapper(fn, a, b):
+    """
+    Map one filename to a new file, based on two (compatible)
+    glob patterns
+
+    >>> globmapper('abla.txt', 'a*', 'b*') == 'bbla.txt'
+    True
+    >>> globmapper('aablaaa.txt', 'aa*aa.txt', 'bb*bb.what') == 'bbblabb.what'
+    True
+    >>> globmapper('seq.fa', '*.fa', '*.txt') == 'seq.txt'
+    True
+    >>> globmapper('seq.1.fa', '*.?.fa', '*.no?.txt') == 'seq.txt'
+    False
+    >>> globmapper('seq.1.fa', '*.?.fa', '*.no?.txt') == 'seq.no1.txt'
+    True
+
+    """
+
+    def cutup(tocut):
+        rv = []
+        upto = 0
+        for match in re.finditer(r'[\*\?]', tocut):
+            rv.append(('text', tocut[upto:match.start()]))
+            rv.append(('glob', tocut[match.start():match.end()]))
+            upto = match.end()
+        rv.append(('text', tocut[upto:]))
+        return rv
+
+
+    acut = cutup(a)
+    bcut = cutup(b)
+    assert len(acut) == len(bcut)
+    rega = glob2regex(a)
+    groa = re.match(rega, str(fn)).groups()
+
+    gno = 0
+    new = []
+    for (at, ac), (bt, bc) in zip(acut, bcut):
+        assert at == bt
+        if at == 'text':
+            new.append(bc)
+        else:
+            new.append(groa[gno])
+            gno += 1
+    return ''.join(new)
+
+
+@pass_context
+def globmap(context, x, target):
+    return globmapper(x['val'], x['glob'], target)
+
+
+@pass_context
+def resolve(context, x):
     rv = Path(x).resolve()
     return str(rv)
 
-jenv.filters['resolve'] = resolve
 
-def fmt(x, fmt):
+@pass_context
+def fmt(context, x, fmt):
     return fmt.replace('%', x)
-jenv.filters['fmt'] = fmt
+
 
 @pass_context
 def input(context, x):
     context['job'].tag_file(x, 'input')
     return x
-jenv.filters['input'] = input
+
 
 @pass_context
 def output(context, x):
     context['job'].tag_file(x, 'output')
     return x
+
+
 jenv.filters['output'] = output
+jenv.filters['basename'] = basename
+jenv.filters['globmap'] = globmap
+jenv.filters['input'] = input
+jenv.filters['resolve'] = resolve
+jenv.filters['fmt'] = fmt
+
 
 
 class MacroJob:

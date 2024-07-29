@@ -1,38 +1,94 @@
 
 import getpass
-import itertools
 import logging
 import os
 import re
 import socket
-import time
+from copy import copy
 from datetime import datetime
 from io import TextIOWrapper
 from itertools import product
 from pathlib import Path
-from typing import Dict, List, Optional, Type
-from uuid import uuid4
+from types import GeneratorType
+from typing import Any, Dict, Iterable, Optional, Tuple, Type
 
 import click
 
 from mus.db import Record
-from mus.hooks import call_hook, register_hook
+from mus.hooks import call_hook
 from mus.macro.executors import AsyncioExecutor, Executor
 from mus.macro.job import MacroJob
-from mus.util import msec2nice
 
 lg = logging.getLogger(__name__)
 lg.propagate = False  # I do not know why this is required?
 
 DEBUG = True
 MACRO_SAVE_PATH = "~/.local/mus/macro"
-#wrapperWRAPPER_SAVE_PATH = "~/.local/mus/wrappers"
 
-# Example macros
-#
-###  file expansion
-# $ ls {*.txt}
-# $ ls {file?.txt}
+
+def tokenize_macro(raw: str) \
+        -> Iterable[Tuple[Optional[str], Optional[str], str]]:
+    """
+    Split up the raw macro
+
+    >>> isinstance(tokenize_macro('test'), GeneratorType)
+    True
+    >>> def t(a): return list(tokenize_macro(a))
+    >>> t('test')
+    [(None, None, 'test')]
+    >>> t('test :*.txt: test')
+    [(None, None, 'test '), ('<', 'a', '*.txt'), (None, None, ' test')]
+
+    Yields:
+        Iterator[Iterable[Tuple[Optional[str], Optional[str], str]]]:
+            tuple with fragment type, framgment name and fragment string
+    """
+
+    upto = 0
+    random_varname_count = 0
+    used_input_varnames = set()
+    allowed_types = set(['<', '>'])
+    for i, match in enumerate(
+            re.finditer(
+                r':(?P<nametype>\w+[<>]|[<>]|)\s*(?P<fragment>[^:<>\n]+):',
+                raw)):
+
+        # return everyting leading up to the match (treat as raw text)
+        yield None, None, raw[upto: match.start()]
+
+        # process the macro element...
+        mgd = match.groupdict()
+        item_name = None
+        nametype = mgd['nametype']
+        if not nametype:
+            item_type = '<'
+        elif nametype in allowed_types:
+            item_type = nametype
+        else:
+            item_name, item_type = nametype[:-1], nametype[-1]
+
+        assert item_type in allowed_types
+
+        if item_type == '>' and not item_name:
+            # special case - unnamed output assumes to use the
+            # ONLY input - will be matched later
+            item_name = 'ONLY_INPUT'
+
+        elif item_type == '<' and not item_name:
+            random_varname_count += 1
+            assert random_varname_count < 27
+            item_name = chr(random_varname_count+96)  # 1 -> 97 -> a, and so on
+
+        # make sure there are no duplicate input file names
+        if item_type == '<':
+            assert item_name not in used_input_varnames
+            used_input_varnames.add(item_name)
+
+        yield item_type, item_name, mgd['fragment']
+        upto = match.end()
+
+    # yield the last fragment of the raw macro
+    yield None, None, raw[upto:]
 
 
 def find_saved_macros() -> Dict[str, str]:
@@ -60,10 +116,19 @@ class Expandable:
         self.varname = varname
         self.expander = None
 
+    def yielder(self, iterator,
+                **extra):
+        rvall = []
 
-    def yielder(self, iterator):
-        return [(self.varname, x) for x in iterator]
+        rv = {}
+        rv.update(extra)
 
+        for x in iterator:
+            rv2 = copy(rv)
+            rv2['val'] = x
+            rvall.append((self.varname, rv2))
+
+        return rvall
 
     def expand(self):
 
@@ -76,28 +141,15 @@ class Expandable:
         elif '*' in self.text or '?' in self.text:
             # assume glob
             lg.debug(f"glob {self.text}")
-            return self.yielder(Path('.').glob(self.text))
+            return self.yielder(Path('.').glob(self.text),
+                                glob=self.text)
 
 
-def render2jinja(text: str):
+def render2jinja(varname: str, text: str):
     """
     Convert a shortcut renderable element to a jinja2 template
 
-    1 letter:
-    '%'    -> {{ a|output }}
-
     any other case:
-
-    %b%  -> {{ b|output }}
-
-    >>> render2jinja("%")
-    'a|fmt("%")|output'
-    >>> render2jinja("%.gz")
-    'a|fmt("%.gz")|output'
-    >>> render2jinja("%b%")
-    'b|fmt("%")|output'
-    >>> render2jinja("%q.%")
-    'q|basename|fmt("%")|output'
 
     """
     text = text.strip()
@@ -105,27 +157,11 @@ def render2jinja(text: str):
     if '"' in text:
         text = text.replace('"', r'\"')
 
-    if text.count('%') == 1:
-        return 'a|fmt("'+text+'")|output'
+    if '*' or '?' in text:
+        return f"{varname}|globmap('{text}')"
+    else:
+        return varname
 
-    match = re.match(r'%([a-z]?)([\./]?)%', text)
-
-    if match is None:
-        raise Exception("Invalid template?")
-
-    upto = text[:match.start()]
-    after = text[match.end():]
-
-    pname, pmod = match.groups()
-    if pname == '':
-        pname = 'a'
-
-    pfilt = ''
-    if pmod == '.':
-        pfilt = '|basename'
-    elif pmod == '/':
-        pfilt = '|resolve'
-    return f'{pname}{pfilt}|fmt("{upto}%{after}")|output'
 
 # def find_saved_wrappers() -> Dict[str, str]:
 #     """Find a list of all wrappers saved and return first 100 characters for
@@ -271,63 +307,84 @@ class Macro:
         with open(macro_file, 'rt') as F:
             self.raw = F.read()
 
-
     def process_raw(self):
         """
         Process the raw macro string
 
         Find expandable & renderable items
+
         Raises:
             click.UsageError: Invalid macro
         """
 
         lg.info("Parsing raw macro")
         # Find expandable elements (not Jinja)
-        # find by {}
+        # find by :..:
 
         self.expandables = []
         macro_parts = []
-        upto = 0
-        for i, match in enumerate(
-                re.finditer(
-                    r'(?<!{){(?![%#])\s*([^{}]*?)\s*}',
-                    self.raw)):
+        raw_parts = list(tokenize_macro(self.raw))
+        all_input_names = [v for (t, v, f) in raw_parts if t == '<']
+        all_output_names = [v for (t, v, f) in raw_parts if t == '>']
 
-            # get a variable name
-            assert i < 27
-            varname = chr(i+97)
+        # no duplicates!
+        assert len(all_input_names) == len(set(all_input_names))
 
-            # add the previous bit
-            macro_parts.append(self.raw[upto: match.start()])
-            fragment = match.groups()[0]
+        # if the token ONLY_INPUT output name is found
+        # replace with the actual name of the first and only
+        # input var
+        if 'ONLY_INPUT' in all_output_names:
+            assert len(all_input_names) == 1
+            for i in range(len(raw_parts)):
+                if raw_parts[i][1] == 'ONLY_INPUT':
+                    raw_parts[i] = (raw_parts[i][0],
+                                    all_input_names[0],
+                                    raw_parts[i][2])
 
+        for item_type, varname, fragment in raw_parts:
+
+            if item_type is None:
+                # just a raw text bit
+                macro_parts.append(fragment)
+                continue
 
             filters = ''
             if '|' in fragment:
-                fragment, filters = fragment.split('|',1)
+                fragment, filters = fragment.split('|', 1)
                 filters = '|' + filters
 
-            if '%' in fragment:
-                # assume this snippet will be rendered (not expanded)
-                renderable = render2jinja(fragment)
-                macro_parts.append(f"{{{{ {renderable}{filters} }}}}")
-            else:
-                # for now assuming globs - but could be any expandable feature
-                # we'll think about formatting later
-                lg.debug(f"Expandable: {varname} {fragment}")
-                self.expandables.append(Expandable(varname, fragment))
-                macro_parts.append(f"{{{{ {varname}{filters} }}}}")
-            upto = match.end()
+            # more to be defined later
+            assert item_type in ['<', '>']
 
-        # add the last bit:
-        macro_parts.append(self.raw[upto:])
+            if item_type == '>':
+                # assume this snippet will be rendered (not expanded)
+                renderable = render2jinja(varname, fragment)
+                if '|output' not in filters:
+                    filters = '|output' + filters
+                macro_parts.append(f"{{{{ {renderable}{filters} }}}}")
+
+            elif item_type == '<':
+                # process expandable features
+                # should be defined in tokenize_macro
+                assert varname is not None
+                if '|input' not in filters:
+                    filters = '|input' + filters
+
+                lg.debug(f"Expandable: {varname} {fragment}")
+
+                self.expandables.append(Expandable(varname, fragment))
+                macro_parts.append(f"{{{{ {varname}['val']{filters} }}}}")
+
+
+        self.macro_parts = macro_parts
         self.macro = ''.join(macro_parts)
+        lg.debug("rendered macro: " + self.macro)
 
     def expand(self):
 
-        ##
-        ## Singleton
-        ##
+        #
+        # Singleton
+        #
         if len(self.expandables) == 0:
             lg.info('Executing singleton command')
             # if there is nothing to expand -
@@ -350,7 +407,8 @@ class Macro:
 
         i = 0
         for _ in product(*all_macro_elements):
-            lg.info(f"{_}")
+
+            lg.info(f"{dict(_)}")
             job = MacroJob(macro=self, data=dict(_))
             job.prepare()
             run_advise, reason = job.get_run_advise()
@@ -386,12 +444,12 @@ class Macro:
         self.LogScript.write(f"# Macro : {self.raw}\n\n")
 
     def close_script_log(self):
-        assert self.LogScript is not None   # TODO - figure out what it is supposed to be
+        assert self.LogScript is not None   # TODO - what is this?
         self.LogScript.close()
         self.LogScript = None
 
     def add_to_script_log(self, job):
-        assert self.LogScript is not None   # TODO - figure out what it is supposed to be
+        assert self.LogScript is not None   # TODO - What is this?
         ts = datetime.fromtimestamp(job.starttime).strftime("%Y-%m-%d %H:%M")
         self.LogScript.write(f"# Start : {ts} - {job.uid}\n")
         if job.inputfile is not None:
