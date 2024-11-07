@@ -9,6 +9,7 @@ from mus.exceptions import InvalidConfigFileEntry
 
 LIST_KEYS = ['tag']
 
+
 def list_add(lst, val):
     # Check if the value begins with a '-', indicating a removal operation.
     if val.startswith('-'):
@@ -24,6 +25,7 @@ def list_add(lst, val):
 
     # Add the original value to the list.
     lst.append(val)
+
 
 def load_env(fn):
     """
@@ -49,10 +51,14 @@ def load_env(fn):
             if not line:
                 # do not process empty lines!
                 continue
-            if not '=' in line:
+            if '=' not in line:
                 raise InvalidConfigFileEntry(line)
             key, value = line.split('=', 1)
-            rv[key.strip()] = value.strip()
+            if key in LIST_KEYS:
+                rv[key.strip()] = value.strip().split()
+            else:
+                rv[key.strip()] = value.strip()
+
     return rv
 
 
@@ -83,31 +89,51 @@ def get_config(wd: None | str | Path = None) -> dict:
                 config[key] = val
             else:
                 curval = config.get(key, [])
-                lval = val.split()
+                assert isinstance(val, list)
                 assert isinstance(curval, list)
-                for one_val in lval:
+                for one_val in val:
                     list_add(curval, one_val)
                 config[key] = curval
-
     return config
 
 
-def get_local_config() -> dict:
-    if os.path.exists('mus.config'):
-        with open('mus.config') as F:
-            rv = json.load(F)
-            return rv
+def get_local_config(wd: None | str | Path = None) -> dict:
+    if wd is None:
+        wd = Path().resolve()
+    else:
+        wd = Path(wd).resolve()
+
+    if os.path.exists(wd / '.env'):
+        return load_env(wd / '.env')
     else:
         return {}
 
 
-def save_local_config(conf: dict):
-    with open('mus.config', 'w') as F:
-        json.dump(conf, F)
+def save_env(conf: Dict,
+             wd: None | str | Path = None):
+    if wd is None:
+        wd = Path().resolve()
+    else:
+        wd = Path(wd).resolve()
+
+    with open('.env', 'wt') as F:
+        for k, v in sorted(conf.items()):
+            if isinstance(v, list):
+                v = ' '.join(v)
+            F.write(f'{k}={v}\n')
 
 
-def save_kv_to_local_config(key, val):
-    conf = get_local_config()
+def save_kv_to_local_config(
+    key: str,
+    val: Any,
+    wd: None | str | Path = None):
+
+    if wd is None:
+        wd = Path().resolve()
+    else:
+        wd = Path(wd).resolve()
+
+    conf = get_local_config(wd)
 
     if key in LIST_KEYS:
 
@@ -115,8 +141,7 @@ def save_kv_to_local_config(key, val):
         assert isinstance(curval, list)
         list_add(curval, val)
         conf[key] = curval
-
     else:
         conf[key] = val
 
-    save_local_config(conf)
+    save_env(conf, wd)
