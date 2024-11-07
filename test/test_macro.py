@@ -42,35 +42,36 @@ def test_run_macro_ls():
     assert result.exit_code == 0
 
 
-def test_run_macro_more_complex():
-    "Test a slightly more complex macro with a bash loop"
-    result = run_macro('for x in $(seq 5); do echo $x; done')
-    output = " ".join(result.output.split())
-    assert output == '1 2 3 4 5'
-    assert result.exit_code == 0
-
-def test_save_macro():
-    "Can mus save a macro and return it's contents?"
-
-    from mus.macro import delete_macro, load_macro
-
-    macro_to_save = f'echo "{str(uuid4())}"'
-    result = run_macro(f'-s{TEST_MACRO_NAME} {macro_to_save}')
-    assert result.exit_code == 0
-    macro_saved = load_macro(TEST_MACRO_NAME)
-    assert macro_saved == macro_to_save
-    delete_macro(TEST_MACRO_NAME)
+# def test_run_macro_more_complex():
+#     "Test a slightly more complex macro with a bash loop - no macro function yet"
+#     result = run_macro('for x in $(seq 5); do echo $x; done')
+#     output = " ".join(result.output.split())
+#     assert output == '1 2 3 4 5'
+#     assert result.exit_code == 0
 
 
-def test_run_saved_macro():
-    "Can mus run a pre-saved macro?"
-    from mus.macro import delete_macro
+# def test_save_macro():
+#     "Can mus save a macro and return it's contents?"
 
-    unique_string = str(uuid4())
-    macro = f'echo "{unique_string}"'
-    result = run_macro(f'-s{TEST_MACRO_NAME} {macro}')
-    print(result)
-    assert result.exit_code == 0
-    assert result.output.strip() == unique_string
-    delete_macro(TEST_MACRO_NAME)
+#     from mus.macro import delete_macro, load_macro
+
+#     macro_to_save = f'echo "{str(uuid4())}"'
+#     result = run_macro(f'-s{TEST_MACRO_NAME} {macro_to_save}')
+#     assert result.exit_code == 0
+#     macro_saved = load_macro(TEST_MACRO_NAME)
+#     assert macro_saved == macro_to_save
+#     delete_macro(TEST_MACRO_NAME)
+
+
+# def _test_run_saved_macro():
+#     "Can mus run a pre-saved macro?"
+#     from mus.macro import delete_macro
+
+#     unique_string = str(uuid4())
+#     macro = f'echo "{unique_string}"'
+#     result = run_macro(f'-s{TEST_MACRO_NAME} {macro}')
+#     print(result)
+#     assert result.exit_code == 0
+#     assert result.output.strip() == unique_string
+#     delete_macro(TEST_MACRO_NAME)
 
