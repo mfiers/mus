@@ -6,6 +6,7 @@ import click
 import colorama
 from click import echo, style
 
+import mus
 from mus import hooks
 
 # plugins
@@ -57,9 +58,7 @@ cli.add_command(dbcli.db)
 
 @cli.command("version")
 def print_version():
-    from importlib.metadata import version
-    print(version('mus'))
-
+    print(mus.__version__)
 
 @cli.command("log")
 @click.argument("message", nargs=-1)
