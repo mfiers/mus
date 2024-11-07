@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import logging
+from typing import List
 
 import click
 import colorama
@@ -61,8 +62,13 @@ def print_version():
 
 @cli.command("log")
 @click.argument("message", nargs=-1)
-def log(message):
+def log(message: List[str]):
     """Store a log message"""
+    smessage = " ".join(message).strip()
+    if smessage == "":
+        echo('No message specified')
+        return
+
     rec = Record()
     rec.prepare()
     rec.message = " ".join(message)
