@@ -1,0 +1,3 @@
+
+class InvalidConfigFileEntry(Exception):
+    pass
