@@ -17,6 +17,9 @@ dependencies = [
     "click",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest"]
+
 [project.scripts]
 mus = "mus.cli:cli"
 mus-hist = "mus.cli.hist:cli"
