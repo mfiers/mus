@@ -7,7 +7,7 @@ supposed to be executed as prompt_command. Maybe rewrite in nim or so?
 import re
 import sys
 
-from mus.config import get_config
+from mus.config import get_env
 from mus.db import Record
 
 IGNORE_PATTERNS = [
@@ -33,7 +33,7 @@ def cli():
         """Do not store empty commandlines"""
         exit()
 
-    config = get_config()
+    config = get_env()
     if config.get('store-history') == 'no':
         # do not store history
         exit(0)

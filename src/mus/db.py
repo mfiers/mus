@@ -244,7 +244,7 @@ class Record():
 
         from uuid import uuid4
 
-        from mus.config import get_config
+        from mus.config import get_env
         from mus.util.files import get_checksum
 
         if filename is None:
@@ -279,7 +279,7 @@ class Record():
             import getpass
             self.user = getpass.getuser()
 
-        config = get_config()
+        config = get_env()
         tags = config.get('tag', [])
         self.tags |= set(tags)
         if extra_tags:

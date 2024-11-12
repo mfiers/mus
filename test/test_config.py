@@ -5,12 +5,12 @@ import mus.config
 
 
 def test_load_env():
-    c = mus.config.load_env('test/data/.env')
+    c = mus.config.load_single_env('test/data/.env')
     assert c['test'] == '1'
     assert c['test2'] == 'something'
     assert 'tag1' in c['tag']
     assert 'tag2' in c['tag']
-    c = mus.config.load_env('test/data/subfolder/.env')
+    c = mus.config.load_single_env('test/data/subfolder/.env')
     assert c['test2'] == 'else'
     assert c['test3'] == 'parrot'
     assert 'test' not in c
@@ -20,14 +20,14 @@ def test_load_env():
 
 
 def test_get_recursive_config():
-    c = mus.config.get_config('test/data')
+    c = mus.config.get_env('test/data')
     assert c['test'] == '1'
     assert c['test2'] == 'something'
     assert 'tag1' in c['tag']
     assert 'tag2' in c['tag']
     assert 'tag3' not in c['tag']
 
-    c = mus.config.get_config('test/data/subfolder')
+    c = mus.config.get_env('test/data/subfolder')
     assert c['test'] == '1'
     assert c['test2'] == 'else'
     assert c['test3'] == 'parrot'

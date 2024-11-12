@@ -3,11 +3,7 @@ import json
 
 import click
 
-from mus.config import (  # NOQA: E402
-    get_config,
-    get_local_config,
-    save_kv_to_local_config,
-)
+from mus.config import get_env, get_local_config, save_kv_to_local_config  # NOQA: E402
 
 
 # CONFIGURATION
@@ -33,7 +29,7 @@ def conf_show(json_output, local):
     if local:
         conf = get_local_config()
     else:
-        conf = get_config()
+        conf = get_env()
     if json_output:
         print(json.dumps(conf, indent=2))
     else:
