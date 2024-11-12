@@ -129,10 +129,23 @@ def save_env(conf: Dict,
 
 
 def save_kv_to_local_config(
-    key: str,
-    val: Any,
-    wd: None | str | Path = None):
+        key: str,
+        val: Any,
+        wd: None | str | Path = None) -> None:
+    """ Save a key-value pair to the local config file.
 
+    This function updates the local configuration file with a new
+    key-value pair. If the key is in the LIST_KEYS, the value is
+    treated as a list and appended to the existing list. Otherwise,
+    the value is treated as a single value.
+
+    Args:
+        key (str): The key to be added or updated in the configuration.
+        val (Any): The value to be associated with the key.
+        wd (None | str | Path, optional): The working directory where the
+            configuration file is located. If None, the current working
+            directory is used. Defaults to None.
+    """
     if wd is None:
         wd = Path().resolve()
     else:
@@ -141,7 +154,6 @@ def save_kv_to_local_config(
     conf = get_local_config(wd)
 
     if key in LIST_KEYS:
-
         curval = conf.get(key, [])
         assert isinstance(curval, list)
         list_add(curval, val)
