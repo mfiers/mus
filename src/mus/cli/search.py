@@ -44,7 +44,7 @@ def cmd_search(filter_str, uid, tree, host, user, age, project, no, full,
 
         sql = f"""
         SELECT uid, host, cwd, user, time, type,
-            message, status, project, tag, data,
+            message, status, data,
             child_of, checksum, filename, cl
         FROM muslog
         WHERE uid LIKE "{uid}%"
@@ -75,7 +75,7 @@ def cmd_search(filter_str, uid, tree, host, user, age, project, no, full,
     else:
         sql = """
             SELECT uid, host, cwd, user, time, type,
-                message, status, project, tag, data,
+                message, status, data,
                 cl, child_of
             FROM muslog
             """

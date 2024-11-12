@@ -7,6 +7,7 @@ import requests
 
 from mus.config import get_env
 from mus.exceptions import ElnApiKeyNotDefined, ElnURLNotDefined
+from mus.hooks import register_hook
 
 
 def fix_eln_experiment_id(xid):
@@ -144,3 +145,13 @@ def expinfo(expid) -> Dict[str, Any]:
         ]
     )
 
+def add_eln_data_to_record(record):
+    env = get_env()
+    for k, v in env.items():
+        if not k.startswith('eln_'):
+            continue
+        if k in ['eln_apikey', 'eln_url']:
+            continue
+        record.data[k] = v
+
+register_hook('prepare_record', add_eln_data_to_record)

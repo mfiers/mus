@@ -7,6 +7,7 @@ from pathlib import Path
 from textwrap import wrap
 from typing import MutableSet, Optional, Union
 
+from mus.hooks import call_hook
 from mus.util import get_host, msec2nice
 
 
@@ -42,13 +43,11 @@ def init_muslog_table(conn: sqlite3.Connection):
             host TEXT,
             cwd TEXT,
             user TEXT,
-            cl TEXT,3
+            cl TEXT,
             time INTEGER,
             type TEXT,
             message TEXT,
             status INTEGER,
-            project TEXT,
-            tag TEXT,
             uid TEXT,
             filename TEXT,
             checksum TEXT,
@@ -108,12 +107,10 @@ class Record():
     host: str
     cwd: str
     user: str
-    projects: MutableSet[str]
     status: int
     time: float
     uid: str
     data: dict
-    tags: MutableSet[str]
     cl: Optional[str] = None
     filename: Optional[str] = None
     checksum: Optional[str] = None
@@ -121,19 +118,14 @@ class Record():
 
     def __init__(self):
         self.data = {}
-        self.tags = set()
-        self.projects = set()
         self.status = 0
 
     def __str__(self):
         if hasattr(self, 'host'):
-            proj = getattr(self, "projects", "?")
             message = getattr(self, "message", "-")
-            tags = getattr(self, "tags", '-')
             return (
                 f"{self.type[:3]:3} {self.host} {self.user} {int(self.time)} "
                 f"{self.cwd} "
-                f"{proj} {tags} - "
                 f"{message}"
             )
         elif hasattr(self, 'hash'):
@@ -233,7 +225,6 @@ class Record():
                 message: Optional[str] = None,
                 cl: Optional[str] = None,
                 child_of: Optional[str] = None,
-                extra_tags: Optional[Union[list, set]] = None,
                 ):
         """Prepare record with default values
 
@@ -279,29 +270,13 @@ class Record():
             import getpass
             self.user = getpass.getuser()
 
-        config = get_env()
-        tags = config.get('tag', [])
-        self.tags |= set(tags)
-        if extra_tags:
-            self.tags |= set(extra_tags)
-
-        self.projects |= set(config.get('project', []))
-
-    def add_tag(self, tag):
-        self.tags.add(tag)
+        call_hook('prepare_record', record=self)
 
     def add_message(self, message):
         if self.message is None:
             self.message = message
         else:
             self.message = self.message.rstrip("\n") + "\n" + message
-
-
-    def tagstr(self):
-        return "|".join(list(sorted(self.tags)))
-
-    def projectstr(self):
-        return "|".join(list(sorted(self.projects)))
 
     def save(self):
         import json
@@ -314,8 +289,6 @@ class Record():
                  self.type,
                  self.message,
                  self.status,
-                 self.tagstr(),
-                 self.projectstr(),
                  self.uid,
                  self.filename,
                  self.checksum,
@@ -326,13 +299,13 @@ class Record():
             rdata.append(json.dumps(self.data))
             sql = """INSERT INTO muslog(
                     host, cwd, user, time, type, message, status,
-                    tag, project, uid, filename, checksum, child_of, cl, data)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) """
+                    uid, filename, checksum, child_of, cl, data)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) """
         else:
             sql = """INSERT INTO muslog(
                     host, cwd, user, time, type, message, status,
-                    tag, project, uid, filename, checksum, child_of, cl)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) """
+                    uid, filename, checksum, child_of, cl)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?) """
 
         db.execute(sql, tuple(rdata))
         db.commit()
