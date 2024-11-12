@@ -27,7 +27,8 @@ def list_add(lst, val):
     lst.append(val)
 
 
-def load_env(fn):
+@lru_cache(32)
+def load_single_env(fn):
     """
     Reads an environment configuration file and returns its contents as a dictionary.
 
@@ -62,8 +63,8 @@ def load_env(fn):
     return rv
 
 
-@lru_cache(1)
-def get_config(wd: None | str | Path = None) -> dict:
+@lru_cache(32)
+def get_env(wd: None | str | Path = None) -> dict:
     """Get recursive config"""
 
     config: Dict[str, Any] = {}
