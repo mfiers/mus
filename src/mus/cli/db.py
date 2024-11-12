@@ -1,4 +1,5 @@
 
+import os
 import shutil
 import time
 from dataclasses import asdict, fields
@@ -54,6 +55,9 @@ def db_head():
             nidx.append(key)
             if key in ['uid', 'child_of']:
                 ncol.append(str(recd[key]).split('-')[0])
+            elif key == 'cwd':
+                ncol.append(str(recd[key]).replace(
+                    os.path.expanduser("~"), "~"))
             elif key == 'time':
                 dtime = time.time() - recd[key]
                 ncol.append(msec2nice(dtime * 1000))
