@@ -139,3 +139,4 @@ mus.config.gz
 .vscode
 .DS_Store
 #setup.cfg#
+env_backup
