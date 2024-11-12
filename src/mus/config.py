@@ -1,5 +1,4 @@
 
-import json
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -88,7 +87,7 @@ def get_env(wd: None | str | Path = None) -> dict:
 
     config_files.reverse()
     for loco in config_files:
-        conf_ = load_env(loco)
+        conf_ = load_single_env(loco)
         for key, val in conf_.items():
             if key not in LIST_KEYS:
                 config[key] = val
@@ -109,7 +108,7 @@ def get_local_config(wd: None | str | Path = None) -> dict:
         wd = Path(wd).resolve()
 
     if os.path.exists(wd / '.env'):
-        return load_env(wd / '.env')
+        return load_single_env(wd / '.env')
     else:
         return {}
 
