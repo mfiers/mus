@@ -42,6 +42,7 @@ def cli(verbose):
 
 
 from mus.cli import config  # NOQA: E402
+from mus.cli import eln  # NOQA: E402
 from mus.cli import files  # NOQA: E402
 from mus.cli import macro  # NOQA: E402
 from mus.cli import search  # NOQA: E402
@@ -53,6 +54,7 @@ cli.add_command(files.file_)
 cli.add_command(macro.cli_macro)
 cli.add_command(dbcli.db)
 cli.add_command(config.cmd_config)
+cli.add_command(eln.cmd_eln)
 
 
 @cli.command("version")
