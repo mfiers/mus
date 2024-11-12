@@ -36,11 +36,28 @@ from mus.db import get_db_connection, get_db_path  # NOQA: E402
 @click.group(cls=AliasedGroup)
 @click.pass_context
 @click.option('-v', '--verbose', count=True)
-def cli(verbose):
+@click.option('--profile', help=None, is_flag=True)
+def cli(ctx, verbose, profile):
     if verbose == 1:
         lg.setLevel(logging.INFO)
     elif verbose > 1:
         lg.setLevel(logging.DEBUG)
+
+    profiler_ = None
+
+    if profile:
+        from cProfile import Profile
+        from pstats import Stats
+        profiler_ = Profile()
+        profiler_.enable()
+
+    @ctx.call_on_close
+    def close():
+        if profile:
+            profiler_.disable()
+            stats = Stats(profiler_)
+            stats.sort_stats('cumulative')
+            stats.print_stats(100)
 
 
 from mus.cli import config  # NOQA: E402
