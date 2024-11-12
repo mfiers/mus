@@ -7,7 +7,11 @@ from typing import Any, Dict
 
 from mus.exceptions import InvalidConfigFileEntry
 
-LIST_KEYS = ['tag']
+# Define a list of keys that are expected to be lists in the configuration.
+# These keys will be treated differently when processing the configuration file.
+# If a key is not in this list, its value will be treated as a single value.
+# keys in this list are expected to be comma separated
+LIST_KEYS = ['tag', 'collaborator']
 
 
 def list_add(lst, val):
@@ -56,7 +60,7 @@ def load_single_env(fn):
                 raise InvalidConfigFileEntry(line)
             key, value = line.split('=', 1)
             if key in LIST_KEYS:
-                rv[key.strip()] = value.strip().split()
+                rv[key.strip()] = [x.strip() for x in value.split(',')]
             else:
                 rv[key.strip()] = value.strip()
 
@@ -120,7 +124,7 @@ def save_env(conf: Dict,
     with open('.env', 'wt') as F:
         for k, v in sorted(conf.items()):
             if isinstance(v, list):
-                v = ' '.join(v)
+                v = ', '.join(v)
             F.write(f'{k}={v}\n')
 
 
