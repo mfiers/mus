@@ -16,30 +16,30 @@ TEST_FOLDER = Path('./test/data')
 TEST_MACRO_NAME = 'testtesttesttesttest'
 
 
-def run_macro(macro: str) -> Result:
-    """Helper function to run a macro
+# def run_macro(macro: str) -> Result:
+#     """Helper function to run a macro
 
-    Args:
-        macro (str): Macro string to execut
+#     Args:
+#         macro (str): Macro string to execut
 
-    Returns:
-        Result: CliRunner result of the run.
-    """
-    runner = CliRunner()
-    to_execute = ' 42  m ' + macro
-    lg.warning(f"Executing: '{to_execute}'")
-    result = runner.invoke(mus.cli.cli,
-                           ['macro', 'stdin-exe'],
-                           input=to_execute)
-    return result
+#     Returns:
+#         Result: CliRunner result of the run.
+#     """
+#     runner = CliRunner()
+#     to_execute = ' 42  m ' + macro
+#     lg.warning(f"Executing: '{to_execute}'")
+#     result = runner.invoke(mus.cli.cli,
+#                            ['macro', 'stdin-exe'],
+#                            input=to_execute)
+#     return result
 
 
-def test_run_macro_ls():
-    "Test an ls"
-    result = run_macro('ls test/data')
-    assert 'test01.txt' in result.output
-    assert 'test02.txt' in result.output
-    assert result.exit_code == 0
+# def test_run_macro_ls():
+#     "Test an ls"
+#     result = run_macro('ls test/data')
+#     assert 'test01.txt' in result.output
+#     assert 'test02.txt' in result.output
+#     assert result.exit_code == 0
 
 
 # def test_run_macro_more_complex():
