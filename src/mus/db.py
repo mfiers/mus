@@ -279,6 +279,10 @@ class Record():
             self.message = self.message.rstrip("\n") + "\n" + message
 
     def save(self):
+
+        # to prep save
+        call_hook('save_record', record=self)
+
         import json
         db = get_db_connection()
 

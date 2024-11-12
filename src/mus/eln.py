@@ -21,6 +21,7 @@ def fix_eln_experiment_id(xid):
     else:
         return xid
 
+
 def get_eln_apikey() -> str:
     """
     Retrieve the ELN API key from the environment variables.
@@ -145,13 +146,19 @@ def expinfo(expid) -> Dict[str, Any]:
         ]
     )
 
+
 def add_eln_data_to_record(record):
+    """Hook function to add ELN data from the .env files
+    to any generated record"""
     env = get_env()
     for k, v in env.items():
         if not k.startswith('eln_'):
             continue
         if k in ['eln_apikey', 'eln_url']:
+            # we do not want to store the api key!
             continue
         record.data[k] = v
 
+
+# actually register the hook
 register_hook('prepare_record', add_eln_data_to_record)

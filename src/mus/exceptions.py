@@ -10,3 +10,10 @@ class ElnApiKeyNotDefined(Exception):
 class ElnURLNotDefined(Exception):
     pass
 
+
+class ElnNoExperimentId(Exception):
+    pass
+
+
+class ElnConflictingExperimentId(Exception):
+    pass

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import logging
+from contextlib import contextmanager
 from typing import List
 
 import click
@@ -33,6 +34,7 @@ from mus.db import get_db_connection, get_db_path  # NOQA: E402
 
 
 @click.group(cls=AliasedGroup)
+@click.pass_context
 @click.option('-v', '--verbose', count=True)
 def cli(verbose):
     if verbose == 1:
@@ -47,6 +49,7 @@ from mus.cli import files  # NOQA: E402
 from mus.cli import macro  # NOQA: E402
 from mus.cli import search  # NOQA: E402
 from mus.cli import db as dbcli  # NOQA: E402
+from mus.cli import log as muslog  # NOQA: E402
 
 cli.add_command(search.cmd_search)
 cli.add_command(files.tag)
@@ -55,28 +58,12 @@ cli.add_command(macro.cli_macro)
 cli.add_command(dbcli.db)
 cli.add_command(config.cmd_config)
 cli.add_command(eln.cmd_eln)
+cli.add_command(muslog.log)
 
 
 @cli.command("version")
 def print_version():
     print(mus.__version__)
-
-
-@cli.command("log")
-@click.argument("message", nargs=-1)
-def log(message: List[str]):
-    """Store a log message"""
-    smessage = " ".join(message).strip()
-    if smessage == "":
-        echo('No message specified')
-        return
-
-    rec = Record()
-    rec.prepare()
-    rec.message = " ".join(message)
-    rec.type = 'log'
-    rec.save()
-
 
 
 @cli.command("histon")
@@ -92,5 +79,3 @@ def histoff():
 
 
 
-if __name__ == "__main__":
-    cli()
