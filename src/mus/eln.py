@@ -40,9 +40,12 @@ def get_eln_apikey() -> str:
 
 
 def get_eln_url():
-    if 'ELN_URL' not in os.environ:
-        raise ElnURLNotDefined()
-    return os.environ['ELN_URL']
+    env = get_env()
+    if 'eln_url' in env:
+        return env['eln_url']
+    elif 'eln_url' in os.environ:
+        return os.environ['ELN_URL']
+    raise ElnURLNotDefined()
 
 
 def eln_filesection(experimentid, title: str):
