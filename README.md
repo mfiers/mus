@@ -65,6 +65,8 @@ Or, if the folder was not tagged yet:
 mus tag -e  -x [eln-experiment-id] [filename] with a short title or description
 ```
 
+Note, when uploading files, `*.ipynb` files will automatically be converted to timestamped PDF files, and these will be uploaded to ELN as well.
+
 
 ## History logging
 
