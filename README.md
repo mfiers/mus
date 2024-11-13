@@ -1,10 +1,33 @@
 # mus
-random logging utilities
+Mark's random set of utilities
+
+## Install
+
+Preferred install using `pipx`:
+
+```
+pipx install "git+ssh://git@github.com/mfiers/mus.git"
+```
+
+
+## ELN plugin
+
+Set your ELN Key * base-url:
+
+```
+cd $HOME
+mus config set eln_apikey [replace.with.your.eln.key]
+mus config set eln_url https://vib.elabjournal.com/api/v1/
+chmod go-rwX ~/.env
+```
 
 
 
+## History logging
 
-## Bash:
+(deprecated at the moment)
+
+### Bash:
 
 ```bash
 export MUS_USER='mf'
@@ -31,7 +54,7 @@ function MUS_PROMPT_COMMAND {
 export PROMPT_COMMAND=MUS_PROMPT_COMMAND
 ```
 
-## zsh:
+### zsh:
 
 ```zsh
 function MUS_PROMPT_COMMAND {
