@@ -7,6 +7,7 @@ import click
 from click import echo, style
 
 from mus.db import Record, get_db_connection
+from mus.util.log import get_message
 
 lg = logging.getLogger(__name__)
 
@@ -14,25 +15,25 @@ lg = logging.getLogger(__name__)
 @click.command("tag")
 @click.argument("filename")
 @click.argument("message", nargs=-1)
-def tag(filename, message):
+def filetag(filename, message, **kwargs):
     """Add a tag record to the specified file"""
 
-    message = " ".join(message).strip()
-    if not message:
-        echo("Must provide a message")
+    message_ = get_message(message)
+    if message_ == "":
+        click.echo("Please provide a message")
         return
 
     rec = Record()
     rec.prepare(
         filename=Path(filename),
         rectype='tag')
-    rec.message = message
+    rec.message = message_
     rec.save()
 
 
 @click.command("file")
 @click.argument("filename")
-def file_(filename):
+def findfile(filename):
 
     import mus.util
     from mus.util.files import get_checksum

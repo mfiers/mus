@@ -1,5 +1,10 @@
 
 import logging
+import select
+import sys
+from typing import List
+
+import click
 
 
 class ColorFormatter(logging.Formatter):
@@ -51,3 +56,24 @@ class ColorLogger(logging.Logger):
         console = logging.StreamHandler()
         console.setFormatter(color_formatter)
         self.addHandler(console)
+
+
+def read_nonblocking_stdin() -> str:
+    # check if there's something to read
+    if select.select([sys.stdin], [], [], 0)[0]:
+        # reads everything from stdin
+        return sys.stdin.read().strip()
+    else:
+        # if nothing is there, return None
+        return ""
+
+
+def get_message(message: List[str]) -> str:
+
+    message_ = " ".join(message).strip()
+    if message_ == "":
+        message_ = read_nonblocking_stdin().strip()
+    if message_ == "":
+        message_ = click.edit().strip()
+
+    return message_

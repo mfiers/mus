@@ -16,6 +16,7 @@ dependencies = [
     "rich",
     "click",
     "requests",
+    "nbconvert",
 ]
 
 [project.optional-dependencies]

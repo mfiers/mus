@@ -1,21 +1,10 @@
 
-import select
-import sys
 from typing import List
 
 import click
 
 from mus.db import Record
-
-
-def read_nonblocking_stdin() -> str:
-    # check if there's something to read
-    if select.select([sys.stdin], [], [], 0)[0]:
-        # reads everything from stdin
-        return sys.stdin.read().strip()
-    else:
-        # if nothing is there, return None
-        return ""
+from mus.util.log import get_message
 
 
 # Note - the **kwargs is required to ad arguments
@@ -24,13 +13,10 @@ def read_nonblocking_stdin() -> str:
 @click.argument("message", nargs=-1)
 def log(message: List[str], **kwargs):
     """Store a log message"""
-    message_ = " ".join(message).strip()
+
+    message_ = get_message(message)
     if message_ == "":
-        message_ = read_nonblocking_stdin().strip()
-    if message_ == "":
-         message_ = click.edit().strip()
-    if message == "":
-        click.echo('No message specified')
+        click.echo("Please provide a message")
         return
 
     rec = Record()
