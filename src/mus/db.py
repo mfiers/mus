@@ -7,6 +7,7 @@ from pathlib import Path
 from textwrap import wrap
 from typing import MutableSet, Optional, Union
 
+from mus.config import get_env
 from mus.hooks import call_hook
 from mus.util import get_host, msec2nice
 
@@ -247,7 +248,8 @@ class Record():
         elif filename.exists() and filename.is_dir():
             self.filename = str(Path(filename).resolve())
             self.checksum = None
-            self.tags.add('folder')
+            # TODO: add tagging structure again
+            #self.tags.add('folder')
         elif not filename.exists():
             raise FileNotFoundError(filename)
         else:
