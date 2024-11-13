@@ -1,6 +1,7 @@
 
 import os
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Dict
 
 import requests
@@ -77,11 +78,35 @@ def eln_comment(experimentid,
     return journalId
 
 
-def eln_file_upload(journal_id, filename, description=None):
+def eln_file_upload(experimentid, filename, title, uploadname=None) -> int:
+    if uploadname is None:
+        uploadname = Path(filename).name
+
+    # create section
+    req = elncall(f"experiments/{experimentid}/sections",
+                  method='post',
+                  data=dict(sectionType='FILE',
+                            sectionHeader=title))
+
+    journal_id = int(req.json())  # type: ignore
+    eln_file_append(journal_id, filename, uploadname)
+
+    # print(filename, uploadname)
+    # with open(filename, 'rb') as F:
+    #     elncall(f"experiments/sections/{journal_id}/files",
+    #             method="post", params={'fileName': uploadname},
+    #             data=F)
+    return journal_id
+
+
+def eln_file_append(journal_id, filename, uploadname=None) -> None:
+    if uploadname is None:
+        uploadname = Path(filename).name
+
     with open(filename, 'rb') as F:
-        req = elncall(f"experiments/sections/{journal_id}/files",
-                      method="post", params={'fileName': filename},
-                      data=F)
+        elncall(f"experiments/sections/{journal_id}/files",
+                method="post", params={'fileName': uploadname},
+                data=F)
 
 
 def elncall(path, params=None, method='get', data=None):
