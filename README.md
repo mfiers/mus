@@ -28,14 +28,42 @@ chmod go-rwX ~/.env
 
 ### Usage
 
-All ELN interaction happens on the level of ELN experiments. To link mus activity to an experiment, you need to get the experiment ID from ELN.
+All ELN interaction happens on the level of ELN experiments. To link mus activity to an experiment, you need to create an experiment, and get the experiment ID from ELN:
 
+<img width="346" alt="image" src="https://github.com/user-attachments/assets/c46887f0-3d8e-469e-bd12-af97c8b5c27b">
 
-To store a message on ELN:
+Subsequently you can store project, study and experiment IDs and titles from ELN, and store it in the local `.env` file for further use with:
 
 ```
-mus log -e 'this is a test message
+mus eln tag-folder -x [eln-experiment-id]
+```
 
+If you've done this, the stored experiment-id will automatically be used when required.
+
+You can also directly store a message on ELN using `mus log` with the `-e` flag:
+
+```
+mus log -e 'this is a test message'
+```
+
+If you've tagged the folder with eln data, then the experiment id will be picked up from that data, otherwise you need to specify the eln experiment id"
+
+```
+mus log -e -x [eln-experiment-id] 'this is a test message'
+```
+
+It is possible to upload a file to ELN using `mus tag`, again with the `-e` flag:
+
+```
+mus tag -e [filename] with a short title or description
+```
+
+Or, if the folder was not tagged yet:
+
+
+```
+mus tag -e  -x [eln-experiment-id] [filename] with a short title or description
+```
 
 
 ## History logging
