@@ -6,10 +6,9 @@ import click
 import colorama
 
 import mus
+from mus.hooks import call_hook  # NOQA: E402
 from mus.util.cli import AliasedGroup  # NOQA: E402
 from mus.util.log import ColorLogger  # NOQA: E402
-
-# load plugins - need to automate this somehow
 
 # Set up color logging
 colorama.init(autoreset=True)
@@ -50,7 +49,6 @@ def cli(ctx, verbose, profile):
 
 # commands to hook into the cli:
 from mus.cli import config  # NOQA: E402
-from mus.cli import eln  # NOQA: E402
 from mus.cli import files  # NOQA: E402
 from mus.cli import macro  # NOQA: E402
 from mus.cli import search  # NOQA: E402
@@ -63,8 +61,15 @@ cli.add_command(files.findfile)
 cli.add_command(macro.cli_macro)
 cli.add_command(dbcli.db)
 cli.add_command(config.cmd_config)
-cli.add_command(eln.cmd_eln)
 cli.add_command(muslog.log)
+
+
+# need an automated way to specify and load plugins
+# for now, jus timport
+import mus.plugins.eln  # NOQA: E402
+
+# give all the plugins time to register themselves
+call_hook('plugin_init', cli=cli)
 
 
 @cli.command("version")
