@@ -2,6 +2,7 @@
 import logging
 import time
 from pathlib import Path
+from typing import List
 
 import click
 from click import echo, style
@@ -13,12 +14,15 @@ lg = logging.getLogger(__name__)
 
 
 @click.command("tag")
+@click.option('-e', '--editor', is_flag=True,
+              default=False, help='Always drop into editor')
 @click.argument("filename")
 @click.argument("message", nargs=-1)
-def filetag(filename, message, **kwargs):
+def filetag(filename: str, message: List[str],
+            editor: bool, **kwargs):
     """Add a tag record to the specified file"""
 
-    message_ = get_message(message)
+    message_ = get_message(message, editor=editor)
     if message_ == "":
         click.echo("Please provide a message")
         return
