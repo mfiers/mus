@@ -68,12 +68,15 @@ def read_nonblocking_stdin() -> str:
         return ""
 
 
-def get_message(message: List[str]) -> str:
+def get_message(message: List[str],
+                editor: bool = False) -> str:
 
     message_ = " ".join(message).strip()
     if message_ == "":
         message_ = read_nonblocking_stdin().strip()
-    if message_ == "":
-        message_ = click.edit().strip()
+    if message_ == "" or editor:
+        _ = click.edit(message_)
+        assert isinstance(_, str)
+        message_ = _.strip()
 
     return message_
