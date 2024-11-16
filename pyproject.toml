@@ -15,16 +15,14 @@ dependencies = [
     "jinja2",
     "rich",
     "click",
-    "requests",
-    "nbconvert",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest"]
+eln = [""nbconvert", "ipython", "requests",]
 
 [project.scripts]
 mus = "mus.cli:cli"
-mus-hist = "mus.cli.hist:cli"
 
 [project.urls]
 Homepage = "https://github.com/mfiers/mus"
