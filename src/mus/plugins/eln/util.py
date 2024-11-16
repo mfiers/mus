@@ -1,15 +1,54 @@
 
 import os
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict
 
+import click
 import requests
 
 from mus.config import get_env
-from mus.exceptions import ElnApiKeyNotDefined, ElnURLNotDefined
 from mus.hooks import register_hook
 
+
+def convert_ipynb_to_pdf(filename):
+    # if the file is an ipython notebook - attempt to convert to PDF
+    # datestamp - on the day level. I don't think we need second resolutiono
+    # here - one file per day should be enough...
+    stamp = datetime.now().strftime("%Y%m%d_%H%M")
+    pdf_filename = filename.replace(".ipynb", f".{stamp}.pdf")
+    click.echo(f"Converting ipython {os.path.basename(filename)} ")
+    click.echo(f"Target: {pdf_filename} ")
+    from nbconvert import PDFExporter
+
+    pdf_data, resources = PDFExporter().from_filename(filename)
+    with open(pdf_filename, "wb") as F:
+        F.write(pdf_data)
+    return pdf_filename
+
+
+#
+# Exceptions
+#
+class ElnApiKeyNotDefined(Exception):
+    pass
+
+
+class ElnURLNotDefined(Exception):
+    pass
+
+
+class ElnNoExperimentId(Exception):
+    pass
+
+
+class ElnConflictingExperimentId(Exception):
+    pass
+
+#
+# Utility functions
+#
 
 def fix_eln_experiment_id(xid):
     """
@@ -183,7 +222,3 @@ def add_eln_data_to_record(record):
             # we do not want to store the api key!
             continue
         record.data[k] = v
-
-
-# actually register the hook
-register_hook('prepare_record', add_eln_data_to_record)
