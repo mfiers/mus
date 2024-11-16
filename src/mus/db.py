@@ -1,4 +1,5 @@
 
+import getpass
 import os
 import sqlite3
 import time
@@ -266,11 +267,7 @@ class Record():
         # Gather information!
         self.host = get_host()
 
-        if 'MUS_USER' in os.environ:
-            self.user = os.environ['MUS_USER']
-        else:
-            import getpass
-            self.user = getpass.getuser()
+        self.user = getpass.getuser()
 
         call_hook('prepare_record', record=self)
 
