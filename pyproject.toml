@@ -14,12 +14,11 @@ dependencies = [
     "colorama",
     "jinja2",
     "rich",
-    "click",
-]
+    "click"]
 
 [project.optional-dependencies]
 dev = ["pytest"]
-eln = [""nbconvert", "ipython", "requests",]
+eln = [""nbconvert", "ipython", "requests", "fpdf"]
 
 [project.scripts]
 mus = "mus.cli:cli"
