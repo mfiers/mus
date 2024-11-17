@@ -5,12 +5,23 @@ Mark's random set of utilities
 
 Preferred install using `pipx`:
 
+Add requirements for optional plugins using `[plugin]` syntax
+
 ```
-pipx install "git+ssh://git@github.com/mfiers/mus.git"
+pipx install "git+ssh://git@github.com/mfiers/mus.git#egg=mus[eln]"
 ```
 
+If you want to add plugins later:
+
+```
+pipx upgrade "git+ssh://git@github.com/mfiers/mus.git#egg=mus[dev]"
+```
 
 ## ELN plugin
+
+Note: for automatic conversion of ipynb to pdf, you need to install `pandoc` and `texlive-xetex`.
+
+### Install
 
 ### Get credentials
 

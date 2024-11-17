@@ -237,7 +237,6 @@ class Record():
 
         from uuid import uuid4
 
-        from mus.config import get_env
         from mus.util.files import get_checksum
 
         if filename is None:

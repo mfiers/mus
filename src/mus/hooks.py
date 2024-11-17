@@ -2,6 +2,18 @@
 Super simple hooks system
 
 register hooks anywhere - later call them.
+
+Example:
+
+    def my_hook(a, b):
+        print(a, b)
+
+    register_hook("my_hook", my_hook)
+
+And from anywhere else in the code:
+    call_hook("my_hook", a=1, b=2)
+
+this package exposes a few hooks, defined in the modules.
 """
 
 import logging
