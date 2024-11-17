@@ -20,11 +20,16 @@ def convert_ipynb_to_pdf(filename):
     pdf_filename = filename.replace(".ipynb", f".{stamp}.pdf")
     click.echo(f"Converting ipython {os.path.basename(filename)} ")
     click.echo(f"Target: {pdf_filename} ")
-    from nbconvert import PDFExporter
 
-    pdf_data, resources = PDFExporter().from_filename(filename)
-    with open(pdf_filename, "wb") as F:
-        F.write(pdf_data)
+    try:
+        from nbconvert import PDFExporter
+        pdf_data, resources = PDFExporter().from_filename(filename)
+        with open(pdf_filename, "wb") as F:
+            F.write(pdf_data)
+    except OSError as e:
+        click.echo(f"Error converting to PDF: {e}")
+        return None
+
     return pdf_filename
 
 
