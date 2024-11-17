@@ -67,6 +67,28 @@ def init_eln(cli):
     # instance
     cli.add_command(cmd_eln)
 
+from fpdf import FPDF
+
+
+class PDF(FPDF):
+    def chapter_title(self, num, label):
+        self.set_font('Arial', 'B', 14)
+        self.set_fill_color(150, 193, 217)
+        self.cell(0, 6, f' {label}', 0, 1, 'L', 1)
+
+    def chapter_body(self, txt, font):
+        self.set_font(font, '', 10)
+        self.multi_cell(0, 5, txt)
+        self.ln()
+
+    def print_chapter(self, num, title, rest, meta):
+        self.add_page()
+        self.chapter_title(num, title)
+        self.chapter_body(rest, font='Arial')
+        self.ln(4)
+        self.chapter_body(meta, font='Arial')
+        self.ln(4)
+
 
 def eln_save_log(record):
     """Post a log to the ELN."""
@@ -95,8 +117,7 @@ def eln_save_log(record):
         title, rest = message.split('\n', 1)
 
     if record.filename is None:
-
-        # store message
+        # just a regular message, can be stored in an ELN comment
         metadata = [
             f"<li><b>{k.capitalize()}</b>: {getattr(record, k)}</li>"
             for k in ['host', 'cwd', 'user']
@@ -111,17 +132,20 @@ def eln_save_log(record):
         eln_comment(experimentid, title, message)
         return
     else:
+        # store the file.
 
         pdf = False
         pdf_filename = None
         if record.filename.endswith('.ipynb'):
             pdf_filename = convert_ipynb_to_pdf(record.filename)
-            pdf = True
+            if pdf_filename is not None:
+                pdf = True
 
         # store message
         metadata = [
-            f"* {k.capitalize()}: {getattr(record, k)}"
-            for k in ['host', 'cwd', 'user', 'filename']
+            f"- {k.capitalize()}: {getattr(record, k)}"
+            for k in ['host', 'cwd', 'user', 'filename',
+                      'checksum']
             ]
         ntime = datetime\
             .fromtimestamp(record.time)\
@@ -130,17 +154,25 @@ def eln_save_log(record):
             f"* Upload time: {ntime}"
         )
 
-        lmessage = [
-            title, ""]
-        lmessage += metadata
-        lmessage += ['', rest]
+        pdf = PDF()
+        pdf.print_chapter(1, title, rest, "\n".join(metadata))
+        metapdf = Path(record.filename).name + '.metadata.pdf'
+        pdf.output(metapdf, 'F')
 
-        message = "\n".join(lmessage)
+        journal_id = eln_file_upload(experimentid, record.filename,
+                                     title=title)
+        if pdf:
+            eln_file_append(
+                journal_id, pdf_filename)
+        eln_file_append(journal_id, metapdf)
 
-        # store file
-        tf = tempfile.NamedTemporaryFile(delete=False)
-        tf.write(message.encode('utf-8'))
-        tf.close()
+def add_eln_data_to_record(record):
+    """Add ELN data to a record."""
+    ctx = click.get_current_context()
+    if not ctx.params.get('eln'):
+        pdf.set_font('Arial', '', 12)
+        pdf.cell(40, 10, 'Mus ELN updload ')
+        pdf.output('tuto1.pdf', 'F')
 
         journal_id = eln_file_upload(experimentid, record.filename, title=title)
         if pdf:
