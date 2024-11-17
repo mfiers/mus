@@ -18,7 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest"]
-eln = [""nbconvert", "ipython", "requests", "fpdf"]
+eln = ["nbconvert", "ipython", "requests", "fpdf"]
 
 [project.scripts]
 mus = "mus.cli:cli"
