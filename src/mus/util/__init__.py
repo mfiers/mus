@@ -4,9 +4,19 @@ import os
 from pathlib import Path
 
 
+def get_template_path(template_path, template_name):
+    """
+    Get the full path to a template file embedded in the package.
+    Works in wheels and source distributions.
+    """
+    from importlib.resources import files
+    return str(files(template_path).joinpath(template_name))
+
+
 def get_host():
     import socket
     return socket.gethostname()
+
 
 def msec2nice(mtime):
 
