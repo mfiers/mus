@@ -12,20 +12,40 @@ from mus.config import get_env
 from mus.hooks import register_hook
 
 
+def get_stamped_filename(filename, new_ext=None):
+    stamp = datetime.now().strftime("%Y%m%d_%H%M")
+    basename = filename
+    if '.' in filename:
+        basename = filename.rsplit('.', 1)[0]
+    return f"{basename}.{stamp}.{new_ext}"
+
+
 def convert_ipynb_to_pdf(filename):
     # if the file is an ipython notebook - attempt to convert to PDF
     # datestamp - on the day level. I don't think we need second resolutiono
     # here - one file per day should be enough...
-    stamp = datetime.now().strftime("%Y%m%d_%H%M")
-    pdf_filename = filename.replace(".ipynb", f".{stamp}.pdf")
+    pdf_filename = get_stamped_filename(filename, 'pdf')
+
     click.echo(f"Converting ipython {os.path.basename(filename)} ")
     click.echo(f"Target: {pdf_filename} ")
 
     try:
+        import nbformat
         from nbconvert import PDFExporter
-        pdf_data, resources = PDFExporter().from_filename(filename)
+        from traitlets.config import Config
+
+        notebook = nbformat.read(filename, as_version=4)
+        config = Config()
+
+        # template = get_template_path(
+        #     "mus.plugins.eln.templates", "mus.tex")
+        # config.PDFExporter.template_file = template
+
+        pdf_exporter = PDFExporter(config=config)
+        pdf_data, _ = pdf_exporter.from_notebook_node(notebook)
         with open(pdf_filename, "wb") as F:
             F.write(pdf_data)
+
     except OSError as e:
         click.echo(f"Error converting to PDF: {e}")
         return None
@@ -33,7 +53,6 @@ def convert_ipynb_to_pdf(filename):
     return pdf_filename
 
 
-#
 # Exceptions
 #
 class ElnApiKeyNotDefined(Exception):
@@ -54,6 +73,7 @@ class ElnConflictingExperimentId(Exception):
 #
 # Utility functions
 #
+
 
 def fix_eln_experiment_id(xid):
     """
@@ -122,9 +142,7 @@ def eln_comment(experimentid,
     return journalId
 
 
-def eln_file_upload(experimentid, filename, title, uploadname=None) -> int:
-    if uploadname is None:
-        uploadname = Path(filename).name
+def eln_create_filesection(experimentid, title) -> int:
 
     # create section
     req = elncall(f"experiments/{experimentid}/sections",
@@ -133,17 +151,10 @@ def eln_file_upload(experimentid, filename, title, uploadname=None) -> int:
                             sectionHeader=title))
 
     journal_id = int(req.json())  # type: ignore
-    eln_file_append(journal_id, filename, uploadname)
-
-    # print(filename, uploadname)
-    # with open(filename, 'rb') as F:
-    #     elncall(f"experiments/sections/{journal_id}/files",
-    #             method="post", params={'fileName': uploadname},
-    #             data=F)
     return journal_id
 
 
-def eln_file_append(journal_id, filename, uploadname=None) -> None:
+def eln_file_upload(journal_id, filename, uploadname=None) -> None:
     if uploadname is None:
         uploadname = Path(filename).name
 

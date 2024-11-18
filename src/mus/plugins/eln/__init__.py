@@ -2,10 +2,13 @@
 
 import os
 import tempfile
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Dict, List
 
 import click
+from fpdf import FPDF
 
 from mus.config import get_env, save_env
 from mus.hooks import register_hook
@@ -15,12 +18,32 @@ from mus.plugins.eln.util import (
     add_eln_data_to_record,
     convert_ipynb_to_pdf,
     eln_comment,
-    eln_file_append,
+    eln_create_filesection,
     eln_file_upload,
     expinfo,
     fix_eln_experiment_id,
+    get_stamped_filename,
 )
 
+
+@dataclass
+class ELNDATA:
+    experimentid: int = -1
+    n: int = 0
+    title: str = ''
+    rest: str = ''
+    filesets: List[List[str]] = field(default_factory=list)
+    metadata: List[Dict[str,Any]] = field(default_factory=list)
+
+ElnData = ELNDATA()
+
+# ElnData = dict(
+#     n = 0,
+#     message = '',
+#     rest = '',
+#     filesets = [],
+#     metadata = [],
+#     )
 
 # CLI commands
 @click.group("eln")
@@ -41,9 +64,9 @@ def eln_tag(experimentid):
 
 # Hooks
 
+
 def init_eln(cli):
     """Add ELN options to the log and tag commands."""
-
     from mus.cli import files
     from mus.cli import log as muslog
 
@@ -67,30 +90,49 @@ def init_eln(cli):
     # instance
     cli.add_command(cmd_eln)
 
-from fpdf import FPDF
-
 
 class PDF(FPDF):
-    def chapter_title(self, num, label):
-        self.set_font('Arial', 'B', 14)
-        self.set_fill_color(150, 193, 217)
-        self.cell(0, 6, f' {label}', 0, 1, 'L', 1)
-
-    def chapter_body(self, txt, font):
+    def print_title(self, title, rest, font='Arial'):
+        self.set_font('Arial', 'B', 16)
+        self.set_fill_color(232, 204, 139)
+        self.cell(0, 6, f' {title}', 1, 1, 'L', 1)
         self.set_font(font, '', 10)
-        self.multi_cell(0, 5, txt)
+        self.multi_cell(0, 5, rest)
         self.ln()
 
-    def print_chapter(self, num, title, rest, meta):
+    def print_fileset(self, fset, mdata, font='Arial'):
+        self.set_fill_color(150, 193, 217)
+        self.set_font('Arial', 'B', 12)
+        fn = os.path.basename(mdata["filename"])
+        self.cell(0, 6, fn, 1, 1, 'L', 1)
+        self.ln()
+        if len(fset) > 1:
+            self.set_font(font, 'B', 10)
+            fs = '\n'.join([
+                f'{os.path.basename(k)}'
+                for k in fset
+                if k != mdata["filename"]])
+            self.multi_cell(0, 5, fs)
+            self.ln()
+        self.set_font(font, '', 10)
+        mf = '\n'.join(
+            f'- {k.capitalize().replace("_", " ")}: {v}'
+            for (k, v) in sorted(mdata.items())
+            if k != 'filename'
+        )
+        self.multi_cell(0, 5, mf)
+        self.ln()
+
+    def print_chapter(self, title, rest, meta):
         self.add_page()
-        self.chapter_title(num, title)
+        self.chapter_title(title)
         self.chapter_body(rest, font='Arial')
         self.ln(4)
         self.chapter_body(meta, font='Arial')
         self.ln(4)
 
 
-def eln_save_log(record):
+def eln_save_record(record):
     """Post a log to the ELN."""
     ctx = click.get_current_context()
     if not ctx.params.get('eln'):
@@ -108,8 +150,7 @@ def eln_save_log(record):
     else:
         raise ElnNoExperimentId("No experiment ID given")
 
-    message = record.message
-
+    message = record.message.strip()
     if message.count('\n') == 0:
         title = message
         rest = ''
@@ -132,57 +173,147 @@ def eln_save_log(record):
         eln_comment(experimentid, title, message)
         return
     else:
-        # store the file.
+        # remember everything, to ultimately store all files
+        ElnData.n += 1
+        if ElnData.n == 1:
+            ElnData.experimentid = experimentid
+            ElnData.title = title
+            ElnData.rest = rest
 
-        pdf = False
+        # this (group) of files to append
+        fileset = []
+        # the original file
+        fileset.append(record.filename)
+
+        # pdf_convert = False
         pdf_filename = None
         if record.filename.endswith('.ipynb'):
             pdf_filename = convert_ipynb_to_pdf(record.filename)
             if pdf_filename is not None:
-                pdf = True
+                # pdf_convert = True
+                fileset.append(pdf_filename)
 
         # store message
-        metadata = [
-            f"- {k.capitalize()}: {getattr(record, k)}"
+        metadata = {
+            k: getattr(record, k)
             for k in ['host', 'cwd', 'user', 'filename',
                       'checksum']
-            ]
+        }
         ntime = datetime\
             .fromtimestamp(record.time)\
             .strftime("%Y-%m-%d %H:%M:%S")
-        metadata.append(
-            f"* Upload time: {ntime}"
-        )
+        metadata['upload_time'] = ntime
 
-        pdf = PDF()
-        pdf.print_chapter(1, title, rest, "\n".join(metadata))
-        metapdf = Path(record.filename).name + '.metadata.pdf'
-        pdf.output(metapdf, 'F')
+        ElnData.metadata.append(metadata)
+        ElnData.filesets.append(fileset)
 
-        journal_id = eln_file_upload(experimentid, record.filename,
-                                     title=title)
-        if pdf:
-            eln_file_append(
-                journal_id, pdf_filename)
-        eln_file_append(journal_id, metapdf)
+        # pdf
+        # metapdf = PDF()
+        # metapdf.print_chapter(1, title, rest, )
+        # metapdf.output(metapdf_filename, 'F')
+        #fileset.append(metapdf_filename)
 
-def add_eln_data_to_record(record):
-    """Add ELN data to a record."""
-    ctx = click.get_current_context()
-    if not ctx.params.get('eln'):
-        pdf.set_font('Arial', '', 12)
-        pdf.cell(40, 10, 'Mus ELN updload ')
-        pdf.output('tuto1.pdf', 'F')
 
-        journal_id = eln_file_upload(experimentid, record.filename, title=title)
-        if pdf:
-            eln_file_append(
-                journal_id, pdf_filename)
-        eln_file_append(journal_id, tf.name,
-                        uploadname=Path(record.filename).name + '.meta.txt')
-        Path(tf.name).unlink()
+        # journal_id = eln_create_filesection(experimentid, title)
 
+        # eln_file_upload(journal_id, record.filename)
+        # if pdf_convert:
+        #    eln_file_upload(
+        #        journal_id, pdf_filename)
+        # eln_file_upload(journal_id, metapdf_filename)
+
+def finish_file_upload():
+    metapdf = PDF()
+    metapdf.add_page()
+    metapdf.print_title(ElnData.title, ElnData.rest)
+    metapdf_filename = get_stamped_filename('eln_metadata', 'pdf')
+    for fset, mdata in zip(ElnData.filesets, ElnData.metadata):
+        metapdf.print_fileset(fset, mdata)
+    metapdf.output(metapdf_filename, 'F')
+    journal_id = eln_create_filesection(
+        experimentid=ElnData.experimentid,
+        title=ElnData.title)
+    eln_file_upload(journal_id=journal_id,
+                    filename=metapdf_filename)
+    i = 1
+    for fset in ElnData.filesets:
+        for fn in fset:
+            i += 1
+            eln_file_upload(journal_id, fn)
+    click.echo(f"Uploaded {i} files to ELN")
 
 register_hook('plugin_init', init_eln)
-register_hook('save_record', eln_save_log)
+register_hook('save_record', eln_save_record)
 register_hook('prepare_record', add_eln_data_to_record)
+register_hook('finish_filetag', finish_file_upload)
+
+
+
+
+# @eln.command()
+# def projects():
+#     inf = elncall("projects")
+#     assert isinstance(inf, dict)
+#     print(f"# No projects: {inf['recordCount']}")
+#     for rec in inf["data"]:
+#         print(f"{rec['projectID']}\t{rec['name']}")
+
+
+# @eln.command()
+# @click.option("-p", "--projectID", type=int)
+# @click.option("-n", "--name")
+# def studies(projectid, name):
+#     inf = elncall("studies", dict(searchName=name, projectID=projectid))
+#     assert isinstance(inf, dict)
+#     print(f"# No studies: {inf['recordCount']}")
+#     for rec in inf["data"]:
+#         print(f"{rec['studyID']}\t{rec['name']}")
+
+
+# @eln.command()
+# @click.option("-s", "--studyID", type=int)
+# @click.option("-n", "--name")
+# def create_experiment(studyid, name):
+#     print(studyid, name)
+#     inf = elncall(
+#         "experiments",
+#         dict(studyID=int(studyid), name=name),
+#         method="post",
+#     )
+#     print(inf)
+
+
+# @eln.command()
+# @click.option("-s", "--studyID", type=int)
+# @click.option("-n", "--name")
+# @click.option("-r", "--raw", is_flag=True, default=False)
+# def experiments(studyid, name, raw):
+#     inf = elncall(
+#         "experiments",
+#         {
+#             "searchName": name,
+#             "studyID": studyid,
+#         },
+#     )
+#     assert isinstance(inf, dict)
+#     if raw:
+#         print(json.dumps(inf, indent=4))
+
+#     print(f"# No experiments: {inf['recordCount']}")
+#     for k in inf["data"]:
+#         print(f"{k['experimentID']}\t{k['name']}")
+
+
+# @eln.command("sections")
+# @click.option("-x", "--experimentID", type=int, required=True)
+# @click.option("-r", "--raw", is_flag=True, default=False)
+# def eln_sections(experimentid, raw):
+#     inf = elncall(f"experiments/{experimentid}/sections")
+#     if raw:
+#         print(json.dumps(inf, indent=4))
+#         return
+#     print(f"# No sections: {inf['recordCount']}")
+#     for rec in inf["data"]:
+#         print(
+#             f"{rec['order']}\t{rec['sectionType']}\t{rec['expJournalID']}\t{rec['sectionHeader']}"
+#         )
