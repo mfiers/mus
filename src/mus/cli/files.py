@@ -8,6 +8,7 @@ import click
 from click import echo, style
 
 from mus.db import Record, get_db_connection
+from mus.hooks import call_hook
 from mus.util.log import get_message
 
 lg = logging.getLogger(__name__)
@@ -28,12 +29,16 @@ def filetag(filename: List[str],
         click.echo("Please provide a message")
         return
 
-    rec = Record()
-    rec.prepare(
-        filename=Path(filename),
-        rectype='tag')
-    rec.message = message_
-    rec.save()
+    for fn in filename:
+        rec = Record()
+        rec.prepare(
+            filename=Path(fn),
+            rectype='tag')
+        rec.message = message_
+        rec.save()
+
+    call_hook('finish_filetag')
+
 
 
 @click.command("file")
