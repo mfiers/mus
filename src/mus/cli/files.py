@@ -16,9 +16,10 @@ lg = logging.getLogger(__name__)
 @click.command("tag")
 @click.option('-e', '--editor', is_flag=True,
               default=False, help='Always drop into editor')
-@click.argument("filename")
-@click.argument("message", nargs=-1)
-def filetag(filename: str, message: List[str],
+@click.option("-m", "--message", help="Message to attach to files")
+@click.argument("filename", nargs=-1)
+def filetag(filename: List[str],
+            message: str | None,
             editor: bool, **kwargs):
     """Add a tag record to the specified file"""
 

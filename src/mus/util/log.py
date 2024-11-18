@@ -2,6 +2,7 @@
 import logging
 import select
 import sys
+from collections.abc import Iterable
 from typing import List
 
 import click
@@ -68,13 +69,25 @@ def read_nonblocking_stdin() -> str:
         return ""
 
 
-def get_message(message: List[str],
+def get_message(message: List[str] | str | None,
                 editor: bool = False) -> str:
 
-    message_ = " ".join(message).strip()
+    if message is None:
+        message_ = ""
+    elif isinstance(message, str):
+        message_ = message
+    elif isinstance(message, Iterable):
+        message_ = ' '.join(map(str, message))
+    else:
+        message_ = str(message)
+
+    message_ = message_.strip()
+
     if message_ == "":
+        # no message? something on stdin?
         message_ = read_nonblocking_stdin().strip()
     if message_ == "" or editor:
+        # drop into editor
         _ = click.edit(message_)
         assert isinstance(_, str)
         message_ = _.strip()
