@@ -33,3 +33,8 @@ build-backend = "hatchling.build"
 
 [tool.hatch.version]
 path = "src/mus/__about__.py"
+
+#[tool.hatch.build.targets.sdist]
+#include = [
+#    "*.tex"
+#]
