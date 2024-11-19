@@ -22,10 +22,13 @@ def get_checksum(filename: Path) -> str:
               WHERE filename=?"""
     result = conn.execute(sql, (str(filename.resolve()),))
     rec = result.fetchone()
-    if rec is not None:
-        return rec.hash
 
-    mtime = int(filename.stat().st_mtime)
+    current_mtime = int(filename.stat().st_mtime)
+    if rec is not None:
+        if rec.mtime == current_mtime:
+            # if the record is of the same age as the current
+            # mtime - we assume it has not changed.
+            return rec.hash
 
     sha256_hash = hashlib.sha256()
     with open(filename, "rb") as f:
@@ -41,6 +44,6 @@ def get_checksum(filename: Path) -> str:
                 DO UPDATE SET mtime=mtime,
                               hash=hash;"""
     conn.execute(sql, (str(filename.resolve()),
-                       mtime, checksum))
+                       current_mtime, checksum))
     conn.commit()
     return checksum
