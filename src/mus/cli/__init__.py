@@ -64,9 +64,10 @@ cli.add_command(config.cmd_config)
 cli.add_command(muslog.log)
 
 
-# need an automated way to specify and load plugins
+# TODO: need an automated way to specify and load plugins
 # for now, jus timport
 import mus.plugins.eln  # NOQA: E402
+import mus.plugins.irods  # NOQA: E402
 
 # give all the plugins time to register themselves
 call_hook('plugin_init', cli=cli)

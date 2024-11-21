@@ -78,6 +78,17 @@ mus tag -e  -x [eln-experiment-id] [filename] with a short title or description
 
 Note, when uploading files, `*.ipynb` files will automatically be converted to timestamped PDF files, and these will be uploaded to ELN as well.
 
+## iRODs plugin
+
+This plugin relies on the ELN plugin up & running. Without ELN metadata on project, study and experiment it will not run.
+
+
+### Prerequisites
+
+* Install irods gocommands - https://github.com/cyverse/gocommands
+
+
+
 
 ## History logging
 
