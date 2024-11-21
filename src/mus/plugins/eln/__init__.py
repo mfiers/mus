@@ -10,7 +10,9 @@ from typing import Any, Dict, List
 import click
 from fpdf import FPDF
 
+from mus.cli.files import tag_one_file
 from mus.config import get_env, save_env
+from mus.db import Record, get_db_connection
 from mus.hooks import register_hook
 from mus.plugins.eln.util import (
     ElnConflictingExperimentId,
@@ -33,17 +35,12 @@ class ELNDATA:
     title: str = ''
     rest: str = ''
     filesets: List[List[str]] = field(default_factory=list)
-    metadata: List[Dict[str,Any]] = field(default_factory=list)
+    metadata: List[Dict[str, Any]] = field(default_factory=list)
+    records: List[Any] = field(default_factory=list)
+
 
 ElnData = ELNDATA()
 
-# ElnData = dict(
-#     n = 0,
-#     message = '',
-#     rest = '',
-#     filesets = [],
-#     metadata = [],
-#     )
 
 # CLI commands
 @click.group("eln")
@@ -73,10 +70,13 @@ def init_eln(cli):
     # add the option to post to ELN to the log & tag command
     muslog.log.params.append(
         click.Option(['-E', '--eln'], is_flag=True,
-                    default=False, help='Post to ELN'))
+                     default=False, help='Post to ELN'))
     files.filetag.params.append(
         click.Option(['-E', '--eln'], is_flag=True,
-                    default=False, help='Save file to ELN'))
+                     default=False, help='Save file to ELN'))
+    files.filetag.params.append(
+        click.Option(['-d', '--dry-run'], is_flag=True,
+                     default=False, help='Dry run, do not upload anything'))
 
     # and an optional experiment id
     muslog.log.params.append(
@@ -122,14 +122,6 @@ class PDF(FPDF):
         )
         self.multi_cell(0, 5, mf)
         self.ln()
-
-    def print_chapter(self, title, rest, meta):
-        self.add_page()
-        self.chapter_title(title)
-        self.chapter_body(rest, font='Arial')
-        self.ln(4)
-        self.chapter_body(meta, font='Arial')
-        self.ln(4)
 
 
 def eln_save_record(record):
@@ -180,6 +172,7 @@ def eln_save_record(record):
             ElnData.title = title
             ElnData.rest = rest
 
+        ElnData.records.append(record)
         # this (group) of files to append
         fileset = []
         # the original file
@@ -193,6 +186,10 @@ def eln_save_record(record):
                 # pdf_convert = True
                 fileset.append(pdf_filename)
 
+                # tag as well :)
+                tag_one_file(pdf_filename, message=record.message)
+
+
         # store message
         metadata = {
             k: getattr(record, k)
@@ -204,43 +201,46 @@ def eln_save_record(record):
             .strftime("%Y-%m-%d %H:%M:%S")
         metadata['upload_time'] = ntime
 
+        # Just recording data here - will upload later.
         ElnData.metadata.append(metadata)
         ElnData.filesets.append(fileset)
 
-        # pdf
-        # metapdf = PDF()
-        # metapdf.print_chapter(1, title, rest, )
-        # metapdf.output(metapdf_filename, 'F')
-        #fileset.append(metapdf_filename)
-
-
-        # journal_id = eln_create_filesection(experimentid, title)
-
-        # eln_file_upload(journal_id, record.filename)
-        # if pdf_convert:
-        #    eln_file_upload(
-        #        journal_id, pdf_filename)
-        # eln_file_upload(journal_id, metapdf_filename)
 
 def finish_file_upload():
+    ctx = click.get_current_context()
+    if not ctx.params.get('eln'):
+        return
+
+    dry_run = ctx.params.get('dry_run')
+
     metapdf = PDF()
     metapdf.add_page()
     metapdf.print_title(ElnData.title, ElnData.rest)
     metapdf_filename = get_stamped_filename('eln_metadata', 'pdf')
     for fset, mdata in zip(ElnData.filesets, ElnData.metadata):
         metapdf.print_fileset(fset, mdata)
+
     metapdf.output(metapdf_filename, 'F')
-    journal_id = eln_create_filesection(
-        experimentid=ElnData.experimentid,
-        title=ElnData.title)
-    eln_file_upload(journal_id=journal_id,
-                    filename=metapdf_filename)
-    i = 1
-    for fset in ElnData.filesets:
-        for fn in fset:
-            i += 1
-            eln_file_upload(journal_id, fn)
-    click.echo(f"Uploaded {i} files to ELN")
+
+    if not dry_run:
+        journal_id = eln_create_filesection(
+            experimentid=ElnData.experimentid,
+            title=ElnData.title)
+        eln_file_upload(journal_id=journal_id,
+                        filename=metapdf_filename)
+        i = 1
+        for fset in ElnData.filesets:
+            for fn in fset:
+                i += 1
+                eln_file_upload(journal_id, fn)
+        click.echo(f"Uploaded {i} files to ELN")
+    else:
+        i = 0
+        for fset in ElnData.filesets:
+            for fn in fset:
+                i += 1
+        click.echo(f"Would have uploaded {i} files to ELN (dry-run)")
+
 
 register_hook('plugin_init', init_eln)
 register_hook('save_record', eln_save_record)
