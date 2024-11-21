@@ -14,6 +14,15 @@ from mus.util.log import get_message
 lg = logging.getLogger(__name__)
 
 
+def tag_one_file(fn, message):
+    rec = Record()
+    rec.prepare(
+        filename=Path(fn),
+        rectype='tag')
+    rec.message = message
+    rec.save()
+
+
 @click.command("tag")
 @click.option('-e', '--editor', is_flag=True,
               default=False, help='Always drop into editor')
@@ -30,12 +39,7 @@ def filetag(filename: List[str],
         return
 
     for fn in filename:
-        rec = Record()
-        rec.prepare(
-            filename=Path(fn),
-            rectype='tag')
-        rec.message = message_
-        rec.save()
+        tag_one_file(fn, message_)
 
     call_hook('finish_filetag')
 
@@ -50,7 +54,6 @@ def findfile(filename):
     db = get_db_connection()
 
     filename = Path(filename).resolve()
-
 
     echo(f"Checking file {filename}")
     if filename.is_dir():
