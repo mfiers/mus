@@ -31,6 +31,14 @@ class IrodsUploadError(Exception):
     pass
 
 
+def rungo(*cl, **kwargs):
+    os.environ['IRODS_USER_PASSWORD']\
+        = str(keyring.get_password("mus", "irods_password"))
+    P = sp.Popen(['gocmd'] + list(cl), **kwargs)
+    o, e = P.communicate()
+    return o
+
+
 def icmd(*cl, **kwargs):
     prefix = ['docker', 'run',
               '--platform', 'linux/amd64', '-i', '--rm',
@@ -38,7 +46,6 @@ def icmd(*cl, **kwargs):
               '-v', '/Users/u0089478/.irods/:/root/.irods',
               'ghcr.io/utrechtuniversity/docker_icommands:0.2'
     ]
-    print(' '.join(prefix + list(map(str, cl))))
     P = sp.Popen(prefix + list(cl), **kwargs)
     o, e = P.communicate()
     return o

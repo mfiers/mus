@@ -21,8 +21,10 @@ import keyring
 
 from mus.config import get_env
 from mus.hooks import register_hook
-from mus.plugins.irods.util import get_irods_records, icmd
+from mus.plugins.irods.util import get_irods_records, icmd, rungo
 from mus.util.log import read_nonblocking_stdin
+
+lg = logging.getLogger(__name__)
 
 
 @click.group("irods")
@@ -73,13 +75,13 @@ def get_irods_session():
 
     return session
 
-@cmd_irods.command("test")
-def itest():
-    session = get_irods_session()
-    IRODS_HOME = "/gbiomed/home/BADS"
-    irods_collection = f"{IRODS_HOME}/mus/testm2"
-    subcoll = session.collections.create(irods_collection)
-    print(subcoll)
+# @cmd_irods.command("test")
+# def itest():
+#     session = get_irods_session()
+#     IRODS_HOME = "/gbiomed/home/BADS"
+#     irods_collection = f"{IRODS_HOME}/mus/testm2"
+#     subcoll = session.collections.create(irods_collection)
+#     print(subcoll)
 
 # @cmd_irods.command("show-password")
 # def iinit():
@@ -108,32 +110,17 @@ def itest():
 #     return any(fnmatch.fnmatch(filename, x) for x in FILE_IGNORE_LIST)
 
 
-
 @cmd_irods.command("get")
 @click.option("-f", "--force", is_flag=True,
               default=False,
               help="Force overwrite existing files",)
 @click.argument("filename", nargs=-1)
 def irods_get(filename, force):
-    click.echo("to be fixed")
-    return
     def get_mango_path(url):
         url = url.split("data-object/view")[1]
         return url
 
-    def run(cl: List[str], text=True, capture_output=None, **kwargs):
-        return sp.run(
-            cl, text=text, capture_output=capture_output, **kwargs
-        ).stdout
-
-    gocmd = run(["which", "gocmd"], stderr=sp.PIPE, stdout=sp.PIPE).strip()
-
-    if gocmd:
-        cmd = [gocmd, "get", "--progress"]
-    elif iget:
-        cmd = [iget, "-P"]
-    else:
-        raise click.UsageError("Did not find iget or gocmd")
+    cmd = []
 
     if force:
         cmd.append("-f")
@@ -156,8 +143,7 @@ def irods_get(filename, force):
         if (not force) and fulltarget.exists():
             lg.warning(f"Not overwriting {target}, use `-f`")
         else:
-            cl = copy(cmd) + [get_mango_path(url)]
-            run(cl, capture_output=False)
+            rungo('get', get_mango_path(url), '.', '-K', )
 
 
 # @cli.command("upload")
