@@ -57,6 +57,8 @@ def eln_tag(experimentid):
     expdata = {
         'eln_' + k: v for k, v in expdata.items()
     }
+    for k, v in expdata.items():
+        print(f"{k:25} : {v}")
     save_env(expdata)
 
 # Hooks
