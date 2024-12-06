@@ -17,6 +17,14 @@ If you want to add plugins later:
 pipx upgrade "git+ssh://git@github.com/mfiers/mus.git#egg=mus[dev]"
 ```
 
+## Development install
+
+git clone and then:
+
+```
+pipx install -e .[all]
+```
+
 ## ELN plugin
 
 Note: for automatic conversion of ipynb to pdf, you need to install `pandoc` and `texlive-xetex`.
