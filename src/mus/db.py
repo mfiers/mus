@@ -62,7 +62,7 @@ def init_muslog_table(conn: sqlite3.Connection):
 def init_hashcache_table(conn: sqlite3.Connection):
     """Create the hash cache table.
 
-    Not storing host - assuming this is host specific
+    Not storing host - assuming the db is host specific
     """
 
     conn.execute("""

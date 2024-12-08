@@ -11,8 +11,7 @@ from mus.util.cli import AliasedGroup  # NOQA: E402
 from mus.util.log import ColorLogger  # NOQA: E402
 
 # Set up color logging
-colorama.init(autoreset=True)
-
+# colorama.init(autoreset=True)
 
 logging.setLoggerClass(ColorLogger)
 lg = logging.getLogger('mus')
