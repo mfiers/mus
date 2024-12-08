@@ -27,4 +27,6 @@ EOF
 trap 'last_return_code=$?' DEBUG
 
 # Use PROMPT_COMMAND to log details right before displaying the prompt again
-PROMPT_COMMAND=log_to_sqlite
+if [[ ! "$PROMPT_COMMAND" =~ log_to_sqlite ]]; then
+  PROMPT_COMMAND="log_to_sqlite;${PROMPT_COMMAND}"
+fi
