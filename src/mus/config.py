@@ -14,20 +14,26 @@ LIST_KEYS = ['tag', 'collaborator']
 
 
 def list_add(lst, val):
-    # Check if the value begins with a '-', indicating a removal operation.
-    if val.startswith('-'):
-        rmval = val[1:]  # If so, remove the '-' to determine the value to remove.
+
+    def add_one(v2):
+        # Check if the value begins with a '-', indicating a removal operation.
+        if v2.startswith('-'):
+            rmval = v2[1:]  # If so, remove the '-' to determine the value to remove.
+            assert len(rmval) > 0
+            # Remove all instances of rmval from the list.
+            while rmval in lst:
+                lst.remove(rmval)
+        else:
+            # Add the original value to the list.
+            assert len(v2) > 0
+            lst.append(v2)
+
+    if isinstance(val, list):
+        for v in val:
+            add_one(v)
     else:
-        rmval = '-' + val  # Otherwise, prepend '-' to create the removal value.
+        add_one(val)
 
-    assert len(val) > 0  # Ensure that the value is not an empty string.
-
-    # Remove all instances of rmval from the list.
-    while rmval in lst:
-        lst.remove(rmval)
-
-    # Add the original value to the list.
-    lst.append(val)
 
 
 @lru_cache(32)
@@ -128,8 +134,9 @@ def save_env(conf: Dict,
 
 
 def save_kv_to_local_config(
-        key: str,
-        val: Any,
+        key: str | None = None,
+        val: Any | None = None,
+        data: Dict[str, Any] | None = None,
         wd: None | str | Path = None) -> None:
     """ Save a key-value pair to the local config file.
 
@@ -152,12 +159,20 @@ def save_kv_to_local_config(
 
     conf = get_local_config(wd)
 
-    if key in LIST_KEYS:
-        curval = conf.get(key, [])
-        assert isinstance(curval, list)
-        list_add(curval, val)
-        conf[key] = curval
-    else:
-        conf[key] = val
+    def apply_keyval(key, val):
+        if key in LIST_KEYS:
+            curval = conf.get(key, [])
+            assert isinstance(curval, list)
+            list_add(curval, val)
+            conf[key] = curval
+        else:
+            conf[key] = val
+
+    if key is not None and val is not None:
+        apply_keyval(key, val)
+
+    if data is not None:
+        for k, v in data.items():
+            apply_keyval(k, v)
 
     save_env(conf, wd)
