@@ -11,7 +11,7 @@ import click
 from fpdf import FPDF
 
 from mus.cli.files import tag_one_file
-from mus.config import get_env, save_env
+from mus.config import get_env, save_env, save_kv_to_local_config
 from mus.db import Record, get_db_connection
 from mus.hooks import register_hook
 from mus.plugins.eln.util import (
@@ -59,7 +59,24 @@ def eln_tag(experimentid):
     }
     for k, v in expdata.items():
         print(f"{k:25} : {v}")
-    save_env(expdata)
+    save_kv_to_local_config(data = expdata)
+
+
+@cmd_eln.command("update")
+def eln_update():
+    """Update based on local experiment id."""
+    env = get_env()
+    if 'eln_experiment_id' not in env:
+        click.echo("No experiment id found?")
+        return
+    experimentid = env['eln_experiment_id']
+
+    expdata = expinfo(experimentid)
+    expdata_2 = {
+        'eln_' + k: v for k, v in expdata.items()
+    }
+    save_kv_to_local_config(data=expdata_2)
+
 
 # Hooks
 
