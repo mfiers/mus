@@ -27,10 +27,10 @@ pipx install -e .[all]
 
 ### Keyring
 
-`mus` uses [keyring](https://github.com/jaraco/keyring) to store secret. On a headless(?) linux server you may need to set:
+`mus` uses [keyring](https://github.com/jaraco/keyring) to store secret. On a headless(?) linux server you may need to set a password to your secrets database, add this to your .bashrc
 
 ```
-export PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
+export KEYRING_CRYPTFILE_PASSWORD="very secure password"
 ```
 
 ## ELN plugin
@@ -52,6 +52,7 @@ cd $HOME
 mus secret set eln_apikey 2c1085d09bf4266975fda14593108a77
 mus secret set eln_url https://vib.elabjournal.com/api/v1/
 ```
+
 
 ### Usage
 

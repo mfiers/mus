@@ -182,12 +182,32 @@ def save_kv_to_local_config(
     save_env(conf, wd)
 
 
+@lru_cache(1)
+def get_keyring():
+    import keyring
+    import platform
+    from keyring.errors import KeyringError
+    from keyring_pass import PasswordStoreBackend
+
+    if platform.system() == "Linux":
+        # Not ideal - but fast, plaintext
+        from keyrings.alt.file import PlaintextKeyring
+        try:
+            return PlaintextKeyring()
+        except KeyringError as e:
+            print(f"Error configuring PlaintextKeyring: {e}")
+            raise
+    else:
+        return keyring
+
+
 def get_secret(name: str,
                hint: str | None = None):
     """Find the secret in the keyring or provide a useful error message"""
 
     # check keyring
-    rv = keyring.get_password('mus', name)
+    kr = get_keyring()
+    rv = kr.get_password('mus', name)
     if rv is not None:
         return rv
 

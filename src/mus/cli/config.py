@@ -2,7 +2,7 @@
 import json
 
 import click
-import keyring
+from mus.config import get_keyring
 
 from mus.config import get_env, get_local_config, save_kv_to_local_config  # NOQA: E402
 
@@ -54,7 +54,8 @@ def cmd_secrets():
 @click.argument("val")
 def secret_set(key, val):
     """Set key/val in the keychain"""
-    keyring.set_password("mus", key, val)
+    kr = get_keyring()
+    kr.set_password("mus", key, val)
 
 
 
@@ -62,5 +63,5 @@ def secret_set(key, val):
 @click.argument("key")
 def secret_get(key):
     """Get key from the keychain"""
-    print(keyring.get_password("mus", key))
+    print(get_keyring().get_password("mus", key))
 

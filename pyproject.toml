@@ -15,6 +15,7 @@ dependencies = [
     "jinja2",
     "rich",
     "keyring",
+    "keyrings.alt",
     "click"]
 
 [project.optional-dependencies]
