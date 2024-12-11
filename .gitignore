@@ -140,3 +140,6 @@ mus.config.gz
 .DS_Store
 #setup.cfg#
 env_backup
+
+# No mango files
+*.toml.mango
