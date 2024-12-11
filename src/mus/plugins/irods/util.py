@@ -40,21 +40,21 @@ def rungo(*cl, **kwargs):
 
 
 def icmd(*cl, **kwargs):
-    prefix = ['docker', 'run',
-              '--platform', 'linux/amd64', '-i', '--rm',
-              '-v', '/Users/u0089478/:/Users/u0089478/',
-              '-v', '/Users/u0089478/.irods/:/root/.irods',
-              'ghcr.io/utrechtuniversity/docker_icommands:0.2'
-    ]
+    prefix = keyring.get_password('mus', 'icmd_prefix')
+    if prefix is None:
+        prefix = []
+    else:
+        prefix = prefix.split()
+
     P = sp.Popen(prefix + list(cl), **kwargs)
     o, e = P.communicate()
     return o
 
 
 def get_irods_records(irods_folder):
-    d = icmd('ils', '-L',  irods_folder, text=True, stdout=sp.PIPE).strip()
+    d = icmd('ils', '-L',  irods_folder, text=True,
+             stdout=sp.PIPE, stderr=sp.PIPE).strip()
     # strip first line
-    print(d)
     if '\n' not in d:
         return
 
@@ -70,7 +70,6 @@ def get_irods_records(irods_folder):
         except:
             print('error')
             print(l1)
-
             print(l2)
             exit()
         yield dict(

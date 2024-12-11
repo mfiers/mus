@@ -1,25 +1,16 @@
-import base64
-import fnmatch
 import json
 import logging
 import os
 import re
 import socket
-import subprocess as sp
 from collections import Counter
-from copy import copy
-from dataclasses import dataclass, field
 from datetime import datetime
-from functools import lru_cache
-from importlib import resources as impresources
 from pathlib import Path
-from textwrap import dedent
-from typing import Dict, List
 
 import click
 import keyring
 
-from mus.config import get_env
+from mus.config import get_env, get_secret
 from mus.hooks import register_hook
 from mus.plugins.irods.util import get_irods_records, icmd, rungo
 from mus.util.log import read_nonblocking_stdin
@@ -42,6 +33,11 @@ def iinit():
     keyring.set_password("mus", "irods_password", password)
 
 
+def get_irods_password():
+    return get_secret('irods_password',
+                      "See your local irods documentation")
+
+
 def get_irods_session():
     import ssl
 
@@ -58,22 +54,23 @@ def get_irods_session():
         port= 1247,
         zone_name="gbiomed",
         user='u0089478',
-        password=keyring.get_password("mus", "irods_password"),
+        password=get_irods_password(),
         authentication_scheme="native",
-        encryption_algorithm = "AES-256-CBC",
-        encryption_salt_size = 8,
-        encryption_key_size = 32,
-        encryption_num_hash_rounds = 8,
-        user_name = "u0089478",
-        ssl_ca_certificate_file = "",
-        ssl_verify_server = "cert",
-        client_server_negotiation = "request_server_negotiation",
-        client_server_policy = "CS_NEG_REQUIRE",
-        default_resource = "default",
-        cwd = "/gbiomed/home",
+        encryption_algorithm="AES-256-CBC",
+        encryption_salt_size=8,
+        encryption_key_size=32,
+        encryption_num_hash_rounds=8,
+        user_name="u0089478",
+        ssl_ca_certificate_file="",
+        ssl_verify_server="cert",
+        client_server_negotiation="request_server_negotiation",
+        client_server_policy="CS_NEG_REQUIRE",
+        default_resource="default",
+        cwd="/gbiomed/home",
         **ssl_settings)
 
     return session
+
 
 # @cmd_irods.command("test")
 # def itest():
@@ -104,10 +101,50 @@ def get_irods_session():
 #     rv = [x.strip() for x in raw.strip().split("\n") if x.strip()]
 #     return rv
 
+# library(rirods)
+# create_irods("https://gbiomed.irods.icts.kuleuven.be/irods-http-api/0.2.0", overwrite=TRUE)
+# iauth("u0089478", "2kG2Mnk1ELK20XCto9AT8mlrau2j90JO")
+# # or alternatively:
+# # iauth("u0089478") # and provide the password when prompted
 
 # def check_in_ignore(filename):
 #     FILE_IGNORE_LIST = get_ignore_list()
 #     return any(fnmatch.fnmatch(filename, x) for x in FILE_IGNORE_LIST)
+
+# @cmd_irods.command('ls')
+def irods_ls():
+    ## attempt to use the REST API - but it does not seem to work :()
+    import requests
+    base_url = 'https://gbiomed.irods.icts.kuleuven.be/irods-http-api/0.4.0'
+    user = 'u0089478'
+    pssw = '2kG2Mnk1ELK20XCto9AT8mlrau2j90JO'
+
+    obj = '/gbiomed/home/BADS/mus/lab_data_archive/software_tool_to_manage_eln_mango_from_the_command_line/mus_software_development/pyproject.toml'
+
+    r = requests.post(f"{base_url}/authenticate", auth=(user, pssw))
+    token = r.text
+    print(token)
+    print(obj)
+    print(token)
+
+
+    md = {"mgs.project.description": 'what'}
+    nmd = []
+    for k, v in md.items():
+        nmd.append(dict(operation='add', attribute=k, value=v))
+
+    params = dict(op="modify_metadata",
+                  lpath=obj,
+                  operations=json.dumps(nmd))
+
+    print(json.dumps(nmd))
+    return
+    r = requests.get(f"{base_url}/data-objects",
+                      headers={"Authorization": f"Bearer {token}"},
+                      params=params)
+    print(r.url)
+    print(f"Error {r.status_code}: {r.text}")
+    print(r.headers)
 
 
 @cmd_irods.command("get")
@@ -371,6 +408,7 @@ def finish_file_upload():
     if not ctx.params.get('eln'):
         raise click.UsageError("You MUST also upload to ELN (-E)")
 
+    # Ensure all ELN data is present
     from mus.plugins.eln import ElnData
     env = get_env()
 
@@ -384,23 +422,28 @@ def finish_file_upload():
             "Missing ELN records, please run `mus eln tag-folder`")
 
     def sanitize(x):
+        "Sanitize folder name"
         x = x.lower().replace(' ', '_')
         x = re.sub(r'[^0-9A-Za-z_]', '', x)
         x = re.sub(r'_+', '_', x)
         return x
 
+    # determine irods target
+    irods_home = get_secret('irods_home').rstrip('/')
     irods_folder = "/".join([
-        env['irods_home'].rstrip('/'),
+        irods_home,
         'mus',
         sanitize(env['eln_project_name']),
         sanitize(env['eln_study_name']),
         sanitize(env['eln_experiment_name']),
     ])
 
+    # figure out what already is on irods
     irecs = {}
     for ir in get_irods_records(irods_folder):
         irecs[ir['name']] = ir
 
+    # determine which records still need uploading
     to_upload = []
     irods_paths = []
 
@@ -420,11 +463,14 @@ def finish_file_upload():
             basepath = os.path.dirname(rec.filename)
         if ip in irecs:
             if rec.checksum == irecs[ip]['checksum']:
+                # checksum matches - ignore
                 status[ip] = 'ok'
             else:
+                # checksum does not match - re-upload
                 status[ip] = 'fail'
                 to_upload.append(fp)
         else:
+            # does not seem to exists - upload
             status[ip] = "?"
             to_upload.append(fp)
 
@@ -438,13 +484,12 @@ def finish_file_upload():
         icmd('imkdir', '-p', irods_folder, )
         icmd('iput', '-K', '-f', *to_upload, irods_folder)
 
-    #create mango files
+    # create mango files
     for filename, mangourl in fn2irods.items():
         mangofile = filename + '.mango'
         with open(mangofile, 'wt') as F:
             F.write(mangourl)
 
-    #now do metadata
     env = get_env()
     irods_meta = {
         "mgs.project.path"              : basepath,
@@ -457,15 +502,21 @@ def finish_file_upload():
         "mgs.project.project_name"      : env['eln_project_name'],
         "mgs.project.study_id"          : env['eln_study_id'],
         "mgs.project.study_name"        : env['eln_study_name'],
-        "mgs.project.description": 'test1222123131',
+        "mgs.project.description"       : 'test1222123131',
     }
-    allpathP = []
-    for ip in irods_paths:
-        allpathP.append('-d')
-        allpathP.append(ip)
 
+    # assign metadata to the collection
     for key, value in irods_meta.items():
-        icmd('imeta', 'add', *allpathP, key, value) #f"{key}", f"'{value}'")
+        print(key, value)
+        icmd('imeta', 'set', '-C', irods_folder, key, value)
+
+    return
+
+    # this is so far the only thing I can get to work
+    # cross platform :(
+    for ip in irods_paths:
+        for key, value in irods_meta.items():
+            icmd('imeta', 'set', '-d', ip, key, value)
 
 
 def init_irods(cli):
