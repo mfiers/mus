@@ -154,7 +154,10 @@ def elncall(path, params=None, method='get', data=None):
     if method == 'get':
         req = requests.get(
             f"{URL}/{path}", headers=headers, params=params)
-        return req.json()
+        if req.ok:
+            return req.json()
+        else:
+            raise Exception(f"ELN error {req.status_code}: {req.text}")
     elif method == 'post':
         req = requests.post(
             f"{URL}/{path}", headers=headers,
