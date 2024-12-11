@@ -3,12 +3,14 @@ import os
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
+from textwrap import dedent
 from typing import Any, Dict
 
 import click
+import keyring
 import requests
 
-from mus.config import get_env
+from mus.config import get_env, get_secret
 from mus.hooks import register_hook
 
 
@@ -55,13 +57,6 @@ def convert_ipynb_to_pdf(filename):
 
 # Exceptions
 #
-class ElnApiKeyNotDefined(Exception):
-    pass
-
-
-class ElnURLNotDefined(Exception):
-    pass
-
 
 class ElnNoExperimentId(Exception):
     pass
@@ -85,34 +80,6 @@ def fix_eln_experiment_id(xid):
         return int(str(xid)[1:])
     else:
         return xid
-
-
-def get_eln_apikey() -> str:
-    """
-    Retrieve the ELN API key from the environment variables.
-
-    Raises:
-        ElnApiKeyNotDefined: If the key is not defined
-
-    Returns:
-        _type_: str
-    """
-    env = get_env()
-    if 'eln_apikey' in env:
-        return env['eln_apikey']
-    elif 'ELN_APIKEY' in os.environ:
-        return os.environ['ELN_APIKEY']
-    else:
-        raise ElnApiKeyNotDefined()
-
-
-def get_eln_url():
-    env = get_env()
-    if 'eln_url' in env:
-        return env['eln_url']
-    elif 'eln_url' in os.environ:
-        return os.environ['ELN_URL']
-    raise ElnURLNotDefined()
 
 
 def eln_filesection(experimentid, title: str):
@@ -165,8 +132,11 @@ def eln_file_upload(journal_id, filename, uploadname=None) -> None:
 
 
 def elncall(path, params=None, method='get', data=None):
-    APIKEY = get_eln_apikey()
-    URL = get_eln_url()
+    APIKEY = get_secret(
+        'eln_apikey',
+        'See: https://www.elabjournal.com/doc/GetanAPIToken.html')
+
+    URL = get_secret('eln_url', 'Base URL of ELN REST API')
 
     headers = {'Accept': 'application/json',
                'Authorization': APIKEY}

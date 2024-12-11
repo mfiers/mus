@@ -60,6 +60,7 @@ cli.add_command(files.findfile)
 cli.add_command(macro.cli_macro)
 cli.add_command(dbcli.db)
 cli.add_command(config.cmd_config)
+cli.add_command(config.cmd_secrets)
 cli.add_command(muslog.log)
 
 

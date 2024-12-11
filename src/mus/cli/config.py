@@ -2,6 +2,7 @@
 import json
 
 import click
+import keyring
 
 from mus.config import get_env, get_local_config, save_kv_to_local_config  # NOQA: E402
 
@@ -9,6 +10,7 @@ from mus.config import get_env, get_local_config, save_kv_to_local_config  # NOQ
 # CONFIGURATION
 @click.group("config")
 def cmd_config():
+    """Manage key/values in .env"""
     pass
 
 
@@ -38,3 +40,27 @@ def conf_show(json_output, local):
                 print(f"{k}\t{', '.join(v)}")
             else:
                 print(f"{k}\t{v}")
+
+
+# SECRETS - store in keychaing
+@click.group("secret")
+def cmd_secrets():
+    """Manage passwords & config in keychain"""
+    pass
+
+
+@cmd_secrets.command("set")
+@click.argument("key")
+@click.argument("val")
+def secret_set(key, val):
+    """Set key/val in the keychain"""
+    keyring.set_password("mus", key, val)
+
+
+
+@cmd_secrets.command("get")
+@click.argument("key")
+def secret_get(key):
+    """Get key from the keychain"""
+    print(keyring.get_password("mus", key))
+

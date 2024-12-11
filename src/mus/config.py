@@ -2,9 +2,13 @@
 import os
 from functools import lru_cache
 from pathlib import Path
+from textwrap import dedent
 from typing import Any, Dict
 
-from mus.exceptions import InvalidConfigFileEntry
+import click
+import keyring
+
+from mus.exceptions import MusInvalidConfigFileEntry, MusSecretNotDefined
 
 # Define a list of keys that are expected to be lists in the configuration.
 # These keys will be treated differently when processing the configuration file.
@@ -62,7 +66,7 @@ def load_single_env(fn):
                 # do not process empty lines!
                 continue
             if '=' not in line:
-                raise InvalidConfigFileEntry(line)
+                raise MusInvalidConfigFileEntry(line)
             key, value = line.split('=', 1)
             if key in LIST_KEYS:
                 rv[key.strip()] = [x.strip() for x in value.split(',')]
@@ -176,3 +180,39 @@ def save_kv_to_local_config(
             apply_keyval(k, v)
 
     save_env(conf, wd)
+
+
+def get_secret(name: str,
+               hint: str | None = None):
+    """Find the secret in the keyring or provide a useful error message"""
+
+    # check keyring
+    rv = keyring.get_password('mus', name)
+    if rv is not None:
+        return rv
+
+    # check environment
+    if name.upper() in os.environ:
+        return os.environ[name.upper()]
+
+    # not found!
+    if hint is None:
+        hint = ""
+    else:
+        hint = f"\n{hint}\n"
+
+    click.echo(dedent(
+        f"""
+        Please specify the {name} key.
+        {hint}
+        Please make available using:
+
+        `mus secret set {name} <VALUE>`
+
+        or in your environment:
+
+        `export {name.upper()}="<VALUE>"`
+
+        """))
+    raise MusSecretNotDefined(f"{name} not defined")
+
