@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, Union
 from uuid import uuid4
 
-import keyring
+from mus.config import get_keyring, get_secret
 
 lg = logging.getLogger(__name__)
 
@@ -31,16 +31,10 @@ class IrodsUploadError(Exception):
     pass
 
 
-def rungo(*cl, **kwargs):
-    os.environ['IRODS_USER_PASSWORD']\
-        = str(keyring.get_password("mus", "irods_password"))
-    P = sp.Popen(['gocmd'] + list(cl), **kwargs)
-    o, e = P.communicate()
-    return o
-
-
 def icmd(*cl, **kwargs):
-    prefix = keyring.get_password('mus', 'icmd_prefix')
+
+    prefix = get_keyring().get_password('mus', 'icmd_prefix')
+
     if prefix is None:
         prefix = []
     else:
@@ -54,6 +48,7 @@ def icmd(*cl, **kwargs):
 def get_irods_records(irods_folder):
     d = icmd('ils', '-L',  irods_folder, text=True,
              stdout=sp.PIPE, stderr=sp.PIPE).strip()
+
     # strip first line
     if '\n' not in d:
         return
@@ -81,6 +76,7 @@ def get_irods_records(irods_folder):
 
 @lru_cache(1)
 def get_irods_home():
+    return get_secret('irods_home', 'Base folder for all stored data')
     if "IRODS_HOME" not in os.environ:
         raise IrodsHomeNotDefined()
     return os.environ["IRODS_HOME"]

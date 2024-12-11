@@ -12,7 +12,7 @@ import keyring
 
 from mus.config import get_env, get_secret
 from mus.hooks import register_hook
-from mus.plugins.irods.util import get_irods_records, icmd, rungo
+from mus.plugins.irods.util import get_irods_records, icmd
 from mus.util.log import read_nonblocking_stdin
 
 lg = logging.getLogger(__name__)
@@ -38,38 +38,38 @@ def get_irods_password():
                       "See your local irods documentation")
 
 
-def get_irods_session():
-    import ssl
+# def get_irods_session():
+#     import ssl
 
-    from irods.session import iRODSSession
+#     from irods.session import iRODSSession
 
-    env_file = Path("~/.irods/irods_environment.json").expanduser()
+#     env_file = Path("~/.irods/irods_environment.json").expanduser()
 
-    ssl_context = ssl.create_default_context(
-        purpose=ssl.Purpose.SERVER_AUTH, cafile=None, capath=None, cadata=None
-    )
-    ssl_settings = {"ssl_context": ssl_context}
-    session = iRODSSession(
-        host= "gbiomed.irods.icts.kuleuven.be",
-        port= 1247,
-        zone_name="gbiomed",
-        user='u0089478',
-        password=get_irods_password(),
-        authentication_scheme="native",
-        encryption_algorithm="AES-256-CBC",
-        encryption_salt_size=8,
-        encryption_key_size=32,
-        encryption_num_hash_rounds=8,
-        user_name="u0089478",
-        ssl_ca_certificate_file="",
-        ssl_verify_server="cert",
-        client_server_negotiation="request_server_negotiation",
-        client_server_policy="CS_NEG_REQUIRE",
-        default_resource="default",
-        cwd="/gbiomed/home",
-        **ssl_settings)
+#     ssl_context = ssl.create_default_context(
+#         purpose=ssl.Purpose.SERVER_AUTH, cafile=None, capath=None, cadata=None
+#     )
+#     ssl_settings = {"ssl_context": ssl_context}
+#     session = iRODSSession(
+#         host= "gbiomed.irods.icts.kuleuven.be",
+#         port= 1247,
+#         zone_name="gbiomed",
+#         user='u0089478',
+#         password=get_irods_password(),
+#         authentication_scheme="native",
+#         encryption_algorithm="AES-256-CBC",
+#         encryption_salt_size=8,
+#         encryption_key_size=32,
+#         encryption_num_hash_rounds=8,
+#         user_name="u0089478",
+#         ssl_ca_certificate_file="",
+#         ssl_verify_server="cert",
+#         client_server_negotiation="request_server_negotiation",
+#         client_server_policy="CS_NEG_REQUIRE",
+#         default_resource="default",
+#         cwd="/gbiomed/home",
+#         **ssl_settings)
 
-    return session
+#     return session
 
 
 # @cmd_irods.command("test")
@@ -148,11 +148,11 @@ def irods_ls():
 
 
 @cmd_irods.command("get")
-@click.option("-f", "--force", is_flag=True,
-              default=False,
+@click.option("-f", "--force", is_flag=True, default=False,
               help="Force overwrite existing files",)
 @click.argument("filename", nargs=-1)
 def irods_get(filename, force):
+
     def get_mango_path(url):
         url = url.split("data-object/view")[1]
         return url
@@ -170,9 +170,15 @@ def irods_get(filename, force):
         target = Path(_filename).name[:-6]
         fulltarget = Path(str(_filename)[:-6])
         lg.warning(f"getting {target}")
-        with open(_filename) as F:
-            md = json.load(F)
-            url = md["url"]
+        with open(_filename, 'rt') as F:
+            try:
+                # older style mango json
+                md = json.load(F)
+                url = get_mango_path(md["url"])
+            except json.decoder.JSONDecodeError:
+                # just the url
+                F.seek(0)
+                url = F.read().strip()
 
         expected = Path(url).name
         assert expected == target
@@ -180,7 +186,7 @@ def irods_get(filename, force):
         if (not force) and fulltarget.exists():
             lg.warning(f"Not overwriting {target}, use `-f`")
         else:
-            rungo('get', get_mango_path(url), '.', '-K', )
+            icmd('iget', url, '.', '-K', *cmd )
 
 
 # @cli.command("upload")
