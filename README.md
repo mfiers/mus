@@ -17,12 +17,20 @@ If you want to add plugins later:
 pipx upgrade "git+ssh://git@github.com/mfiers/mus.git#egg=mus[dev]"
 ```
 
-## Development install
+### Development install
 
 git clone and then:
 
 ```
 pipx install -e .[all]
+```
+
+### Keyring
+
+`mus` uses [keyring](https://github.com/jaraco/keyring) to store secret. On a headless(?) linux server you may need to set:
+
+```
+export PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
 ```
 
 ## ELN plugin
@@ -35,14 +43,14 @@ Note: for automatic conversion of ipynb to pdf, you need to install `pandoc` and
 
 To use the ELN plugin, you need to get an API key from your ELN, see here: https://www.elabjournal.com/doc/GetanAPIToken.html
 
+
+
 Set the values as follows (in a `$HOME/.env` file):
 
 ```
 cd $HOME
-mus config set eln_apikey [replace.with.your.eln.key]
-mus config set eln_url https://vib.elabjournal.com/api/v1/
-# ensure 0600 permissions
-chmod go-rwX ~/.env
+mus secret set eln_apikey 2c1085d09bf4266975fda14593108a77
+mus secret set eln_url https://vib.elabjournal.com/api/v1/
 ```
 
 ### Usage
