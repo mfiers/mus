@@ -13,7 +13,7 @@ from mus.util.log import ColorLogger  # NOQA: E402
 # Set up color logging
 # colorama.init(autoreset=True)
 
-logging.setLoggerClass(ColorLogger)
+# logging.setLoggerClass(ColorLogger)
 lg = logging.getLogger('mus')
 lg.setLevel(logging.WARNING)
 logging.getLogger('asyncio').setLevel(logging.WARNING)
