@@ -7,7 +7,6 @@ from textwrap import dedent
 from typing import Any, Dict
 
 import click
-import keyring
 import requests
 
 from mus.config import get_env, get_secret
