@@ -76,7 +76,8 @@ MANDATORY_ELN_RECORDS = '''
 '''.split()
 
 
-def finish_file_upload():
+def finish_file_upload(message):
+
     ctx = click.get_current_context()
     if not ctx.params.get('irods'):
         return
@@ -107,11 +108,12 @@ def finish_file_upload():
     irods_home = get_secret('irods_home').rstrip('/')
     irods_folder = "/".join([
         irods_home,
-        'mus',
         sanitize(env['eln_project_name']),
         sanitize(env['eln_study_name']),
         sanitize(env['eln_experiment_name']),
     ])
+
+    print(irods_folder)
 
     # figure out what already is on irods
     irecs = {}
@@ -120,19 +122,18 @@ def finish_file_upload():
 
     # determine which records still need uploading
     to_upload = []
-    irods_paths = []
 
     status = {}
     basepath = None
     fn2irods = {}
+    sha256sums = {}
 
     for i, (rec, metadata) in enumerate(zip(ElnData.records, ElnData.metadata)):
         ip = os.path.basename(rec.filename)
         fp = Path(rec.filename).resolve()
-        irods_paths.append(
-            f"{irods_folder}/{ip}"
-        )
+
         fn2irods[rec.filename] = f"{irods_folder}/{ip}"
+        sha256sums[rec.filename] = rec.checksum
 
         if i == 0:
             basepath = os.path.dirname(rec.filename)
@@ -151,7 +152,6 @@ def finish_file_upload():
 
         metadata['irods_status'] = status[ip]
         metadata['irods_url'] = f"{irods_folder}/{ip}"
-
 
     fstat = Counter(status.values())
     click.echo(f"Irods files not uploaded yet             : {fstat['not found']}")
@@ -181,18 +181,15 @@ def finish_file_upload():
         "mgs.project.project_name"      : env['eln_project_name'],
         "mgs.project.study_id"          : env['eln_study_id'],
         "mgs.project.study_name"        : env['eln_study_name'],
-        "mgs.project.description"       : 'test1222123131',
+        "mgs.project.description"       : message,
     }
 
+    # to be optimized - very slow - but works on a mac :(
     # assign metadata to the collection
-    for key, value in irods_meta.items():
-        icmd('imeta', 'set', '-C', irods_folder, key, value)
+    for fn in fn2irods:
+        ip = fn2irods[fn]
+        icmd('imeta', 'set', '-d', ip, "mgs.project.sha256", sha256sums[fn])
 
-    return
-
-    # this is so far the only thing I can get to work
-    # cross platform :(
-    for ip in irods_paths:
         for key, value in irods_meta.items():
             icmd('imeta', 'set', '-d', ip, key, value)
 
