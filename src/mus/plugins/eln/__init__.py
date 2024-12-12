@@ -9,7 +9,6 @@ from typing import Any, Dict, List
 import logging
 
 import click
-import keyring
 from fpdf import FPDF
 
 from mus.cli.files import tag_one_file
@@ -251,7 +250,10 @@ def check_upload_anyway(fn, md):
     return ext in always_upload_to_eln
 
 
-def finish_file_upload():
+def finish_file_upload(message):
+    """
+    message is the user provided message
+    """
     ctx = click.get_current_context()
     if not ctx.params.get('eln'):
         return

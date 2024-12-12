@@ -41,7 +41,7 @@ def filetag(filename: List[str],
     for fn in filename:
         tag_one_file(fn, message_)
 
-    call_hook('finish_filetag')
+    call_hook('finish_filetag', message=message)
 
 
 
