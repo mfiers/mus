@@ -49,7 +49,7 @@ Set the values as follows (in a `$HOME/.env` file):
 
 ```
 cd $HOME
-mus secret set eln_apikey 2c1085d09bf4266975fda14593108a77
+mus secret set eln_apikey <SECRET ELN API KEY>
 mus secret set eln_url https://vib.elabjournal.com/api/v1/
 ```
 
