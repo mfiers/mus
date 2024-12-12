@@ -97,14 +97,27 @@ Note, when uploading files, `*.ipynb` files will automatically be converted to t
 
 ## iRODs plugin
 
-This plugin relies on the ELN plugin up & running. Without ELN metadata on project, study and experiment it will not run.
+This plugin relies on the ELN plugin being up & running. Without ELN metadata on project, study and experiment it will not run.
 
 
 ### Prerequisites
 
-* Install irods gocommands - https://github.com/cyverse/gocommands
+* Install Irods i-commands & make sure you are authenticated.
 
+```
+# Base URL for web links to irods objects
+mus secret set irods_web 'https://mango.kuleuven.be/data-object/view'
+# Base URL to store data on irods
+mus secret set irods_home '/gbiomed/home/BADS/mus'
+```
 
+### MacOS
+
+you can run the icommands in docker, configure `mus` using:
+
+```
+mus secret set icmd_prefix "docker run --platform linux/amd64  -i --rm -v $HOME:$HOME -v $HOME/.irods/:/root/.irods ghcr.io/utrechtuniversity/docker_icommands:0.2"
+```
 
 
 ## History logging
