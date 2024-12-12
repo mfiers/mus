@@ -6,13 +6,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
+import logging
 
 import click
 import keyring
 from fpdf import FPDF
 
 from mus.cli.files import tag_one_file
-from mus.config import get_env, get_local_config, save_env, save_kv_to_local_config
+from mus.config import get_env, save_kv_to_local_config, get_secret
 from mus.db import Record, get_db_connection
 from mus.hooks import register_hook
 from mus.plugins.eln.util import (
@@ -28,6 +29,9 @@ from mus.plugins.eln.util import (
     get_stamped_filename,
 )
 
+lg = logging.getLogger(__name__)
+
+
 
 @dataclass
 class ELNDATA:
@@ -38,7 +42,6 @@ class ELNDATA:
     filesets: List[List[str]] = field(default_factory=list)
     metadata: List[Dict[str, Any]] = field(default_factory=list)
     records: List[Any] = field(default_factory=list)
-
 
 ElnData = ELNDATA()
 
@@ -113,7 +116,7 @@ def init_eln(cli):
     cli.add_command(cmd_eln)
 
 
-class PDF(FPDF):
+class METADATAPDF(FPDF):
     def print_title(self, title, rest, font='Arial'):
         self.set_font('Arial', 'B', 16)
         self.set_fill_color(232, 204, 139)
@@ -124,7 +127,7 @@ class PDF(FPDF):
 
     def print_fileset(self, fset, mdata, font='Arial'):
         self.set_fill_color(150, 193, 217)
-        self.set_font('Arial', 'B', 12)
+        self.set_font(font, 'B', 12)
         fn = os.path.basename(mdata["filename"])
         self.cell(0, 6, fn, 1, 1, 'L', 1)
         self.ln()
@@ -136,11 +139,20 @@ class PDF(FPDF):
                 if k != mdata["filename"]])
             self.multi_cell(0, 5, fs)
             self.ln()
+
+        if 'irods_url' in mdata:
+            self.set_font(font, 'U', 10)
+            irods_web = get_secret('irods_web').rstrip('/')
+            url = irods_web + mdata['irods_url']
+            self.cell(0, 5, 'Uploaded to Irods',
+                      link=url)
+            self.ln()
+
         self.set_font(font, '', 10)
         mf = '\n'.join(
             f'- {k.capitalize().replace("_", " ")}: {v}'
             for (k, v) in sorted(mdata.items())
-            if k != 'filename'
+            if k not in ['filename', 'irods_url', 'irods_status']
         )
         self.multi_cell(0, 5, mf)
         self.ln()
@@ -228,6 +240,17 @@ def eln_save_record(record):
         ElnData.filesets.append(fileset)
 
 
+always_upload_to_eln = ['ipynb', 'pdf', 'png']
+def check_upload_anyway(fn, md):
+    """should the file be uploaded anyhow?"""
+    if not 'irods_url' in md:
+        # was not uploaded to irods - then upload
+        return True
+
+    ext = fn.rsplit('.', 1)[-1]
+    return ext in always_upload_to_eln
+
+
 def finish_file_upload():
     ctx = click.get_current_context()
     if not ctx.params.get('eln'):
@@ -235,10 +258,11 @@ def finish_file_upload():
 
     dry_run = ctx.params.get('dry_run')
 
-    metapdf = PDF()
+    metapdf = METADATAPDF()
     metapdf.add_page()
     metapdf.print_title(ElnData.title, ElnData.rest)
     metapdf_filename = get_stamped_filename('eln_metadata', 'pdf')
+
     for fset, mdata in zip(ElnData.filesets, ElnData.metadata):
         metapdf.print_fileset(fset, mdata)
 
@@ -248,13 +272,18 @@ def finish_file_upload():
         journal_id = eln_create_filesection(
             experimentid=ElnData.experimentid,
             title=ElnData.title)
+
         eln_file_upload(journal_id=journal_id,
                         filename=metapdf_filename)
         i = 1
-        for fset in ElnData.filesets:
+        for fset, mdata in zip(ElnData.filesets, ElnData.metadata):
             for fn in fset:
-                i += 1
-                eln_file_upload(journal_id, fn)
+                if check_upload_anyway(fn, mdata):
+                    eln_file_upload(journal_id, fn)
+                    i += 1
+                else:
+                    lg.warning(f"not uploading to eln {fn}")
+
         click.echo(f"Uploaded {i} files to ELN")
     else:
         i = 0
@@ -267,75 +296,6 @@ def finish_file_upload():
 register_hook('plugin_init', init_eln)
 register_hook('save_record', eln_save_record)
 register_hook('prepare_record', add_eln_data_to_record)
-register_hook('finish_filetag', finish_file_upload)
+register_hook('finish_filetag', finish_file_upload, priority=1)
 
 
-
-
-# @eln.command()
-# def projects():
-#     inf = elncall("projects")
-#     assert isinstance(inf, dict)
-#     print(f"# No projects: {inf['recordCount']}")
-#     for rec in inf["data"]:
-#         print(f"{rec['projectID']}\t{rec['name']}")
-
-
-# @eln.command()
-# @click.option("-p", "--projectID", type=int)
-# @click.option("-n", "--name")
-# def studies(projectid, name):
-#     inf = elncall("studies", dict(searchName=name, projectID=projectid))
-#     assert isinstance(inf, dict)
-#     print(f"# No studies: {inf['recordCount']}")
-#     for rec in inf["data"]:
-#         print(f"{rec['studyID']}\t{rec['name']}")
-
-
-# @eln.command()
-# @click.option("-s", "--studyID", type=int)
-# @click.option("-n", "--name")
-# def create_experiment(studyid, name):
-#     print(studyid, name)
-#     inf = elncall(
-#         "experiments",
-#         dict(studyID=int(studyid), name=name),
-#         method="post",
-#     )
-#     print(inf)
-
-
-# @eln.command()
-# @click.option("-s", "--studyID", type=int)
-# @click.option("-n", "--name")
-# @click.option("-r", "--raw", is_flag=True, default=False)
-# def experiments(studyid, name, raw):
-#     inf = elncall(
-#         "experiments",
-#         {
-#             "searchName": name,
-#             "studyID": studyid,
-#         },
-#     )
-#     assert isinstance(inf, dict)
-#     if raw:
-#         print(json.dumps(inf, indent=4))
-
-#     print(f"# No experiments: {inf['recordCount']}")
-#     for k in inf["data"]:
-#         print(f"{k['experimentID']}\t{k['name']}")
-
-
-# @eln.command("sections")
-# @click.option("-x", "--experimentID", type=int, required=True)
-# @click.option("-r", "--raw", is_flag=True, default=False)
-# def eln_sections(experimentid, raw):
-#     inf = elncall(f"experiments/{experimentid}/sections")
-#     if raw:
-#         print(json.dumps(inf, indent=4))
-#         return
-#     print(f"# No sections: {inf['recordCount']}")
-#     for rec in inf["data"]:
-#         print(
-#             f"{rec['order']}\t{rec['sectionType']}\t{rec['expJournalID']}\t{rec['sectionHeader']}"
-#         )

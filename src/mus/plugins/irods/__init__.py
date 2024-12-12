@@ -189,214 +189,6 @@ def irods_get(filename, force):
             icmd('iget', url, '.', '-K', *cmd )
 
 
-# @cli.command("upload")
-# @click.option(
-#     "-x",
-#     "--experimentID",
-#     type=int,
-#     required=False,
-#     help="The ELN ID of the experiment to associate to the upload",
-# )
-# @click.option(
-#     "-d", "--description", help="Short description of the uploaded file(s)"
-# )
-# @click.option(
-#     "-f",
-#     "--force",
-#     is_flag=True,
-#     default=False,
-#     help="Force upload if file exists and is not the same",
-# )
-# @click.option(
-#     "-N",
-#     "--no-eln",
-#     is_flag=True,
-#     default=False,
-#     help="Do not post a comment to ELN",
-# )
-# @click.option(
-#     "-D",
-#     "--doublecheck",
-#     is_flag=True,
-#     default=False,
-#     help="Double-check by redownloading and checking sha256",
-# )
-# @click.option(
-#     "-n",
-#     "--dryrun",
-#     is_flag=True,
-#     default=False,
-#     help="Dry-run - do not upload but check if files are correctly uploaded",
-# )
-# @click.argument("filename", nargs=-1)
-# def irods_upload(
-#     filename, experimentid, description, force, doublecheck, no_eln, dryrun
-# ):
-#     """
-#     Upload object(s) to mango.
-
-#     Returns:
-#     None
-#     """
-#     if experimentid is None:
-#         xpfile = Path("./eln.exp.json")
-#         if not xpfile.exists():
-#             raise click.UsageError("No experiment id defined")
-#         with open(xpfile) as F:
-#             expdata = json.load(F)
-#             experimentid = int(expdata["experiment_id"])
-
-#     experimentid = fix_eln_experiment_id(experimentid)
-
-#     up = []
-#     no_errors = 0
-#     pdf_files = []
-
-#     def convert_ipynb_to_pdf(filename):
-#         # if the file is an ipython notebook - attempt to convert to PDF
-#         # datestamp - on the day level. I don't think we need second resolutiono
-#         # here - one file per day should be enough...
-#         stamp = datetime.now().strftime("%Y%m%d")
-#         pdf_filename = filename.replace(".ipynb", f".{stamp}.pdf")
-#         lg.warning(
-#             f"Converting ipython {os.path.basename(filename)} "
-#             + f"notebook to PDF...  (This might take a while)  "
-#         )
-#         lg.warning(f"Target: {pdf_filename} ")
-#         from nbconvert import PDFExporter
-
-#         pdf_data, resources = PDFExporter().from_filename(filename)
-#         with open(pdf_filename, "wb") as F:
-#             F.write(pdf_data)
-#         return pdf_filename
-
-#     def create_pointer_file(upinfo):
-#         local_filename = upinfo["path"] + ".mango"
-#         with open(local_filename, "w") as F:
-#             json.dump(upinfo, F, default=json_serial)
-
-#     def upload_one_file(
-#         _filename,
-#         create_pointer: bool = True,
-#     ):
-#         nonlocal no_errors, up, pdf_files, dryrun
-#         upinfo = None
-#         try:
-#             upinfo = irods.irods_upload(
-#                 _filename,
-#                 experimentid,
-#                 description=description,
-#                 doublecheck=doublecheck,
-#                 force=force,
-#                 dryrun=dryrun,
-#             )
-
-#             if upinfo is None:
-#                 assert dryrun
-#                 return
-
-#             up.append(upinfo)
-#             lg.info(f"{upinfo['nice_path']} | {upinfo['status']}")
-#             if create_pointer:
-#                 create_pointer_file(upinfo)
-
-#         except FileExistsError:
-#             no_errors += 1
-#             lg.error(
-#                 f"Error uploading {_filename}, "
-#                 + "file exists, checksum differs"
-#             )
-#         except irods.IrodsUploadError as e:
-#             no_errors += 1
-#             lg.error(f"Upload error {_filename}: {e}")
-
-#         # special operation for ipynb files, pdf convert and upload
-#         # these as well.
-#         if (not dryrun) and _filename.endswith(".ipynb"):
-#             if upinfo is not None and upinfo["status"] != "exists, chksum ok":
-#                 pdf_file = convert_ipynb_to_pdf(_filename)
-#                 upload_one_file(pdf_file)
-#                 pdf_files.append(pdf_file)
-
-#     for _candidate in filename:
-#         if os.path.isfile(_candidate):
-#             upload_one_file(_candidate)
-#         else:
-#             lg.debug(f"Upload folder {_candidate}")
-#             lg.warning("not creating pointers when uploading folders")
-#             # Travers all the branch of a specified path
-#             for root, dirs, files in os.walk(_candidate, topdown=True):
-#                 dirs[:] = [d for d in dirs if not check_in_ignore(d)]
-#                 files[:] = [f for f in files if not check_in_ignore(f)]
-#                 for f in files:
-#                     upload_one_file(
-#                         os.path.join(root, f), create_pointer=False
-#                     )
-
-#     if no_errors > 0:
-#         lg.error("Errors were encountered while uploading!")
-
-#     if len(up) == 0:
-#         if not no_eln:
-#             lg.info("Nothing was uploaded, no message to ELN")
-#         return
-
-#     if description is not None:
-#         eln_title = f"Mango upload: {description}".strip()
-#     else:
-#         eln_title = "Mango upload"
-
-#     message = dedent(
-#         f"""
-#             <b>From:</b> {up[0]['server']}<br>
-#             <b>Path:</b> {os.getcwd()}<br>
-#             <b>Date:</b> {up[0]['upload_date']}<p>
-
-#             <b>Files:</b>
-#         """
-#     )
-
-#     umess = []
-#     for u in up:
-#         umess.append(
-#             (
-#                 f"""<a href="{u['url']}">{u['nice_path']}</a>"""
-#                 + '<span style="color: darkgreen; font-size:70%;">'
-#                 + f"""({u['status']}, sha256: {u['sha256'][:12]}..)</span>"""
-#             )
-#         )
-
-#     eln_message = (
-#         message
-#         + "<ul>"
-#         + "\n".join([f"<li>{x}</li>" for x in umess])
-#         + "</ul>"
-#     )
-
-#     if no_eln:
-#         print(eln_title)
-#         print(eln_message)
-#     else:
-#         eln_comment(experimentid, eln_title, eln_message)
-
-#         if pdf_files:
-#             eln_file_title = f"Ipython notebook upload: {description}".strip()
-#             eln_file_title = eln_file_title.strip().strip(":")
-#             file_journal_id = eln_filesection(experimentid, eln_file_title)
-#             for pdf in pdf_files:
-#                 eln_file_upload(file_journal_id, pdf)
-
-
-# from darkmoon.cli import dm_env, obsidian  # noqa E402
-
-# cli.add_command(obsidian.obs)
-# cli.add_command(dm_env.tag)
-# cli.add_command(dm_env.dm_env)
-
-
-# def main_cli():
-#     cli()
-
 MANDATORY_ELN_RECORDS = '''
     eln_experiment_name
     eln_experiment_id
@@ -457,7 +249,7 @@ def finish_file_upload():
     basepath = None
     fn2irods = {}
 
-    for i, rec in enumerate(ElnData.records):
+    for i, (rec, metadata) in enumerate(zip(ElnData.records, ElnData.metadata)):
         ip = os.path.basename(rec.filename)
         fp = Path(rec.filename).resolve()
         irods_paths.append(
@@ -473,17 +265,21 @@ def finish_file_upload():
                 status[ip] = 'ok'
             else:
                 # checksum does not match - re-upload
-                status[ip] = 'fail'
+                status[ip] = 'checksum mismatch'
                 to_upload.append(fp)
         else:
             # does not seem to exists - upload
-            status[ip] = "?"
+            status[ip] = "not found"
             to_upload.append(fp)
 
+        metadata['irods_status'] = status[ip]
+        metadata['irods_url'] = f"{irods_folder}/{ip}"
+
+
     fstat = Counter(status.values())
-    click.echo(f"Irods files not uploaded yet             : {fstat['?']}")
+    click.echo(f"Irods files not uploaded yet             : {fstat['not found']}")
     click.echo(f"Irods uploaded, checksum ok, skip        : {fstat['ok']}")
-    click.echo(f"Irods uploaded, checksum fail, overwrite : {fstat['fail']}")
+    click.echo(f"Irods uploaded, checksum fail, overwrite : {fstat['checksum mismatch']}")
 
     if len(to_upload) > 0:
         # ensure target folder is there
@@ -513,7 +309,6 @@ def finish_file_upload():
 
     # assign metadata to the collection
     for key, value in irods_meta.items():
-        print(key, value)
         icmd('imeta', 'set', '-C', irods_folder, key, value)
 
     return
