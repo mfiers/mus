@@ -187,7 +187,6 @@ def get_keyring():
     import keyring
     import platform
     from keyring.errors import KeyringError
-    from keyring_pass import PasswordStoreBackend
 
     if platform.system() == "Linux":
         # Not ideal - but fast, plaintext
