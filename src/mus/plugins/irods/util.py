@@ -330,32 +330,3 @@ def irods_upload(
         file_meta["nice_path"] = filename
 
     return dict(file_meta)
-
-
-# def irods_ls():
-
-#     session = get_irods_session()
-
-#     IRODS_HOME = get_irods_home()
-#     coll = session.collections.get(IRODS_HOME)
-
-#     print(dir(coll))
-
-#     def pn(s):
-#         for sc in s.subcollections:
-#             print(sc.name)
-
-#     #pn(coll)
-
-#     return
-#     print(coll.subcollections)
-#     for item in coll.subcollections[0].walk():
-#         print(item)
-#         break
-#         print(f"{item[0]} contains {len(item[1])} subcollections and" +
-#               f"{len(item[2])} data objects.")
-#         if len(item[1]) == 1:
-#             print("The subcollection is:", item[1][0])
-#         if len(item[2]) == 1:
-#             print("The data object is:", item[2][0])
-#         print()
