@@ -42,14 +42,14 @@ def conf_show(json_output, local):
                 print(f"{k}\t{v}")
 
 
-# SECRETS - store in keychaing
-@click.group("secret")
-def cmd_secrets():
-    """Manage passwords & config in keychain"""
-    pass
+# # SECRETS - store in keychaing
+# @click.group("secret")
+# def cmd_secrets():
+#     """Manage passwords & config in keychain"""
+#     pass
 
 
-@cmd_secrets.command("set")
+@cmd_config.command("secret-set")
 @click.argument("key")
 @click.argument("val")
 def secret_set(key, val):
@@ -59,7 +59,7 @@ def secret_set(key, val):
 
 
 
-@cmd_secrets.command("get")
+@cmd_config.command("secret-get")
 @click.argument("key")
 def secret_get(key):
     """Get key from the keychain"""

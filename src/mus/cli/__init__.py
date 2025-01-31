@@ -57,15 +57,14 @@ from mus.cli import log as muslog  # NOQA: E402
 cli.add_command(search.cmd_search)
 cli.add_command(files.filetag)
 cli.add_command(files.findfile)
-cli.add_command(macro.cli_macro)
+# cli.add_command(macro.cli_macro)
 cli.add_command(dbcli.db)
 cli.add_command(config.cmd_config)
-cli.add_command(config.cmd_secrets)
 cli.add_command(muslog.log)
 
 
 # TODO: need an automated way to specify and load plugins
-# for now, jus timport
+# for now, just import
 import mus.plugins.eln  # NOQA: E402
 import mus.plugins.irods  # NOQA: E402
 
