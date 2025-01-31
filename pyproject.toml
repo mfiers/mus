@@ -21,7 +21,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest"]
 eln = ["nbconvert", "ipython", "requests", "fpdf"]
-all = ["nbconvert", "ipython", "requests", "fpdf", "pytest"]
+all = ["nbconvert", "ipython", "requests", "fpdf"]
 
 [project.scripts]
 mus = "mus.cli:cli"
@@ -36,8 +36,3 @@ build-backend = "hatchling.build"
 
 [tool.hatch.version]
 path = "src/mus/__about__.py"
-
-#[tool.hatch.build.targets.sdist]
-#include = [
-#    "*.tex"
-#]
