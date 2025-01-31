@@ -7,6 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 import logging
+import textwrap
+
 
 import click
 from fpdf import FPDF
@@ -31,7 +33,6 @@ from mus.plugins.eln.util import (
 lg = logging.getLogger(__name__)
 
 
-
 @dataclass
 class ELNDATA:
     experimentid: int = -1
@@ -41,6 +42,7 @@ class ELNDATA:
     filesets: List[List[str]] = field(default_factory=list)
     metadata: List[Dict[str, Any]] = field(default_factory=list)
     records: List[Any] = field(default_factory=list)
+
 
 ElnData = ELNDATA()
 
@@ -104,10 +106,10 @@ def init_eln(cli):
 
     # and an optional experiment id
     muslog.log.params.append(
-        click.Option(['-X', '--eln-experimentid'], type=int,
+        click.Option(['-x', '--eln-experimentid'], type=int,
                     help='ELN experiment ID'))
     files.filetag.params.append(
-        click.Option(['-X', '--eln-experimentid'], type=int,
+        click.Option(['-x', '--eln-experimentid'], type=int,
                     help='ELN experiment ID'))
 
     # add the command to tag a folder to the click
@@ -143,8 +145,14 @@ class METADATAPDF(FPDF):
             self.set_font(font, 'U', 10)
             irods_web = get_secret('irods_web').rstrip('/')
             url = irods_web + mdata['irods_url']
-            self.cell(0, 5, 'Uploaded to Irods',
-                      link=url)
+            # url_text = "\n".join(
+            #     textwrap.wrap(
+            #         mdata["irods_url"], width=80,
+            #         initial_indent='- Irods: ',
+            #         subsequent_indent='    ')
+            #     )
+            # self.multi_cell(0, 5, url_text)
+            self.cell(0, 5, '- Irods link', link=url)
             self.ln()
 
         self.set_font(font, '', 10)
