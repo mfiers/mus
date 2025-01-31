@@ -144,3 +144,4 @@ env_backup
 # No mango files
 *.toml.mango
 test/tmp/*
+eln_metadata.*.pdf
