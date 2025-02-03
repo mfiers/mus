@@ -91,5 +91,4 @@ def get_message(message: List[str] | str | None,
         _ = click.edit(message_)
         assert isinstance(_, str)
         message_ = _.strip()
-
     return message_
