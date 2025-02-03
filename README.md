@@ -72,7 +72,7 @@ mus eln tag-folder -x [eln-experiment-id]
 
 If you've done this, the stored experiment-id will automatically be used when required.
 
-You can also directly store a message on ELN using `mus log` with the `-e` flag:
+You can also directly store a message on ELN using `mus log` with the `-E` flag:
 
 ```
 mus log -E 'this is a test message'
@@ -87,24 +87,18 @@ mus log -x [eln-experiment-id] -E 'this is a test message'
 It is possible to upload a file to ELN using `mus tag`, again with the `-e` flag:
 
 ```
-mus tag -e [filename] with a short title or description
-```
-
-Or, if the folder was not tagged yet:
-
-
-```
-mus tag -e  -x [eln-experiment-id] [filename] with a short title or description
+mus eln upload -m "short title or description" [filename] [filename] ...
 ```
 
 Note, when uploading files, `*.ipynb` files will automatically be converted to timestamped PDF files, and these will be uploaded to ELN as well.
 
 ## iRODs plugin
 
-This plugin relies on the ELN plugin being up & running. Without ELN metadata on project, study and experiment it will not run.
+This plugin relies on the ELN plugin being up & running. Without ELN metadata on project, study and experiment it will not upload anything.
 
+Files that are uploaded to irods will not be uploaded to ELN (except pdf, ipynb and png files). Instead a small pdf with a link to irods will be uploaded to ELN.
 
-### Prerequisites
+### Prerequisites & configuration
 
 - Install Irods i-commands & make sure you are authenticated.
 
@@ -128,7 +122,7 @@ mus secret-set icmd_prefix "docker run --platform linux/amd64  -i --rm -v $HOME:
 Uploading files to IRODS can be done using:
 
 ```
-mus tag -EI -m 'comment about file' [FILENAME]...
+mus irods upload -m 'comment about file' [FILENAME]...
 ```
 
 This uploads the file to iRODs and thenmakes a record on the elabjournal with the iRODS link. You must have a elabjournal experiment id for this to work (so, have executed `mus eln tag-folder -x [eln-experiment-id]`)
