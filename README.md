@@ -46,14 +46,11 @@ Note: for automatic conversion of ipynb to pdf, you need to install `pandoc` and
 
 ### Install
 
-### Get credentials
+### Credentials
 
 To use the ELN plugin, you need to get an API key from your ELN, see here: https://www.elabjournal.com/doc/GetanAPIToken.html
 
-
-
-Set the values as follows (in a `$HOME/.env` file):
-
+Store login credentials & base url:
 ```
 cd $HOME
 mus secret-set eln_apikey <SECRET ELN API KEY>
@@ -78,13 +75,13 @@ If you've done this, the stored experiment-id will automatically be used when re
 You can also directly store a message on ELN using `mus log` with the `-e` flag:
 
 ```
-mus log -e 'this is a test message'
+mus log -E 'this is a test message'
 ```
 
 If you've tagged the folder with eln data, then the experiment id will be picked up from that data, otherwise you need to specify the eln experiment id"
 
 ```
-mus log -x [eln-experiment-id] 'this is a test message'
+mus log -x [eln-experiment-id] -E 'this is a test message'
 ```
 
 It is possible to upload a file to ELN using `mus tag`, again with the `-e` flag:
