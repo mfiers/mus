@@ -7,6 +7,7 @@ import socket
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
+from typing import List
 
 import click
 import keyring
@@ -65,6 +66,22 @@ def irods_get(filename, force):
             lg.warning(f"Not overwriting {target}, use `-f`")
         else:
             icmd('iget', url, '.', '-K', *cmd )
+
+
+@click.command("irods-upload")
+@click.option('-e', '--editor', is_flag=True,
+              default=False, help='Always drop into editor')
+@click.option("-m", "--message", help="Mandatory message to attach to files")
+@click.argument("filename", nargs=-1)
+@click.pass_context
+def irods_upload_shortcut(
+            ctx,
+            filename: List[str],
+            message: str | None,
+            editor: bool):
+    from mus.cli.files import filetag
+    ctx.invoke(filetag, filename=filename, message=message,
+               editor=editor, irods=True, eln=True)
 
 
 MANDATORY_ELN_RECORDS = '''
@@ -230,6 +247,7 @@ def finish_file_upload(message):
 def init_irods(cli):
     from mus.cli import files
     cli.add_command(cmd_irods)
+    cli.add_command(irods_upload_shortcut)
     files.filetag.params.append(
         click.Option(['-I', '--irods'], is_flag=True,
                      default=False, help='Save file to iRODS'))
