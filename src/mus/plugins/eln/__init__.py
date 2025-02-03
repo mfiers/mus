@@ -247,7 +247,7 @@ def eln_save_record(record):
         ElnData.filesets.append(fileset)
 
 
-always_upload_to_eln = ['ipynb', 'pdf', 'png']
+always_upload_to_eln = ['ipynb', 'pdf', 'png', 'xlsx', 'xls', 'doc', 'docx']
 def check_upload_anyway(fn, md):
     """should the file be uploaded anyhow?"""
     if not 'irods_url' in md:
@@ -292,7 +292,7 @@ def finish_file_upload(message):
                     eln_file_upload(journal_id, fn)
                     i += 1
                 else:
-                    lg.warning(f"not uploading to eln {fn}")
+                    lg.info(f"not uploading to eln {fn}")
 
         click.echo(f"Uploaded {i} files to ELN")
     else:

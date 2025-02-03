@@ -21,7 +21,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest"]
 eln = ["nbconvert", "ipython", "requests", "fpdf"]
-all = ["nbconvert", "ipython", "requests", "fpdf"]
+irods = ["python-irodsclient", "mango-mdschema"]
+all = ["nbconvert", "ipython", "requests", "fpdf", "python-irodsclient", "mango-mdschema"]
+
 
 [project.scripts]
 mus = "mus.cli:cli"
@@ -36,3 +38,10 @@ build-backend = "hatchling.build"
 
 [tool.hatch.version]
 path = "src/mus/__about__.py"
+
+#[tool.hatch.build.targets.wheel]
+#only-include = ["src/mus/plugins/irods/data", "md_schema.json"]
+
+[tool.hatch.build.targets.wheel.sources]
+"src" = ""
+"scripts" = "mypackage/scripts"

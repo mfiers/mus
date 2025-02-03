@@ -1,0 +1,110 @@
+{
+    "schema_name": "project",
+    "version": "7.0.0",
+    "status": "published",
+    "properties": {
+        "study_name": {
+            "title": "Study name",
+            "type": "text",
+            "placeholder": "",
+            "pattern": "",
+            "required": true,
+            "help": "Input type: text"
+        },
+        "project_name": {
+            "title": "Project name",
+            "type": "text",
+            "placeholder": "",
+            "pattern": "",
+            "required": true,
+            "help": "Should correspond to elabjournal project name"
+        },
+        "project_id": {
+            "title": "Project id",
+            "type": "integer",
+            "maximum": "999999999999",
+            "placeholder": "",
+            "pattern": "",
+            "required": true,
+            "help": "Input type: integer"
+        },
+        "server": {
+            "title": "Server",
+            "type": "text",
+            "placeholder": "",
+            "pattern": "",
+            "required": true,
+            "help": "Input type: text"
+        },
+        "study_id": {
+            "title": "Study id",
+            "type": "integer",
+            "maximum": "999999999999",
+            "placeholder": "",
+            "pattern": "",
+            "required": true,
+            "help": "Input type: integer"
+        },
+        "experiment_name": {
+            "title": "Experiment name",
+            "type": "text",
+            "placeholder": "",
+            "pattern": "",
+            "required": true,
+            "help": "Short experiment name"
+        },
+        "experiment_id": {
+            "title": "Experiment id",
+            "type": "integer",
+            "maximum": "999999999",
+            "placeholder": "",
+            "pattern": "",
+            "required": true,
+            "help": "Should be a number like - 1289712"
+        },
+        "collaborator": {
+            "title": "Collaborator",
+            "type": "text",
+            "placeholder": "Collaborator",
+            "pattern": "",
+            "required": true,
+            "repeatable": true,
+            "help": "Input type: text"
+        },
+        "path": {
+            "title": "Path",
+            "type": "text",
+            "placeholder": "",
+            "pattern": "",
+            "required": true,
+            "help": "Input type: text"
+        },
+        "upload_date": {
+            "title": "Upload date",
+            "type": "date",
+            "placeholder": "",
+            "pattern": "",
+            "required": true,
+            "help": "Input type: date"
+        },
+        "description": {
+            "title": "Description",
+            "type": "textarea",
+            "placeholder": "",
+            "pattern": "",
+            "help": "Input type: textarea"
+        },
+        "sha256": {
+            "title": "Sha256 Checksum",
+            "type": "text",
+            "placeholder": "",
+            "pattern": "",
+            "required": true,
+            "help": "Input type: text"
+        }
+    },
+    "edited_by": "u0089478",
+    "realm": "BADS",
+    "title": "metadata schema for bdslab projects",
+    "parent": ""
+}

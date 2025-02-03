@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import platform
 import re
 import socket
 from collections import Counter
@@ -113,8 +114,6 @@ def finish_file_upload(message):
         sanitize(env['eln_experiment_name']),
     ])
 
-    print(irods_folder)
-
     # figure out what already is on irods
     irecs = {}
     for ir in get_irods_records(irods_folder):
@@ -181,17 +180,51 @@ def finish_file_upload(message):
         "mgs.project.project_name"      : env['eln_project_name'],
         "mgs.project.study_id"          : env['eln_study_id'],
         "mgs.project.study_name"        : env['eln_study_name'],
+        "mgs.project.collaborator"      : env['eln_collaborator'],
         "mgs.project.description"       : message,
     }
 
-    # to be optimized - very slow - but works on a mac :(
-    # assign metadata to the collection
-    for fn in fn2irods:
-        ip = fn2irods[fn]
-        icmd('imeta', 'set', '-d', ip, "mgs.project.sha256", sha256sums[fn])
 
-        for key, value in irods_meta.items():
-            icmd('imeta', 'set', '-d', ip, key, value)
+    if platform.system() == 'Darwin':
+        # to be optimized - very slow - but works on a mac :(
+        # assign metadata to the collection
+
+        for fn in fn2irods:
+            ip = fn2irods[fn]
+            icmd('imeta', 'set', '-d', ip, "mgs.project.sha256", sha256sums[fn])
+
+            for key, value in irods_meta.items():
+                icmd('imeta', 'set', '-d', ip, key, value)
+    else:
+
+        import importlib.resources as resources
+
+        from irods.session import iRODSSession
+        from mango_mdschema import Schema
+
+        # fix metadata keys - remove mgs.project. prefix to match schema
+        im2 = {k.replace('mgs.project.', ''): v for k, v in irods_meta.items()}
+
+        # load mango schema
+        schema_trav = resources.files("mus")\
+            .joinpath("plugins/irods/data/project-7.0.0-published.json")
+        with resources.as_file(schema_trav) as F:
+            schema = Schema(F)
+
+        # connect to irods
+        try:
+            env_file = os.environ['IRODS_ENVIRONMENT_FILE']
+        except KeyError:
+            env_file = os.path.expanduser('~/.irods/irods_environment.json')
+
+        ssl_settings = {}
+        with iRODSSession(irods_env_file=env_file, **ssl_settings) as session:
+            for fn in fn2irods:
+                shasum = sha256sums[fn]
+                im2['sha256'] = shasum
+                ip = fn2irods[fn]
+                obj = session.data_objects.get(ip)
+                schema.apply(obj, im2)
 
 
 def init_irods(cli):
