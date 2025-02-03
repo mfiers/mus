@@ -52,6 +52,22 @@ def cmd_eln():
     """Elabjournal commands"""
 
 
+@cmd_eln.command("upload")
+@click.option('-e', '--editor', is_flag=True,
+              default=False, help='Always drop into editor')
+@click.option("-m", "--message", help="Mandatory message to attach to files")
+@click.argument("filename", nargs=-1)
+@click.pass_context
+def eln_upload_shortcut(
+            ctx,
+            filename: List[str],
+            message: str | None,
+            editor: bool):
+    "Upload a file to ELN"
+    from mus.cli.files import filetag
+    ctx.invoke(filetag, filename=filename, message=message,
+               editor=editor, irods=False, eln=True)
+
 @cmd_eln.command("tag-folder")
 @click.option("-x", "--experimentID", type=int, required=True)
 def eln_tag(experimentid):
