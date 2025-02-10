@@ -53,8 +53,8 @@ To use the ELN plugin, you need to get an API key from your ELN, see here: https
 Store login credentials & base url:
 ```
 cd $HOME
-mus secret-set eln_apikey <SECRET ELN API KEY>
-mus secret-set eln_url https://vib.elabjournal.com/api/v1/
+mus config secret-set eln_apikey <SECRET ELN API KEY>
+mus config secret-set eln_url https://vib.elabjournal.com/api/v1/
 ```
 
 
@@ -104,9 +104,9 @@ Files that are uploaded to irods will not be uploaded to ELN (except pdf, ipynb 
 
 ```
 # Base URL for web links to irods objects
-mus secret-set irods_web 'https://mango.kuleuven.be/data-object/view'
+mus config secret-set irods_web 'https://mango.kuleuven.be/data-object/view'
 # Base URL to store data on irods
-mus secret-set irods_home '/gbiomed/home/BADS/mus'
+mus config secret-set irods_home '/gbiomed/home/BADS/mus'
 ```
 
 ### MacOS
