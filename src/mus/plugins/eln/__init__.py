@@ -100,8 +100,7 @@ def eln_update():
     save_kv_to_local_config(data=expdata_2)
 
 
-# Hooks
-
+# Hooks into the main mus infrastructure
 
 def init_eln(cli):
     """Add ELN options to the log and tag commands."""
@@ -133,6 +132,7 @@ def init_eln(cli):
 
 
 class METADATAPDF(FPDF):
+    """PDF class to store metadata for ELN upload."""
     def print_title(self, title, rest, font='Arial'):
         self.set_font('Arial', 'B', 16)
         self.set_fill_color(232, 204, 139)
@@ -160,13 +160,6 @@ class METADATAPDF(FPDF):
             self.set_font(font, 'U', 10)
             irods_web = get_secret('irods_web').rstrip('/')
             url = irods_web + mdata['irods_url']
-            # url_text = "\n".join(
-            #     textwrap.wrap(
-            #         mdata["irods_url"], width=80,
-            #         initial_indent='- Irods: ',
-            #         subsequent_indent='    ')
-            #     )
-            # self.multi_cell(0, 5, url_text)
             self.cell(0, 5, '- Irods link', link=url)
             self.ln()
 
@@ -181,7 +174,11 @@ class METADATAPDF(FPDF):
 
 
 def eln_save_record(record):
-    """Post a log to the ELN."""
+    """
+    Post a log to the ELN.
+
+    """
+
     ctx = click.get_current_context()
     if not ctx.params.get('eln'):
         return
@@ -245,8 +242,7 @@ def eln_save_record(record):
                 # tag as well :)
                 tag_one_file(pdf_filename, message=record.message)
 
-
-        # store message
+        # store the message as well.
         metadata = {
             k: getattr(record, k)
             for k in ['host', 'cwd', 'user', 'filename',
@@ -263,10 +259,11 @@ def eln_save_record(record):
 
 
 always_upload_to_eln = ['ipynb', 'pdf', 'png', 'xlsx', 'xls', 'doc', 'docx']
+
 def check_upload_anyway(fn, md):
     """should the file be uploaded anyhow?"""
     if not 'irods_url' in md:
-        # was not uploaded to irods - then upload
+        # was not uploaded to irods - then upload to ELN
         return True
 
     ext = fn.rsplit('.', 1)[-1]
