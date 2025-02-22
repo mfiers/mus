@@ -68,7 +68,7 @@ def irods_get(filename, force):
             icmd('iget', url, '.', '-K', *cmd )
 
 
-@click.command("irods-upload")
+@cmd_irods.command("upload")
 @click.option('-e', '--editor', is_flag=True,
               default=False, help='Always drop into editor')
 @click.option("-m", "--message", help="Mandatory message to attach to files")
