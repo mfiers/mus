@@ -142,6 +142,6 @@ mus.config.gz
 env_backup
 
 # No mango files
-*.toml.mango
+*.mango
 test/tmp/*
 eln_metadata.*.pdf
