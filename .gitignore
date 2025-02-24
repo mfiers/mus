@@ -145,3 +145,5 @@ env_backup
 *.mango
 test/tmp/*
 eln_metadata.*.pdf
+test.*.ipynb.pdf
+test.*.pdf
