@@ -20,9 +20,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest"]
-eln = ["nbconvert", "ipython", "requests", "fpdf"]
+eln = ["nbconvert", "ipython", "requests"]
 irods = ["python-irodsclient", "mango-mdschema"]
-all = ["nbconvert", "ipython", "requests", "fpdf", "python-irodsclient", "mango-mdschema"]
+all = ["nbconvert", "ipython", "requests", "python-irodsclient", "mango-mdschema"]
 
 
 [project.scripts]
