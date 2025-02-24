@@ -7,10 +7,10 @@ import textwrap
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from textwrap import dedent
 from typing import Any, Dict, List
 
 import click
-from fpdf import FPDF
 
 from mus.cli.files import tag_one_file
 from mus.config import get_env, get_secret, save_kv_to_local_config
@@ -30,6 +30,8 @@ from mus.plugins.eln.util import (
 )
 
 lg = logging.getLogger(__name__)
+
+ALWAYS_UPLOAD_TO_ELN = ['ipynb', 'pdf', 'png', 'xlsx', 'xls', 'doc', 'docx']
 
 
 @dataclass
@@ -67,6 +69,7 @@ def eln_upload_shortcut(
     from mus.cli.files import filetag
     ctx.invoke(filetag, filename=filename, message=message,
                editor=editor, irods=False, eln=True)
+
 
 @cmd_eln.command("tag-folder")
 @click.option("-x", "--experimentID", type=int, required=True)
@@ -131,47 +134,24 @@ def init_eln(cli):
     cli.add_command(cmd_eln)
 
 
-class METADATAPDF(FPDF):
-    """PDF class to store metadata for ELN upload."""
-    def print_title(self, title, rest, font='Arial'):
-        self.set_font('Arial', 'B', 16)
-        self.set_fill_color(232, 204, 139)
-        self.cell(0, 6, f' {title}', 1, 1, 'L', 1)
-        self.set_font(font, '', 10)
-        self.multi_cell(0, 5, rest)
-        self.ln()
+def format_filedata(fset, mdata):
+    fn = os.path.basename(mdata["filename"])
 
-    def print_fileset(self, fset, mdata, font='Arial'):
-        self.set_fill_color(150, 193, 217)
-        self.set_font(font, 'B', 12)
-        fn = os.path.basename(mdata["filename"])
-        self.cell(0, 6, fn, 1, 1, 'L', 1)
-        self.ln()
-        if len(fset) > 1:
-            self.set_font(font, 'B', 10)
-            fs = '\n'.join([
-                f'{os.path.basename(k)}'
-                for k in fset
-                if k != mdata["filename"]])
-            self.multi_cell(0, 5, fs)
-            self.ln()
+    # # don't know if this should happen??
+    # assert len(fset) <= 1
+    # if len(fset) > 1:
+    #     fs = '\n'.join([
+    #         f'{os.path.basename(k)}'
+    #         for k in fset
+    #         if k != mdata["filename"]])
 
-        if 'irods_url' in mdata:
-            self.set_font(font, 'U', 10)
-            irods_web = get_secret('irods_web').rstrip('/')
-            url = irods_web + mdata['irods_url']
-            self.cell(0, 5, '- Irods link', link=url)
-            self.ln()
-
-        self.set_font(font, '', 10)
-        mf = '\n'.join(
-            f'- {k.capitalize().replace("_", " ")}: {v}'
-            for (k, v) in sorted(mdata.items())
-            if k not in ['filename', 'irods_url', 'irods_status']
-        )
-        self.multi_cell(0, 5, mf)
-        self.ln()
-
+    rv = f"<li><b>{fn}</b>"
+    if 'irods_url' in mdata:
+        irods_web = get_secret('irods_web').rstrip('/')
+        url = irods_web + mdata['irods_url']
+        rv += f" <a href='{url}'>[IRODS]</a>"
+    rv += f" <span style='font-size: small'>(shasum: {mdata['checksum']})</span></li>"
+    return rv
 
 def eln_save_record(record):
     """
@@ -236,8 +216,6 @@ def eln_save_record(record):
         if record.filename.endswith('.ipynb'):
             pdf_filename = convert_ipynb_to_pdf(record.filename)
             if pdf_filename is not None:
-                # pdf_convert = True
-                fileset.append(pdf_filename)
 
                 # tag as well :)
                 tag_one_file(pdf_filename, message=record.message)
@@ -258,7 +236,7 @@ def eln_save_record(record):
         ElnData.filesets.append(fileset)
 
 
-always_upload_to_eln = ['ipynb', 'pdf', 'png', 'xlsx', 'xls', 'doc', 'docx']
+
 
 def check_upload_anyway(fn, md):
     """should the file be uploaded anyhow?"""
@@ -267,7 +245,7 @@ def check_upload_anyway(fn, md):
         return True
 
     ext = fn.rsplit('.', 1)[-1]
-    return ext in always_upload_to_eln
+    return ext in ALWAYS_UPLOAD_TO_ELN
 
 
 def finish_file_upload(message):
@@ -280,39 +258,42 @@ def finish_file_upload(message):
 
     dry_run = ctx.params.get('dry_run')
 
-    metapdf = METADATAPDF()
-    metapdf.add_page()
-    metapdf.print_title(ElnData.title, ElnData.rest)
-    metapdf_filename = get_stamped_filename('eln_metadata', 'pdf')
+    filelist = []
+    mheader = ""
+    files_to_eln = 0  # only if they are not in irods
 
-    for fset, mdata in zip(ElnData.filesets, ElnData.metadata):
-        metapdf.print_fileset(fset, mdata)
+    for i, (fset, mdata) in enumerate(zip(ElnData.filesets, ElnData.metadata)):
+        filelist.append(format_filedata(fset, mdata))
+        for fn in fset:
+            if check_upload_anyway(fn, mdata):
+                files_to_eln += 1
 
-    metapdf.output(metapdf_filename, 'F')
+        if i == 0:
+            mheader = dedent(f"""
+                Upload by {mdata['user']}
+                from {mdata['host']}:{mdata['cwd']}
+                at {mdata['upload_time']}.
+            """).strip()
 
-    if not dry_run:
+    mbody = mheader + "\n\n<ol>" + "\n".join(filelist) + "</ol>"
+
+    eln_comment(ElnData.experimentid,
+                ElnData.title,
+                mbody)
+
+    if not dry_run and files_to_eln > 0:
         journal_id = eln_create_filesection(
             experimentid=ElnData.experimentid,
-            title=ElnData.title)
+            title=ElnData.title + ' files',)
 
-        eln_file_upload(journal_id=journal_id,
-                        filename=metapdf_filename)
-        i = 1
+        i = 0
         for fset, mdata in zip(ElnData.filesets, ElnData.metadata):
             for fn in fset:
                 if check_upload_anyway(fn, mdata):
+                    print(fn)
                     eln_file_upload(journal_id, fn)
                     i += 1
-                else:
-                    lg.info(f"not uploading to eln {fn}")
-
         click.echo(f"Uploaded {i} files to ELN")
-    else:
-        i = 0
-        for fset in ElnData.filesets:
-            for fn in fset:
-                i += 1
-        click.echo(f"Would have uploaded {i} files to ELN (dry-run)")
 
 
 register_hook('plugin_init', init_eln)

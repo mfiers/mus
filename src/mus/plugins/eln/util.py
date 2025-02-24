@@ -25,7 +25,7 @@ def convert_ipynb_to_pdf(filename):
     # if the file is an ipython notebook - attempt to convert to PDF
     # datestamp - on the day level. I don't think we need second resolutiono
     # here - one file per day should be enough...
-    pdf_filename = get_stamped_filename(filename, 'pdf')
+    pdf_filename = get_stamped_filename(filename, 'ipynb.pdf')
 
     click.echo(f"Converting ipython {os.path.basename(filename)} ")
     click.echo(f"Target: {pdf_filename} ")
