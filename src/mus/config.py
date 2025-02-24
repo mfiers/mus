@@ -184,20 +184,22 @@ def save_kv_to_local_config(
 
 @lru_cache(1)
 def get_keyring():
-    import keyring
     import platform
+
+    import keyring
     from keyring.errors import KeyringError
 
-    if platform.system() == "Linux":
+    # always use plaintext - for now
+    #if platform.system() == "Linux":
         # Not ideal - but fast, plaintext
-        from keyrings.alt.file import PlaintextKeyring
-        try:
-            return PlaintextKeyring()
-        except KeyringError as e:
-            print(f"Error configuring PlaintextKeyring: {e}")
-            raise
-    else:
-        return keyring
+    from keyrings.alt.file import PlaintextKeyring
+    try:
+        return PlaintextKeyring()
+    except KeyringError as e:
+        print(f"Error configuring PlaintextKeyring: {e}")
+        raise
+    #else:
+    #    return keyring
 
 
 def get_secret(name: str,
