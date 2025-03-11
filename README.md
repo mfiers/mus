@@ -59,7 +59,7 @@ Store login credentials & base url:
 ```
 cd $HOME
 mus config secret-set eln_apikey <SECRET ELN API KEY>
-mus config secret-set eln_url https://vib.elabjournal.com/api/v1/
+mus config secret-set eln_url <ELN_URL>
 ```
 
 
@@ -108,14 +108,14 @@ Files that are uploaded to irods will not be uploaded to ELN (except pdf, ipynb 
 - Install Irods i-commands & make sure you are authenticated.
 
 ```
-# Base URL for web links to irods objects
-mus config secret-set irods_web 'https://mango.kuleuven.be/data-object/view'
+# Base URL for mango links to irods objects
+mus config secret-set irods_web '<IRODS_WEB_BASE>'
 
 # Base URL to store data on irods
-mus config secret-set irods_home '/gbiomed/home/BADS/mus'
+mus config secret-set irods_home '<IRODS_HOME_FOLDER>'
 
 # Irods group name to own uploaded files
-mus config secret-set irods_group BADS
+mus config secret-set irods_group '<IRODS_GROUP>'
 
 ```
 
@@ -142,53 +142,3 @@ This uploads the file to iRODs and thenmakes a record on the elabjournal with th
 
 (deprecated at the moment)
 
-### Bash:
-
-```bash
-export MUS_USER='mf'
-export MUS_HOST='vsc'
-export MUS_LAST_MACRO=""
-export PATH="${HOME}/project/mus:${PATH}"
-alias m="# "
-
-
-function MUS_PROMPT_COMMAND {
-    lasthist=$(history 1)
-    # ( echo "$? ${lasthist}" | mus-hist & )
-    _rex=" *[0-9]+ +m "
-    if [[ "$lasthist" =~ $_rex  ]]
-	then
-        # this prevents rerunning the macro if
-        # a command does not end up in the history (eg, empty command)
-        if [[ "${lasthist}" != "${MUS_LAST_MACRO}" ]]
-        then
-            echo "$lasthist" | mus macro stdin-exe;
-            export MUS_LAST_MACRO="${lasthist}"
-        fi
-    fi
-}
-export PROMPT_COMMAND=MUS_PROMPT_COMMAND
-```
-
-
-### zsh:
-
-```zsh
-function MUS_PROMPT_COMMAND {
-    lasthist=`history -1`
-    # ( echo "$? ${lasthist}" | mus-hist & )
-    _rex=" *[0-9]+ +m "
-    if [[ "$lasthist" =~ $_rex  ]]
-	then
-        # this prevents rerunning the macro if
-        # a command does not end up in the history (eg, empty command)
-        if [[ "${lasthist}" != "${MUS_LAST_MACRO}" ]]
-        then
-            echo "$lasthist" | mus macro stdin-exe;
-            export MUS_LAST_MACRO="${lasthist}"
-        fi
-    fi
-}
-
-precmd_functions+=(MUS_PROMPT_COMMAND)
-```
