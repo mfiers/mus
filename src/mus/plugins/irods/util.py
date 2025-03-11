@@ -40,11 +40,11 @@ def icmd(*cl, **kwargs):
     else:
         prefix = prefix.split()
 
-    P = sp.Popen(prefix + list(cl), **kwargs)
+    P = sp.Popen(prefix + list(map(str, cl)), **kwargs)
     o, e = P.communicate()
     if P.returncode != 0:
-        lg.critical("irods fail running")
-        lg.critical(" ".join(cl))
+        lg.critical("irods fails running")
+        lg.critical(" ".join(map(str, cl)))
         exit(-1)
     return o
 
