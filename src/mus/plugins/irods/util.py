@@ -42,6 +42,10 @@ def icmd(*cl, **kwargs):
 
     P = sp.Popen(prefix + list(cl), **kwargs)
     o, e = P.communicate()
+    if P.returncode != 0:
+        lg.critical("irods fail running")
+        lg.critical(" ".join(cl))
+        exit(-1)
     return o
 
 
