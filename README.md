@@ -110,8 +110,13 @@ Files that are uploaded to irods will not be uploaded to ELN (except pdf, ipynb 
 ```
 # Base URL for web links to irods objects
 mus config secret-set irods_web 'https://mango.kuleuven.be/data-object/view'
+
 # Base URL to store data on irods
 mus config secret-set irods_home '/gbiomed/home/BADS/mus'
+
+# Irods group name to own uploaded files
+mus config secret-set irods_group BADS
+
 ```
 
 ### MacOS
