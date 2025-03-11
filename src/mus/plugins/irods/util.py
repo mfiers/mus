@@ -31,7 +31,7 @@ class IrodsUploadError(Exception):
     pass
 
 
-def icmd(*cl, **kwargs):
+def icmd(*cl, allow_fail=False, **kwargs):
 
     prefix = get_keyring().get_password('mus', 'icmd_prefix')
 
@@ -42,7 +42,7 @@ def icmd(*cl, **kwargs):
 
     P = sp.Popen(prefix + list(map(str, cl)), **kwargs)
     o, e = P.communicate()
-    if P.returncode != 0:
+    if (not allow_fail) and P.returncode != 0:
         lg.critical("irods fails running")
         lg.critical(" ".join(map(str, cl)))
         exit(-1)
@@ -50,7 +50,7 @@ def icmd(*cl, **kwargs):
 
 
 def get_irods_records(irods_folder):
-    d = icmd('ils', '-L',  irods_folder, text=True,
+    d = icmd('ils', '-L',  irods_folder, allow_fail=True, text=True,
              stdout=sp.PIPE, stderr=sp.PIPE).strip()
 
     # strip first line
