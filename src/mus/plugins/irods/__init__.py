@@ -12,6 +12,7 @@ from typing import List
 import click
 import keyring
 
+import mus.exceptions
 from mus.config import get_env, get_secret
 from mus.hooks import register_hook
 from mus.plugins.irods.util import get_irods_records, icmd
@@ -106,6 +107,11 @@ def finish_file_upload(message):
     if not ctx.params.get('eln'):
         raise click.UsageError("You MUST also upload to ELN (-E)")
 
+    try:
+        irods_group = get_secret('irods_group').strip()
+    except mus.exceptions.MusSecretNotDefined:
+        raise click.UsageError("please specify 'irods_group' in secrets")
+
     # Ensure all ELN data is present
     from mus.plugins.eln import ElnData
     env = get_env()
@@ -196,10 +202,13 @@ def finish_file_upload(message):
             icmd('iput', '-K', '-f', '-r', *tu_dir, irods_folder)
             lg.info(f"Uploaded folders")
 
+        icmd('ichmod', '-r', 'own', irods_group, irods_folder)
+        lg.info(f"Set permissions for {irods_group} on {irods_folder}")
+
     # create mango files & force doublechecking
     for filename, mangourl in fn2irods.items():
         icmd('ichksum', '-K', '-r', mangourl)
-
+        lg.info("ichksum ok")
         mangofile = filename + '.mango'
         with open(mangofile, 'wt') as F:
             F.write(mangourl)
@@ -220,18 +229,15 @@ def finish_file_upload(message):
         "mgs.project.description"       : message,
     }
 
-
     if platform.system() == 'Darwin':
         # to be optimized - very slow - but works on a mac :(
         # assign metadata to the collection
-
         for fn in fn2irods:
             ip = fn2irods[fn]
             icmd('imeta', 'set', '-d', ip, "mgs.project.sha256", sha256sums[fn])
 
             for key, value in irods_meta.items():
                 icmd('imeta', 'set', '-d', ip, key, value)
-
     else:
 
         import importlib.resources as resources
