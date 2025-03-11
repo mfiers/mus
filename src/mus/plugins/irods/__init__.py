@@ -94,6 +94,10 @@ MANDATORY_ELN_RECORDS = '''
 '''.split()
 
 
+#def upload_one_file()
+
+
+
 def finish_file_upload(message):
 
     ctx = click.get_current_context()
@@ -177,10 +181,12 @@ def finish_file_upload(message):
     if len(to_upload) > 0:
         # ensure target folder is there
         icmd('imkdir', '-p', irods_folder, )
-        icmd('iput', '-K', '-f', *to_upload, irods_folder)
+        icmd('iput', '-K', '-f', '-r', *to_upload, irods_folder)
 
-    # create mango files
+    # create mango files & force doublechecking
     for filename, mangourl in fn2irods.items():
+        icmd('ichksum', '-K', '-r', mangourl)
+
         mangofile = filename + '.mango'
         with open(mangofile, 'wt') as F:
             F.write(mangourl)
@@ -212,6 +218,7 @@ def finish_file_upload(message):
 
             for key, value in irods_meta.items():
                 icmd('imeta', 'set', '-d', ip, key, value)
+
     else:
 
         import importlib.resources as resources
@@ -240,8 +247,19 @@ def finish_file_upload(message):
                 shasum = sha256sums[fn]
                 im2['sha256'] = shasum
                 ip = fn2irods[fn]
-                obj = session.data_objects.get(ip)
-                schema.apply(obj, im2)
+
+                if Path(fn).is_dir():
+                    # recursive apply
+                    def recursive_apply(coll):
+                        for rip in coll.subcollections:
+                            recursive_apply(rip)
+                        for rip in coll.data_objects:
+                            im2['sha256'] = 'n.d. (folder upload)'
+                            schema.apply(rip, im2)
+                    recursive_apply(session.collections.get(ip))
+                else:
+                    obj = session.data_objects.get(ip)
+                    schema.apply(obj, im2)
 
 
 def init_irods(cli):
