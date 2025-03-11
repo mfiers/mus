@@ -179,9 +179,22 @@ def finish_file_upload(message):
     click.echo(f"Irods uploaded, checksum fail, overwrite : {fstat['checksum mismatch']}")
 
     if len(to_upload) > 0:
+        tu_dir, tu_file = [], []
+
+        for tu in to_upload:
+            if Path(tu).is_dir():
+                tu_dir.append(tu)
+            else:
+                tu_file.append(tu)
+
         # ensure target folder is there
-        icmd('imkdir', '-p', irods_folder, )
-        icmd('iput', '-K', '-f', '-r', *to_upload, irods_folder)
+        icmd('imkdir', '-p', irods_folder)
+        if tu_file:
+            icmd('iput', '-K', '-f', *tu_file, irods_folder)
+            lg.info(f"Uploaded files")
+        if tu_dir:
+            icmd('iput', '-K', '-f', '-r', *tu_dir, irods_folder)
+            lg.info(f"Uploaded folders")
 
     # create mango files & force doublechecking
     for filename, mangourl in fn2irods.items():
