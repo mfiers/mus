@@ -40,6 +40,8 @@ pipx install -e .[all]
 export KEYRING_CRYPTFILE_PASSWORD="very secure password"
 ```
 
+(Note: replace 'a very secure password' with something that is actually secure)
+
 ## ELN plugin
 
 Note: for automatic conversion of ipynb to pdf, you need to install `pandoc` and `texlive-xetex`.
