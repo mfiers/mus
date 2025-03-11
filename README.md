@@ -24,6 +24,9 @@ Or simply update to the latest version:
 pipx upgrade "git+ssh://git@github.com/mfiers/mus.git#egg=mus[dev]"
 ```
 
+**Note: You need at least python 3.10+**
+
+
 ### Development install
 
 git clone and then:
