@@ -3,6 +3,7 @@ name = "mus"
 authors = [
     { name="Mark Fiers", email="mark.fiers@kuleuven.be" }, ]
 readme = "README.md"
+description = "Set of random utilities of MF"
 requires-python = ">=3.8"
 classifiers = [
     "Programming Language :: Python :: 3",
