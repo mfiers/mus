@@ -39,7 +39,7 @@ def icmd(*cl, allow_fail=False, **kwargs):
         prefix = []
     else:
         prefix = prefix.split()
-
+    print('exec', " ".join(map(str, cl)))
     P = sp.Popen(prefix + list(map(str, cl)), **kwargs)
     o, e = P.communicate()
     if (not allow_fail) and P.returncode != 0:
@@ -60,23 +60,34 @@ def get_irods_records(irods_folder):
     d = d.split("\n", 1)[1]
     ls = d.split("\n")
 
+    # TODO: convert this to irodspython
+
+    while True:
+        # filter out folders - which I expect at the end
+        # starting with 'C-'
+        if ls[-1].strip().startswith('C-'):
+            ls = ls[:-1]
+        else:
+            break
+
     i = 0
     while i < len(ls)-1:
         l1, l2 = ls[i].split(), ls[i+1].split()
+
         try:
             checksum = l2[0].split(":")[1]
             checksum = base64.b64decode(checksum).hex()
         except:
-            print('error')
-            print(l1)
-            print(l2)
-            exit()
+            #skip this record
+            i += 2
+            continue
         yield dict(
             name=l1[-1],
             path=irods_folder + '/' + l2[-1],
-            checksum=checksum,
-        )
+            checksum=checksum)
+
         i += 2
+
 
 @lru_cache(1)
 def get_irods_home():
