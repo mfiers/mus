@@ -153,6 +153,7 @@ def format_filedata(fset, mdata):
     rv += f" <span style='font-size: small'>(shasum: {mdata['checksum']})</span></li>"
     return rv
 
+
 def eln_save_record(record):
     """
     Post a log to the ELN.
@@ -176,6 +177,10 @@ def eln_save_record(record):
         raise ElnNoExperimentId("No experiment ID given")
 
     message = record.message.strip()
+
+    # for debugging - do not store anything on ELN
+    DEBUG_SKIP_ELN = message == 'NO_ELN'
+
     if message.count('\n') == 0:
         title = message
         rest = ''
@@ -195,7 +200,8 @@ def eln_save_record(record):
         lmessage += ['</ul>', '', rest]
 
         message = "\n".join(lmessage)
-        eln_comment(experimentid, title, message)
+        if not DEBUG_SKIP_ELN:
+            eln_comment(experimentid, title, message)
         return
     else:
         # remember everything, to ultimately store all files
@@ -236,8 +242,6 @@ def eln_save_record(record):
         ElnData.filesets.append(fileset)
 
 
-
-
 def check_upload_anyway(fn, md):
     """should the file be uploaded anyhow?"""
     if not 'irods_url' in md:
@@ -253,6 +257,7 @@ def finish_file_upload(message):
     message is the user provided message
     """
     ctx = click.get_current_context()
+
     if not ctx.params.get('eln'):
         return
 
@@ -261,6 +266,9 @@ def finish_file_upload(message):
     filelist = []
     mheader = ""
     files_to_eln = 0  # only if they are not in irods
+
+    # for debugging - do not store anything on ELN
+    DEBUG_SKIP_ELN = message == 'NO_ELN'
 
     for i, (fset, mdata) in enumerate(zip(ElnData.filesets, ElnData.metadata)):
         filelist.append(format_filedata(fset, mdata))
@@ -277,11 +285,13 @@ def finish_file_upload(message):
 
     mbody = mheader + "\n\n<ol>" + "\n".join(filelist) + "</ol>"
 
-    eln_comment(ElnData.experimentid,
-                ElnData.title,
-                mbody)
+    if not DEBUG_SKIP_ELN:
+        eln_comment(ElnData.experimentid,
+                    ElnData.title,
+                    mbody)
 
-    if not dry_run and files_to_eln > 0:
+    if not dry_run and files_to_eln > 0 and (not DEBUG_SKIP_ELN):
+
         journal_id = eln_create_filesection(
             experimentid=ElnData.experimentid,
             title=ElnData.title + ' files',)
