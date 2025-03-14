@@ -31,7 +31,7 @@ class IrodsUploadError(Exception):
     pass
 
 
-def icmd(*cl, allow_fail=False, **kwargs):
+def icmd(*cl, allow_fail=False, process_error=None, **kwargs):
 
     prefix = get_keyring().get_password('mus', 'icmd_prefix')
 
@@ -39,9 +39,17 @@ def icmd(*cl, allow_fail=False, **kwargs):
         prefix = []
     else:
         prefix = prefix.split()
-    print('exec', " ".join(map(str, cl)))
+
+    if process_error is not None:
+        kwargs['stderr'] = sp.PIPE
+        kwargs['text'] = True
+
     P = sp.Popen(prefix + list(map(str, cl)), **kwargs)
     o, e = P.communicate()
+
+    if process_error is not None:
+        process_error(e)
+
     if (not allow_fail) and P.returncode != 0:
         lg.critical("irods fails running")
         lg.critical(" ".join(map(str, cl)))
@@ -135,7 +143,11 @@ def get_irods_session():
 
     from irods.session import iRODSSession  # to communicate with ManGO
 
-    env_file = Path("~/.irods/irods_environment.json").expanduser()
+    # connect to irods
+    try:
+        env_file = os.environ['IRODS_ENVIRONMENT_FILE']
+    except KeyError:
+        env_file = Path("~/.irods/irods_environment.json").expanduser()
 
     ssl_context = ssl.create_default_context(
         purpose=ssl.Purpose.SERVER_AUTH, cafile=None, capath=None, cadata=None
