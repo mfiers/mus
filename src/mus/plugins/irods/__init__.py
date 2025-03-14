@@ -126,6 +126,8 @@ def finish_file_upload(message):
         raise click.UsageError("You MUST also upload to ELN (-E)")
 
     irods_force = ctx.params.get('irods_force', False)
+    if irods_force:
+        click.echo("FORCE UPLOAD! Overwriting files")
 
     try:
         irods_group = get_secret('irods_group').strip()
@@ -200,6 +202,7 @@ def finish_file_upload(message):
 
         if i == 0:
             basepath = os.path.dirname(rec.filename)
+
         if ip in irecs:
             if rec.checksum == irecs[ip]['checksum']:
                 # checksum matches - ignore
@@ -208,6 +211,8 @@ def finish_file_upload(message):
                 # checksum does not match - re-upload
                 status[ip] = 'checksum mismatch'
                 to_upload.append(fp)
+        elif Path(rec.filename).is_dir():
+            status[ip] = 'folder'
         else:
             # does not seem to exists - upload
             status[ip] = "not found"
@@ -220,6 +225,7 @@ def finish_file_upload(message):
     click.echo(f"Irods files not uploaded yet             : {fstat['not found']}")
     click.echo(f"Irods uploaded, checksum ok, skip        : {fstat['ok']}")
     click.echo(f"Irods uploaded, checksum fail, overwrite : {fstat['checksum mismatch']}")
+    click.echo(f"Folders, upload without pre-check        : {fstat['folder']}")
 
     if len(to_upload) > 0:
         tu_dir, tu_file = [], []
