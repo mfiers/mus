@@ -1,9 +1,11 @@
+import base64
 import json
 import logging
 import os
 import platform
 import re
 import socket
+import subprocess as sp
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -15,11 +17,10 @@ import keyring
 import mus.exceptions
 from mus.config import get_env, get_secret
 from mus.hooks import register_hook
-from mus.plugins.irods.util import get_irods_records, icmd
+from mus.plugins.irods.util import get_irods_records, get_irods_session, icmd
 from mus.util.log import read_nonblocking_stdin
 
 lg = logging.getLogger(__name__)
-
 
 @click.group("irods")
 def cmd_irods():
@@ -73,16 +74,20 @@ def irods_get(filename, force):
 @click.option('-e', '--editor', is_flag=True,
               default=False, help='Always drop into editor')
 @click.option("-m", "--message", help="Mandatory message to attach to files")
+@click.option('-F', '--irods-force', is_flag=True,
+              default=False, help='Force overwrite on iRODS')
 @click.argument("filename", nargs=-1)
 @click.pass_context
 def irods_upload_shortcut(
             ctx,
             filename: List[str],
             message: str | None,
+            irods_force: bool,
             editor: bool):
     from mus.cli.files import filetag
     ctx.invoke(filetag, filename=filename, message=message,
-               editor=editor, irods=True, eln=True)
+               editor=editor, irods=True, irods_force=irods_force,
+               eln=True)
 
 
 MANDATORY_ELN_RECORDS = '''
@@ -95,8 +100,21 @@ MANDATORY_ELN_RECORDS = '''
 '''.split()
 
 
-#def upload_one_file()
-
+def icmd_recursive_stderr_handler(x):
+    # helper to make some sense of stderr :(
+    for line in x.strip().split("\n"):
+        line = line.strip()
+        if 'OVERWRITE_WITHOUT_FORCE_FLAG' in line:
+            if ' put ' in line and ' failed.' in line:
+                line = line.split(' put ')[1].split(' failed.')[0].strip()
+                print("File exists:", line)
+            elif ' put error for ' in line:
+                line = line.split(' put error for ')[1].split(', status')[0].strip()
+                print("Folder exists:", line)
+            else:
+                print('x', line)
+        else:
+            print(line)
 
 
 def finish_file_upload(message):
@@ -106,6 +124,8 @@ def finish_file_upload(message):
         return
     if not ctx.params.get('eln'):
         raise click.UsageError("You MUST also upload to ELN (-E)")
+
+    irods_force = ctx.params.get('irods_force', False)
 
     try:
         irods_group = get_secret('irods_group').strip()
@@ -142,9 +162,26 @@ def finish_file_upload(message):
     ])
 
     # figure out what already is on irods
+    # For now - do NOT check what is already there - does not work
     irecs = {}
-    for ir in get_irods_records(irods_folder):
-        irecs[ir['name']] = ir
+    if platform.system() == 'Darwin':
+        pass
+    else:
+        session = get_irods_session()
+
+        def recursive_get_files(coll):
+            for rip in coll.subcollections:
+                recursive_get_files(rip)
+            for rip in coll.data_objects:
+                remote_checksum = rip.chksum().split(":")[1]
+                remote_checksum = base64.b64decode(remote_checksum).hex()
+                remote_path = rip.path.replace(irods_folder.rstrip('/') + '/', '')
+                irecs[remote_path] = dict(
+                    checksum=remote_checksum
+                )
+
+        recursive_get_files(session.collections.get(irods_folder))
+
 
     # determine which records still need uploading
     to_upload = []
@@ -194,19 +231,27 @@ def finish_file_upload(message):
                 tu_file.append(tu)
 
         # ensure target folder is there
+        iflag = 'f' if irods_force else ''
+
         icmd('imkdir', '-p', irods_folder)
         if tu_file:
-            icmd('iput', '-K', '-f', *tu_file, irods_folder)
+            for _ in tu_file:
+                click.echo(f"Uploading file: {_}")
+            icmd('iput', f'-K{iflag}', *tu_file, irods_folder)
             lg.info(f"Uploaded files")
         if tu_dir:
-            icmd('iput', '-K', '-f', '-r', *tu_dir, irods_folder)
+            for _ in tu_dir:
+                click.echo(f"Uploading folder: {_}")
+            icmd('iput', f'-Kr{iflag}', *tu_dir, irods_folder,
+                 process_error=icmd_recursive_stderr_handler)
             lg.info(f"Uploaded folders")
 
+        click.echo(f"set permissions to {irods_group}")
         icmd('ichmod', '-r', 'own', irods_group, irods_folder)
-        lg.info(f"Set permissions for {irods_group} on {irods_folder}")
 
     # create mango files & force doublechecking
     for filename, mangourl in fn2irods.items():
+        click.echo(f"Checksum {filename}")
         icmd('ichksum', '-K', '-r', mangourl)
         lg.info("ichksum ok")
         mangofile = filename + '.mango'
@@ -288,6 +333,9 @@ def init_irods(cli):
     files.filetag.params.append(
         click.Option(['-I', '--irods'], is_flag=True,
                      default=False, help='Save file to iRODS'))
+    files.filetag.params.append(
+        click.Option(['-F', '--irods-force'], is_flag=True,
+                     default=False, help='Force overwrite on iRODS'))
 
 
 register_hook('plugin_init', init_irods)
