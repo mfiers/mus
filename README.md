@@ -91,6 +91,8 @@ mus log -x [eln-experiment-id] -E 'this is a test message'
 
 It is possible to upload a file to ELN using `mus tag`, again with the `-e` flag:
 
+**Note: This upload to ELN, not to Mango/IRODS**
+
 ```
 mus eln upload -m "short title or description" [filename] [filename] ...
 ```
