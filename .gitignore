@@ -147,3 +147,4 @@ test/tmp/*
 eln_metadata.*.pdf
 test.*.ipynb.pdf
 test.*.pdf
+test.txt
