@@ -15,6 +15,7 @@ lg = logging.getLogger(__name__)
 
 
 def tag_one_file(fn, message):
+    lg.debug(f'Tag file {fn}')
     rec = Record()
     rec.prepare(
         filename=Path(fn),
