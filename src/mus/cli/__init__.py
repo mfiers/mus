@@ -10,13 +10,22 @@ from mus.hooks import call_hook  # NOQA: E402
 from mus.util.cli import AliasedGroup  # NOQA: E402
 from mus.util.log import ColorLogger  # NOQA: E402
 
+from rich.logging import RichHandler
+
 # Set up color logging
 # colorama.init(autoreset=True)
 
 # logging.setLoggerClass(ColorLogger)
+
+FORMAT = "%(name)s %(message)s"
+logging.basicConfig(
+    level="NOTSET", format=FORMAT, datefmt="[%X]", handlers=[RichHandler()]
+)
+
 lg = logging.getLogger('mus')
 lg.setLevel(logging.WARNING)
-logging.getLogger('asyncio').setLevel(logging.WARNING)
+logging.getLogger('asyncio').setLevel(logging.INFO)
+logging.getLogger('irods').setLevel(logging.INFO)
 
 
 @click.group(cls=AliasedGroup)
@@ -26,8 +35,10 @@ logging.getLogger('asyncio').setLevel(logging.WARNING)
 def cli(ctx, verbose, profile):
     if verbose == 1:
         lg.setLevel(logging.INFO)
+        lg.info("Verbosity set to INFO")
     elif verbose > 1:
         lg.setLevel(logging.DEBUG)
+        lg.debug("Verbosity set to DEBUG")
 
     profiler_ = None
 
