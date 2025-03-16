@@ -3,6 +3,9 @@ import getpass
 import os
 import sqlite3
 import time
+import logging
+
+
 from dataclasses import dataclass, field
 from pathlib import Path
 from textwrap import wrap
@@ -12,6 +15,7 @@ from mus.config import get_env
 from mus.hooks import call_hook
 from mus.util import get_host, msec2nice
 
+lg = logging.getLogger(__name__)
 
 def record_factory(cursor, row):
     rv = Record()
@@ -238,6 +242,9 @@ class Record():
         from uuid import uuid4
 
         from mus.util.files import get_checksum
+
+        lg.debug(f'cwd: {os.getcwd()}')
+        lg.debug(f'Preparing filename: {filename} {filename.exists()}')
 
         if filename is None:
             self.filename = None
