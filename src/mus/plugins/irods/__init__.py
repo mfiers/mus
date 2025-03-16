@@ -216,6 +216,7 @@ def finish_file_upload(message):
                 status[ip] = 'checksum mismatch'
                 to_upload.append(fp)
         elif Path(rec.filename).is_dir():
+            to_upload.append(fp)
             status[ip] = 'folder'
         else:
             # does not seem to exists - upload
