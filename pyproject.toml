@@ -17,7 +17,9 @@ dependencies = [
     "rich",
     "keyring",
     "keyrings.alt",
-    "click"]
+    "click",
+    "requests>=2.32.3",
+]
 
 [project.optional-dependencies]
 dev = ["pytest"]
