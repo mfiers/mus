@@ -28,6 +28,8 @@ def track_iofiles_prerun(job):
             input_file = Path(job.rendered[k])
             if not input_file.exists():
                 continue
+            if not input_file.is_file():
+                continue  # seems to be a folder
             rec = Record()
             rec.prepare(
                 filename=input_file,
@@ -59,9 +61,12 @@ def track_iofiles_postrun(job):
                 # strange - but lets not complain here...
                 lg.info(f"Can't find input file '{input_file}'?")
                 continue
+
             if input_file.is_dir():
                 # strange - but lets not complain here...
                 lg.info(f"Input file is folder '{input_file}' - not tracking.")
+                continue
+            if not input_file.is_file():
                 continue
 
             ichk = get_checksum(input_file)

@@ -180,7 +180,7 @@ class Record():
                                fg="red", bold=False, bg="black")
 
         if no_rep is not None and no_rep > 1:
-            srep = style(f" ({no_rep}x)", fg="white", bold=True)
+            srep = style(f" ({no_rep}x)", fg="white", bg='black', bold=True)
         else:
             srep = ""
 
@@ -211,7 +211,7 @@ class Record():
             message = " \\\n".join(
                 wrap(message, terminal_width - 20,
                      subsequent_indent=subsequent_indent))
-            message = style(message, fg='white', bold=True)
+            message = style(message, bold=True)
 
         if full:
             return (
