@@ -14,6 +14,7 @@ from typing import List
 import click
 import keyring
 
+from irods.exception import CollectionDoesNotExist
 import mus.exceptions
 from mus.config import get_env, get_secret
 from mus.hooks import register_hook
@@ -182,8 +183,11 @@ def finish_file_upload(message):
                     checksum=remote_checksum
                 )
 
-        recursive_get_files(session.collections.get(irods_folder))
-
+        try:
+            recursive_get_files(session.collections.get(irods_folder))
+        except CollectionDoesNotExist:
+            # ignore - nothing seems to be uploaded
+            pass
 
     # determine which records still need uploading
     to_upload = []
