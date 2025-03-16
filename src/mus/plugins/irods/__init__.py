@@ -244,6 +244,7 @@ def finish_file_upload(message):
         # ensure target folder is there
         iflag = 'f' if irods_force else ''
 
+        lg.debug(f'imkdir -p {irods_folder}')
         icmd('imkdir', '-p', irods_folder)
         if tu_file:
             for _ in tu_file:
@@ -252,7 +253,7 @@ def finish_file_upload(message):
             lg.info(f"Uploaded files")
         if tu_dir:
             for _ in tu_dir:
-                click.echo(f"Uploading folder: {_}")
+                lg.debug(f"Uploading folder: {_}")
             icmd('iput', f'-Kr{iflag}', *tu_dir, irods_folder,
                  process_error=icmd_recursive_stderr_handler)
             lg.info(f"Uploaded folders")
