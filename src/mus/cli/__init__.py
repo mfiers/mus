@@ -26,6 +26,8 @@ lg = logging.getLogger('mus')
 lg.setLevel(logging.WARNING)
 logging.getLogger('asyncio').setLevel(logging.INFO)
 logging.getLogger('irods').setLevel(logging.INFO)
+logging.getLogger('urllib3').setLevel(logging.WARNING)
+logging.getLogger('mango_mdschema').setLevel(logging.WARNING)
 
 
 @click.group(cls=AliasedGroup)
