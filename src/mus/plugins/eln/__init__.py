@@ -137,20 +137,21 @@ def init_eln(cli):
 def format_filedata(fset, mdata):
     fn = os.path.basename(mdata["filename"])
 
-    # # don't know if this should happen??
-    # assert len(fset) <= 1
-    # if len(fset) > 1:
-    #     fs = '\n'.join([
-    #         f'{os.path.basename(k)}'
-    #         for k in fset
-    #         if k != mdata["filename"]])
+    obj_link = get_secret('irods_web').rstrip('/')
+    #TODO: this is a hack - need a better solution
+    col_link = obj_link.replace('data-object/view', 'collection/browse')
 
     rv = f"<li><b>{fn}</b>"
+
     if 'irods_url' in mdata:
-        irods_web = get_secret('irods_web').rstrip('/')
-        url = irods_web + mdata['irods_url']
+
+        if mdata.get('is_dir') is True:
+            url = col_link + mdata['irods_url']
+        else:
+            url = obj_link + mdata['irods_url']
+
         rv += f" <a href='{url}'>[IRODS]</a>"
-    rv += f" <span style='font-size: small'>(shasum: {mdata['checksum']})</span></li>"
+    rv += f" <span style='font-size: small; color: #444;'>(shasum: {mdata['checksum']})</span></li>"
     return rv
 
 
@@ -232,6 +233,12 @@ def eln_save_record(record):
             for k in ['host', 'cwd', 'user', 'filename',
                       'checksum']
         }
+
+        if record.data.get('is_dir') is True:
+            metadata['is_dir'] = True
+        else:
+            metadata['is_dir'] = False
+
         ntime = datetime\
             .fromtimestamp(record.time)\
             .strftime("%Y-%m-%d %H:%M:%S")
