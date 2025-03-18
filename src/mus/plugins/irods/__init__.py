@@ -18,6 +18,7 @@ from irods.exception import CollectionDoesNotExist
 import mus.exceptions
 from mus.config import get_env, get_secret
 from mus.hooks import register_hook
+from mus.db import Record
 from mus.plugins.irods.util import get_irods_records, get_irods_session, icmd
 from mus.util.log import read_nonblocking_stdin
 
@@ -27,6 +28,145 @@ lg = logging.getLogger(__name__)
 def cmd_irods():
     "Irods Commands"
     pass
+
+
+def check_mango(*mango_urls: List[str|Path]):
+
+    session = get_irods_session()
+    irecs = {}
+
+    def recursive_get_files(irods_folder, coll=None):
+        if coll is None:
+            coll = session.collections.get(irods_folder)
+
+        for rip in coll.subcollections:
+            recursive_get_files(irods_folder, rip)
+        for rip in coll.data_objects:
+            remote_checksum = rip.chksum().split(":")[1]
+            remote_checksum = base64.b64decode(remote_checksum).hex()
+            remote_path = rip.path.replace(irods_folder.rstrip('/') + '/', '')
+            irecs[remote_path] = dict(
+                checksum=remote_checksum)
+
+    checked = 0
+    failed = 0
+    if platform.system() == 'Darwin':
+        click.echo('Not implemented!')
+        exit(-1)
+
+    for _filename in mango_files:
+
+        #local path
+        _local = Path(str(_filename)[:-6])
+
+        lg.debug(f"checking {_filename}")
+
+        #get the mango url from the .mango file
+        with open(_filename, 'rt') as F:
+            try:
+                # older style mango json
+                md = json.load(F)
+                url = get_mango_path(md["url"])
+            except json.decoder.JSONDecodeError:
+                # just the url
+                F.seek(0)
+                url = F.read().strip()
+
+        # is this a folder?
+        if not(_local).exists():
+            lg.error(f"File/Folder not found: [bold]{_local}[/]",  extra={"markup": True})
+            failed += 1
+            checked += 1
+        elif _local.is_dir():
+            recursive_get_files(url)
+            for lp in _local.glob('**/*'):
+                if lp.is_dir():
+                    continue
+                rlp = str(lp.relative_to(_local))
+                rec = Record()
+                rec.prepare(filename=lp, rectype='tag')
+                local_checksum = rec.checksum
+                checked += 1
+                if not rlp in irecs:
+                    lg.error(f"Can not find: [bold]{str(lp)}[/]",  extra={"markup": True})
+                    failed += 1
+                elif irecs[rlp]['checksum'] != local_checksum:
+                    lg.error(f"Checksum mismatch: [bold]{rlp}[/]",  extra={"markup": True})
+                    failed += 1
+                else:
+                    lg.info(f"Checksum ok: {rlp}")
+        else: # or a file
+            obj = session.data_objects.get(url)
+            remote_checksum = obj.chksum().split(":")[1]
+            remote_checksum = base64.b64decode(remote_checksum).hex()
+            rec = Record()
+            rec.prepare(filename=_local, rectype='tag')
+            local_checksum = rec.checksum
+            checked += 1
+            if remote_checksum != local_checksum:
+                lg.error(f"Checksum mismatch: [bold]{_local}[/]",  extra={"markup": True})
+                failed += 1
+            else:
+                lg.info(f"Checksum ok: {_local}")
+
+    if checked > 0 and failed == 0:
+        click.echo(f"All checksums ({checked}) are ok.")
+    elif checked > 0:
+        lg.warning(f"Failed {failed} out of {checked} checksums!")
+    else:
+        lg.warning("Nothing checked!")
+
+
+@cmd_irods.command("check")
+@click.argument("filename", nargs=-1)
+def irods_check(filename):
+
+    to_check = []
+
+    if len(filename) == 0:
+        to_check = list(Path.cwd().glob('*.mango'))
+    else:
+        for _filename in filename:
+            _filename = Path(_filename)
+
+            # make sure it is a mango file - otherwise try to append
+            if not _filename.name.endswith(".mango"):
+                _filename = Path(str(_filename) + '.mango')
+
+            # it should exist!
+            if _filename.exists():
+                to_check.append(_filename)
+            else:
+                lg.warning(f"Ignoring {_filename} - need .mango files")
+
+    to_check = list(sorted(set(to_check)))
+    if len(to_check) == 0:
+        lg.warning("Nothing to check?")
+        raise click.UsageError("No mango files to check?")
+
+    to_check_2 = []
+
+    # get local & remote paths
+    for t in to_check:
+        local = Path(str(t)[:-6])
+        if not local.exists():
+            lg.warning(f"Can not check {t} - local missing")
+            continue
+
+        # open the ango file & get the URL
+        url = None
+        with open(_filename, 'rt') as F:
+            try:
+                # older style mango json
+                md = json.load(F)
+                url = get_mango_path(md["url"])
+            except json.decoder.JSONDecodeError:
+                # just the url
+                F.seek(0)
+                url = F.read().strip()
+
+        print(t, url)
+    # check_mango(to_check)
 
 
 @cmd_irods.command("get")
