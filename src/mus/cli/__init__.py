@@ -17,7 +17,8 @@ from rich.logging import RichHandler
 
 # logging.setLoggerClass(ColorLogger)
 
-FORMAT = "%(name)s %(message)s"
+#FORMAT = "%(message)s (%(name)s)"
+FORMAT = "%(message)s"
 logging.basicConfig(
     level="NOTSET", format=FORMAT, datefmt="[%X]", handlers=[RichHandler()]
 )

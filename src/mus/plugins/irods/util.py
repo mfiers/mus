@@ -44,7 +44,10 @@ def icmd(*cl, allow_fail=False, process_error=None, **kwargs):
         kwargs['stderr'] = sp.PIPE
         kwargs['text'] = True
 
-    P = sp.Popen(prefix + list(map(str, cl)), **kwargs)
+    cl_ = prefix + list(map(str, cl))
+    lg.debug("Executing", ' '.join(cl_))
+    #print(cl_)
+    P = sp.Popen(cl_, **kwargs)
     o, e = P.communicate()
 
     if process_error is not None:
@@ -54,6 +57,7 @@ def icmd(*cl, allow_fail=False, process_error=None, **kwargs):
         lg.critical("irods fails running")
         lg.critical(" ".join(map(str, cl)))
         exit(-1)
+
     return o
 
 
