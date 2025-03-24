@@ -45,8 +45,8 @@ def icmd(*cl, allow_fail=False, process_error=None, **kwargs):
         kwargs['text'] = True
 
     cl_ = prefix + list(map(str, cl))
-    lg.debug("Executing", ' '.join(cl_))
-    #print(cl_)
+    lg.debug("Executing: " + ' '.join(map(str, cl_)))
+
     P = sp.Popen(cl_, **kwargs)
     o, e = P.communicate()
 
