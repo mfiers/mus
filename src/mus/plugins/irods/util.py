@@ -16,7 +16,7 @@ from uuid import uuid4
 
 from mus.config import get_keyring, get_secret
 
-lg = logging.getLogger(__name__)
+lg = logging.getLogger('plugin.irods.util')
 
 
 class IrodsHomeNotDefined(Exception):
@@ -51,6 +51,13 @@ def icmd(*cl, allow_fail=False, process_error=None, **kwargs):
     o, e = P.communicate()
 
     if process_error is not None:
+
+        if len(e.strip) > 0:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            logfile = f"error_{cl[0]}_{timestamp}.txt"
+            with open(logfile, "w") as f:
+                f.write(e)
+
         process_error(e)
 
     if (not allow_fail) and P.returncode != 0:
