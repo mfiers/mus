@@ -150,3 +150,4 @@ test.*.ipynb.pdf
 test.*.pdf
 test.txt
 uv.lock
+error_*.txt
