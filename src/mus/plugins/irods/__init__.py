@@ -400,14 +400,21 @@ def finish_file_upload(message):
         click.echo(f"set permissions to {irods_group}")
         icmd('ichmod', '-r', 'own', irods_group, irods_folder)
 
+    to_check = []
     # create mango files & force doublechecking
     for filename, mangourl in fn2irods.items():
-        click.echo(f"Checksum {filename}")
+        click.echo(f"ichecksum {filename}")
         icmd('ichksum', '-K', '-r', mangourl)
         lg.info("ichksum ok")
+        to_check.append(MANGO_PAIR(local=Path(filename), remote=mangourl))
         mangofile = filename + '.mango'
+
         with open(mangofile, 'wt') as F:
             F.write(mangourl)
+
+
+    check_mango(*to_check)
+
 
     env = get_env()
     irods_meta = {
