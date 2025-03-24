@@ -52,7 +52,7 @@ def icmd(*cl, allow_fail=False, process_error=None, **kwargs):
 
     if process_error is not None:
 
-        if len(e.strip) > 0:
+        if len(e.strip()) > 0:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             logfile = f"error_{cl[0]}_{timestamp}.txt"
             with open(logfile, "w") as f:
