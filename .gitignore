@@ -151,3 +151,8 @@ test.*.pdf
 test.txt
 uv.lock
 error_*.txt
+docker/mus-latest.whl
+dist
+
+#temporary - while developing docker/apptainer port
+docker/*
