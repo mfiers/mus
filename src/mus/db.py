@@ -1,21 +1,19 @@
 
 import getpass
+import logging
 import os
 import sqlite3
 import time
-import logging
-
-
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from textwrap import wrap
-from typing import MutableSet, Optional, Union
+from typing import Optional
 
-from mus.config import get_env
 from mus.hooks import call_hook
 from mus.util import get_host, msec2nice
 
 lg = logging.getLogger(__name__)
+
 
 def record_factory(cursor, row):
     rv = Record()
@@ -127,15 +125,21 @@ class Record():
         self.status = 0
 
     def __str__(self):
+
         if hasattr(self, 'host'):
             message = getattr(self, "message", "-")
-            return (
+            assert self.type is not None
+            rv = (
                 f"{self.type[:3]:3} {self.host} {self.user} {int(self.time)} "
                 f"{self.cwd} "
                 f"{message}"
             )
         elif hasattr(self, 'hash'):
-            return f"{self.filename} {self.hash}"
+            rv = f"{self.filename} {getattr(self, 'hash', 'no hash')}"
+        else:
+            rv = "Unknown record type"
+
+        return rv
 
     def nice(self,
              no_rep: Optional[int] = None,
@@ -157,8 +161,10 @@ class Record():
 
         terminal_width = shutil.get_terminal_size((80, 24)).columns
 
-        if depth >= 1: indent_str = '  ' * (depth-1) + '+->'
-        else: indent_str = ''
+        if depth >= 1:
+            indent_str = '  ' * (depth-1) + '+->'
+        else:
+            indent_str = ''
 
         ntime = msec2nice(1000 * int(time.time() - self.time))
         ntime = style(f"{ntime:>7}", fg=55)
@@ -223,7 +229,8 @@ class Record():
                 f"| {self.user}@{self.host}:{self.cwd}\n"
                 f"{message}{srep}{extra}")
         else:
-            return f"{tmark}{smark}{indent_str} {uid} {ntime:>8s} {message}{srep}{extra}"
+            return (f"{tmark}{smark}{indent_str} {uid} "
+                    + f"{ntime:>8s} {message}{srep}{extra}")
 
     def prepare(self,
                 filename: Optional[Path] = None,
@@ -243,12 +250,15 @@ class Record():
 
         from mus.util.files import get_checksum
 
+        assert filename is not None
+
         lg.debug(f'cwd: {os.getcwd()}')
-        lg.debug(f'Preparing filename: {filename} {filename.exists()}')
+        lg.debug(f'Preparing filename: {filename} '
+                 + f'exists: {filename.exists()}')
 
         if filename.exists():
             if filename.is_dir():
-                #TODO: does this need to be top level?
+                # TODO: does this need to be top level?
                 self.data['is_dir'] = True
 
         if filename is None:
@@ -262,7 +272,7 @@ class Record():
             self.checksum = None
 
             # TODO: add tagging structure again
-            #self.tags.add('folder')
+            # self.tags.add('folder')
 
         elif not filename.exists():
             raise FileNotFoundError(filename)
