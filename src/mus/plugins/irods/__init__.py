@@ -216,6 +216,8 @@ def irods_get(filename, force):
 @click.option("-m", "--message", help="Mandatory message to attach to files")
 @click.option('-F', '--irods-force', is_flag=True,
               default=False, help='Force overwrite on iRODS')
+@click.option('--ignore-symlinks', is_flag=True, default=False,
+             help='Ignore symlinks')
 @click.argument("filename", nargs=-1)
 @click.pass_context
 def irods_upload_shortcut(
@@ -223,11 +225,12 @@ def irods_upload_shortcut(
             filename: List[str],
             message: str | None,
             irods_force: bool,
+            ignore_symlinks: bool,
             editor: bool):
     from mus.cli.files import filetag
     ctx.invoke(filetag, filename=filename, message=message,
                editor=editor, irods=True, irods_force=irods_force,
-               eln=True)
+               ignore_symlinks=ignore_symlinks, eln=True)
 
 
 MANDATORY_ELN_RECORDS = '''
@@ -266,8 +269,12 @@ def finish_file_upload(message):
         raise click.UsageError("You MUST also upload to ELN (-E)")
 
     irods_force = ctx.params.get('irods_force', False)
+    ignore_symlinks = ctx.params.get('ignore_symlinks', False)
+
     if irods_force:
-        click.echo("FORCE UPLOAD! Overwriting files")
+        lg.warning("FORCE UPLOAD! Overwriting files")
+    if ignore_symlinks:
+        lg.warning("Ignore symlinks in upload!")
 
     try:
         irods_group = get_secret('irods_group').strip()
@@ -381,19 +388,21 @@ def finish_file_upload(message):
                 tu_file.append(tu)
 
         # ensure target folder is there
-        iflag = 'f' if irods_force else ''
-
+        if_flag = 'f' if irods_force else ''
+        is_flag = ['--ignore-symlinks'] if ignore_symlinks else []
         lg.debug(f'imkdir -p {irods_folder}')
         icmd('imkdir', '-p', irods_folder)
         if tu_file:
             for _ in tu_file:
                 click.echo(f"Uploading file: {_}")
-            icmd('iput', f'-K{iflag}', *tu_file, irods_folder)
+            icmd('iput', f'-K{if_flag}', *is_flag,
+                 *tu_file, irods_folder)
             lg.info(f"Uploaded files")
         if tu_dir:
             for _ in tu_dir:
                 lg.debug(f"Uploading folder: {_}")
-            icmd('iput', f'-Kr{iflag}', *tu_dir, irods_folder,
+            icmd('iput', f'-Kr{if_flag}',  *is_flag,
+                 *tu_dir, irods_folder,
                  process_error=icmd_recursive_stderr_handler)
             lg.info(f"Uploaded folders")
 
@@ -494,6 +503,10 @@ def init_irods(cli):
     files.filetag.params.append(
         click.Option(['-F', '--irods-force'], is_flag=True,
                      default=False, help='Force overwrite on iRODS'))
+    files.filetag.params.append(
+        click.Option(['--ignore-symlinks'], is_flag=True,
+                     default=False,
+                     help='Ignore symlinks'))
 
 
 register_hook('plugin_init', init_irods)
