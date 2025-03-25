@@ -16,7 +16,7 @@ from uuid import uuid4
 
 from mus.config import get_keyring, get_secret
 
-lg = logging.getLogger('plugin.irods.util')
+lg = logging.getLogger(__name__)
 
 
 class IrodsHomeNotDefined(Exception):
@@ -96,8 +96,8 @@ def get_irods_records(irods_folder):
         try:
             checksum = l2[0].split(":")[1]
             checksum = base64.b64decode(checksum).hex()
-        except:
-            #skip this record
+        except:  # noqa E7722
+            # skip this record
             i += 2
             continue
         yield dict(
