@@ -250,16 +250,7 @@ class Record():
 
         from mus.util.files import get_checksum
 
-        assert filename is not None
-
         lg.debug(f'cwd: {os.getcwd()}')
-        lg.debug(f'Preparing filename: {filename} '
-                 + f'exists: {filename.exists()}')
-
-        if filename.exists():
-            if filename.is_dir():
-                # TODO: does this need to be top level?
-                self.data['is_dir'] = True
 
         if filename is None:
             self.filename = None
@@ -270,12 +261,6 @@ class Record():
         elif filename.exists() and filename.is_dir():
             self.filename = str(Path(filename).resolve())
             self.checksum = None
-
-            # TODO: add tagging structure again
-            # self.tags.add('folder')
-
-        elif not filename.exists():
-            raise FileNotFoundError(filename)
         else:
             raise Exception("Unsure what happened")
 
