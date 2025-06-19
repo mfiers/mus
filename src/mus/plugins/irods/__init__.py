@@ -5,24 +5,22 @@ import os
 import platform
 import re
 import socket
-import subprocess as sp
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import List, NamedTuple
 
 import click
-import keyring
 from irods.exception import CollectionDoesNotExist, DataObjectDoesNotExist
 
 import mus.exceptions
 from mus.config import get_env, get_secret
 from mus.db import Record
 from mus.hooks import register_hook
-from mus.plugins.irods.util import get_irods_records, get_irods_session, icmd
-from mus.util.log import read_nonblocking_stdin
+from mus.plugins.irods.util import get_irods_session, icmd
 
 lg = logging.getLogger(__name__)
+
 
 @click.group("irods")
 def cmd_irods():
@@ -31,6 +29,11 @@ def cmd_irods():
 
 
 MANGO_PAIR = NamedTuple("MANGO_PAIR", [('local', Path), ('remote', str)])
+
+
+def get_mango_path(url):
+    url = url.split("data-object/view")[1]
+    return url
 
 
 def check_mango(*mpairs: MANGO_PAIR):
@@ -174,10 +177,6 @@ def irods_check(filename):
 @click.argument("filename", nargs=-1)
 def irods_get(filename, force):
 
-    def get_mango_path(url):
-        url = url.split("data-object/view")[1]
-        return url
-
     cmd = []
 
     if force:
@@ -207,7 +206,7 @@ def irods_get(filename, force):
         if (not force) and fulltarget.exists():
             lg.warning(f"Not overwriting {target}, use `-f`")
         else:
-            icmd('iget', url, '.', '-K', *cmd )
+            icmd('iget', url, '.', '-K', *cmd)
 
 
 @cmd_irods.command("upload")
@@ -217,7 +216,7 @@ def irods_get(filename, force):
 @click.option('-F', '--irods-force', is_flag=True,
               default=False, help='Force overwrite on iRODS')
 @click.option('--ignore-symlinks', is_flag=True, default=False,
-             help='Ignore symlinks')
+              help='Ignore symlinks')
 @click.argument("filename", nargs=-1)
 @click.pass_context
 def irods_upload_shortcut(
@@ -252,7 +251,8 @@ def icmd_recursive_stderr_handler(x):
                 line = line.split(' put ')[1].split(' failed.')[0].strip()
                 print("File exists:", line)
             elif ' put error for ' in line:
-                line = line.split(' put error for ')[1].split(', status')[0].strip()
+                line = line.split(' put error for ')[1]
+                line = line.split(', status')[0].strip()
                 print("Folder exists:", line)
             else:
                 print('x', line)
@@ -324,7 +324,8 @@ def finish_file_upload(message):
             for rip in coll.data_objects:
                 remote_checksum = rip.chksum().split(":")[1]
                 remote_checksum = base64.b64decode(remote_checksum).hex()
-                remote_path = rip.path.replace(irods_folder.rstrip('/') + '/', '')
+                remote_path = rip.path.replace(
+                    irods_folder.rstrip('/') + '/', '')
                 irecs[remote_path] = dict(
                     checksum=remote_checksum
                 )
@@ -343,7 +344,8 @@ def finish_file_upload(message):
     fn2irods = {}
     sha256sums = {}
 
-    for i, (rec, metadata) in enumerate(zip(ElnData.records, ElnData.metadata)):
+    for i, (rec, metadata) in \
+            enumerate(zip(ElnData.records, ElnData.metadata)):
         ip = os.path.basename(rec.filename)
         fp = Path(rec.filename).resolve()
 
@@ -373,10 +375,14 @@ def finish_file_upload(message):
         metadata['irods_url'] = f"{irods_folder}/{ip}"
 
     fstat = Counter(status.values())
-    click.echo(f"Irods files not uploaded yet             : {fstat['not found']}")
-    click.echo(f"Irods uploaded, checksum ok, skip        : {fstat['ok']}")
-    click.echo(f"Irods uploaded, checksum fail, overwrite : {fstat['checksum mismatch']}")
-    click.echo(f"Folders, upload without pre-check        : {fstat['folder']}")
+    click.echo("Irods files not uploaded yet             : "
+               + str(fstat['not found']))
+    click.echo("Irods uploaded, checksum ok, skip        : "
+               + str(fstat['ok']))
+    click.echo("Irods uploaded, checksum fail, overwrite : "
+               + str(fstat['checksum mismatch']))
+    click.echo("Folders, upload without pre-check        : "
+               + str(fstat['folder']))
 
     if len(to_upload) > 0:
         tu_dir, tu_file = [], []
@@ -397,14 +403,14 @@ def finish_file_upload(message):
                 click.echo(f"Uploading file: {_}")
             icmd('iput', f'-K{if_flag}', *is_flag,
                  *tu_file, irods_folder)
-            lg.info(f"Uploaded files")
+            lg.info("Uploaded files")
         if tu_dir:
             for _ in tu_dir:
                 lg.debug(f"Uploading folder: {_}")
             icmd('iput', f'-Kr{if_flag}',  *is_flag,
                  *tu_dir, irods_folder,
                  process_error=icmd_recursive_stderr_handler)
-            lg.info(f"Uploaded folders")
+            lg.info("Uploaded folders")
 
         click.echo(f"set permissions to {irods_group}")
         icmd('ichmod', '-r', 'own', irods_group, irods_folder)
@@ -421,24 +427,22 @@ def finish_file_upload(message):
         with open(mangofile, 'wt') as F:
             F.write(mangourl)
 
-
     check_mango(*to_check)
-
 
     env = get_env()
     irods_meta = {
-        "mgs.project.path"              : basepath,
-        "mgs.project.server"            : socket.gethostname(),
-        "mgs.project.upload_date"       : datetime.now().strftime("%Y-%m-%d"),
-        "mgs.project.__version__"       : "7.0.0",
-        "mgs.project.experiment_id"     : env['eln_experiment_id'],
-        "mgs.project.experiment_name"   : env['eln_experiment_name'],
-        "mgs.project.project_id"        : env['eln_project_id'],
-        "mgs.project.project_name"      : env['eln_project_name'],
-        "mgs.project.study_id"          : env['eln_study_id'],
-        "mgs.project.study_name"        : env['eln_study_name'],
-        "mgs.project.collaborator"      : env['eln_collaborator'],
-        "mgs.project.description"       : message,
+        "mgs.project.path": basepath,
+        "mgs.project.server": socket.gethostname(),
+        "mgs.project.upload_date": datetime.now().strftime("%Y-%m-%d"),
+        "mgs.project.__version__": "7.0.0",
+        "mgs.project.experiment_id": env['eln_experiment_id'],
+        "mgs.project.experiment_name": env['eln_experiment_name'],
+        "mgs.project.project_id": env['eln_project_id'],
+        "mgs.project.project_name": env['eln_project_name'],
+        "mgs.project.study_id": env['eln_study_id'],
+        "mgs.project.study_name": env['eln_study_name'],
+        "mgs.project.collaborator": env['eln_collaborator'],
+        "mgs.project.description": message,
     }
 
     if platform.system() == 'Darwin':
@@ -446,7 +450,8 @@ def finish_file_upload(message):
         # assign metadata to the collection
         for fn in fn2irods:
             ip = fn2irods[fn]
-            icmd('imeta', 'set', '-d', ip, "mgs.project.sha256", sha256sums[fn])
+            icmd('imeta', 'set', '-d', ip,
+                 "mgs.project.sha256", sha256sums[fn])
 
             for key, value in irods_meta.items():
                 icmd('imeta', 'set', '-d', ip, key, value)
@@ -464,7 +469,7 @@ def finish_file_upload(message):
         schema_trav = resources.files("mus")\
             .joinpath("plugins/irods/data/project-7.0.0-published.json")
         with resources.as_file(schema_trav) as F:
-            schema = Schema(F)
+            schema = Schema(F)  # type: ignore
 
         # connect to irods
         try:
