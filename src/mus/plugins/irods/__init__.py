@@ -183,13 +183,18 @@ def irods_get(filename, force):
         cmd.append("-f")
 
     for _filename in filename:
+
         if not _filename.endswith(".mango"):
             lg.warning(f"Ignoring {_filename}")
             continue
+
         # attempt to get from irods
-        target = Path(_filename).name[:-6]
+        target = Path(_filename).parent / Path(_filename).name[:-6]
         fulltarget = Path(str(_filename)[:-6])
-        lg.warning(f"getting {target}")
+        wd = str(Path(_filename).parent)
+
+        lg.warning(f"getting {target} {wd}")
+
         with open(_filename, 'rt') as F:
             try:
                 # older style mango json
@@ -201,12 +206,14 @@ def irods_get(filename, force):
                 url = F.read().strip()
 
         expected = Path(url).name
-        assert expected == target
+
+        assert Path(expected).name == Path(target).name
 
         if (not force) and fulltarget.exists():
             lg.warning(f"Not overwriting {target}, use `-f`")
         else:
-            icmd('iget', url, '.', '-K', *cmd)
+            icmd('iget', url, '.', '-K',  *cmd,
+                 wd=wd)
 
 
 @cmd_irods.command("upload")

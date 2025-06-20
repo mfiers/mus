@@ -31,7 +31,9 @@ class IrodsUploadError(Exception):
     pass
 
 
-def icmd(*cl, allow_fail=False, process_error=None, **kwargs):
+def icmd(*cl, allow_fail=False,
+         process_error=None, wd=None,
+         **kwargs):
 
     prefix = get_keyring().get_password('mus', 'icmd_prefix')
 
@@ -43,6 +45,9 @@ def icmd(*cl, allow_fail=False, process_error=None, **kwargs):
     if process_error is not None:
         kwargs['stderr'] = sp.PIPE
         kwargs['text'] = True
+
+    if wd is not None:
+        kwargs['cwd'] = wd
 
     cl_ = prefix + list(map(str, cl))
     lg.debug("Executing: " + ' '.join(map(str, cl_)))
