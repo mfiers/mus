@@ -156,3 +156,4 @@ dist
 
 #temporary - while developing docker/apptainer port
 docker/*
+apptainer/mus.sif
