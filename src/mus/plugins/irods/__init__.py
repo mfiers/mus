@@ -420,7 +420,7 @@ def finish_file_upload(message):
             lg.info("Uploaded folders")
 
         click.echo(f"set permissions to {irods_group}")
-        icmd('ichmod', '-r', 'own', irods_group, irods_folder)
+        icmd('ichmod', '-r', 'own', irods_group, irods_folder, allow_fail=True)
 
     to_check = []
     # create mango files & force doublechecking
