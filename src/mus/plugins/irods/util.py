@@ -66,7 +66,9 @@ def icmd(*cl, allow_fail=False,
         process_error(e)
 
     if (not allow_fail) and P.returncode != 0:
-        lg.critical("irods fails running")
+        lg.critical("###############")
+        lg.critical("# iRods error #")
+        lg.critical("###############")
         lg.critical(" ".join(map(str, cl)))
         exit(-1)
 
