@@ -39,7 +39,19 @@ def filetag(filename: List[str],
         click.echo("Please provide a message")
         return
 
+    # Filter out .mango files - they are metadata files, not data files
+    filtered_files = []
     for fn in filename:
+        if fn.endswith('.mango'):
+            lg.debug(f"Skipping .mango file: {fn}")
+            continue
+        filtered_files.append(fn)
+
+    if not filtered_files:
+        click.echo("No files to tag (all were .mango files)")
+        return
+
+    for fn in filtered_files:
         tag_one_file(fn, message_)
 
     call_hook('finish_filetag', message=message)
