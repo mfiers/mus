@@ -8,8 +8,9 @@ From: python:3.12-slim
     apt-get update && apt-get install -y --no-install-recommends \
             gcc g++ build-essential wget gnupg2 lsb-release \
             python3-dev libffi-dev libssl-dev \
-        && wget -qO - https://packages.irods.org/irods-signing-key.asc | apt-key add - \
-        && echo "deb [arch=amd64] https://packages.irods.org/apt/ $(lsb_release -sc) main" | tee /etc/apt/sources.list.d/renci-irods.list \
+        && mkdir -p /etc/apt/keyrings \
+        && wget -qO /etc/apt/keyrings/irods-signing-key.asc https://packages.irods.org/irods-signing-key.asc \
+        && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/irods-signing-key.asc] https://packages.irods.org/apt/ $(lsb_release -sc) main" | tee /etc/apt/sources.list.d/renci-irods.list \
         && apt-get update && apt-get install -y irods-icommands \
         && apt-get clean \
         && rm -rf /var/lib/apt/lists/* \
