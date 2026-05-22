@@ -22,5 +22,4 @@
 # verifies, so a clone alone cannot prove it was not tampered with. Cross-check
 # the public key against https://codeberg.org/atrxia.keys before treating
 # signatures as authoritative.
-
 mark.fiers@kuleuven.be namespaces="git,file" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHP0TEW6QS203/gQ9ch11yWEnHrOZwsrWtUnxyLsDpEn
