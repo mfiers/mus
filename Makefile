@@ -48,8 +48,20 @@ LEVEL ?= patch
 # Tag + SHA256SUMS still get ssh-signed (those are non-interactive).
 SIGN ?= 1
 
-.PHONY: build build-all test lint clean tidy run release release-verify \
+.PHONY: build build-all install test lint clean tidy run release release-verify \
         sign publish show-version bump ship
+
+# Where `make install` copies bin/mus. Mirrors install.sh's logic: if `mus` is
+# already on PATH at a writable path, reuse it; else prefer ~/bin then
+# ~/.local/bin. Override at the command line: make install PREFIX=/opt/bin
+PREFIX ?= $(shell \
+    if existing=$$(command -v mus 2>/dev/null) && [ -w "$$existing" ]; then \
+        dirname "$$existing"; \
+    elif [ -d "$$HOME/bin" ] && [ -w "$$HOME/bin" ]; then \
+        echo "$$HOME/bin"; \
+    else \
+        mkdir -p "$$HOME/.local/bin"; echo "$$HOME/.local/bin"; \
+    fi)
 
 # Binaries that get signed by `pika _sign`. Must match what `make build-all`
 # emits in dist/. Update both lists together if a platform is added/dropped.
@@ -62,6 +74,18 @@ build:
 	@mkdir -p bin
 	$(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/mus $(PKG)
 	@echo "built bin/mus ($$($(GO) version | awk '{print $$3}'))"
+
+# Build and copy bin/mus into $(PREFIX). Useful during debug iteration to
+# overwrite the installed copy so plain `mus` invocations pick up the new
+# binary. Does not sign, does not touch the release pipeline.
+install: build
+	@install -m 0755 bin/mus "$(PREFIX)/mus"
+	@echo "installed $(PREFIX)/mus"
+	@case ":$$PATH:" in \
+	  *":$(PREFIX):"*) : ;; \
+	  *) echo "warning: $(PREFIX) is not on \$$PATH"; \
+	     echo "  add to ~/.bashrc:  export PATH=\"$(PREFIX):\$$PATH\"" ;; \
+	esac
 
 build-all:
 	@mkdir -p dist
