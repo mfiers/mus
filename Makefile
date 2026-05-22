@@ -11,7 +11,16 @@
 # Prefer a known-recent Go install if the system Go is too old.
 GO := $(shell if [ -x /usr/local/go/bin/go ]; then echo /usr/local/go/bin/go; else echo go; fi)
 
-VERSION  := $(shell cat VERSION 2>/dev/null || echo 0.0.1-dev)
+# VERSION file is the single source of truth. During development it carries
+# a `-dev` suffix (e.g. 0.1.1-dev) — that's the version that WILL be shipped
+# on the next `make ship`. Releases strip the suffix; `make ship` bumps the
+# file afterwards so the next development cycle has a fresh -dev tag.
+VERSION_FILE := VERSION
+VERSION      := $(shell cat $(VERSION_FILE) 2>/dev/null || echo 0.0.1-dev)
+# RELEASE_VERSION is VERSION minus any -dev suffix — what `make ship` actually
+# ships. Useful for inspecting state: `make show-version`.
+RELEASE_VERSION := $(shell cat $(VERSION_FILE) 2>/dev/null | sed 's/-dev$$//' || echo 0.0.1)
+
 COMMIT   := $(shell git -C . rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE     := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS  := -s -w \
@@ -23,10 +32,14 @@ PKG := ./cmd/mus
 
 # Signing — uses git's built-in SSH signing (gpg.format=ssh).
 # Override at the command line if you keep your signing key elsewhere:
-#   make release VERSION=0.1.0 SIGNING_KEY=~/.ssh/some_other_key
+#   make release SIGNING_KEY=~/.ssh/some_other_key
 SIGNING_KEY ?= $(HOME)/.ssh/id_ed25519
 
-.PHONY: build build-all test lint clean tidy run release release-verify sign publish
+# Bump level for `make bump` / `make ship`. patch (default), minor, or major.
+LEVEL ?= patch
+
+.PHONY: build build-all test lint clean tidy run release release-verify \
+        sign publish show-version bump ship
 
 # Binaries that get signed by `pika _sign`. Must match what `make build-all`
 # emits in dist/. Update both lists together if a platform is added/dropped.
@@ -69,21 +82,91 @@ run: build
 	./bin/mus $(ARGS)
 
 # ---------------------------------------------------------------------------
+# Version management
+#
+# `make show-version`    Print current VERSION file + what `ship` would do.
+# `make bump`            Increment patch in VERSION file (no release).
+# `make bump LEVEL=minor`  Bump minor (resets patch).
+# `make bump LEVEL=major`  Bump major (resets minor + patch).
+# `make ship`            Full release+publish: tag, sign, push, upload, bump.
+# ---------------------------------------------------------------------------
+
+show-version:
+	@echo "VERSION file:      $(VERSION)"
+	@echo "Would ship as:     v$(RELEASE_VERSION)"
+	@next=$$(scripts/next-version.sh $(RELEASE_VERSION) $(LEVEL)); \
+	  echo "Next $(LEVEL):         $$next-dev (after ship)"
+
+bump:
+	@next=$$(scripts/next-version.sh $(RELEASE_VERSION) $(LEVEL))-dev; \
+	  if [ "$$next" = "$(VERSION)" ]; then \
+	    echo "VERSION already at $$next"; \
+	  else \
+	    echo "$$next" > $(VERSION_FILE); \
+	    echo "$(VERSION) -> $$next"; \
+	  fi
+
+# ship: the maintainer's one-shot publish pipeline.
+#
+#   1. Strip -dev from VERSION file so the released build carries a clean tag.
+#   2. Commit the version pin.
+#   3. `make release` — cross-build, ed25519-sign each binary (pika prompts
+#      for the passphrase ONCE here), generate + ssh-sign SHA256SUMS, create
+#      signed git tag. This is the only interactive step.
+#   4. Bump VERSION to next $(LEVEL)-dev and commit.
+#   5. Push main + the new tag.
+#   6. `make publish` — upload assets to Codeberg via the API
+#      (CODEBERG_TOKEN/CODEBERG_GENERIC_TOKEN must be set).
+#
+# Aborts before any irreversible step if the working tree is dirty, the tag
+# already exists, or the pubkey/token is missing.
+ship:
+	@if [ -n "$$(git status --porcelain)" ]; then \
+	  echo "refusing to ship: working tree is dirty"; \
+	  git status --short; exit 1; \
+	fi
+	@if git rev-parse --verify --quiet "v$(RELEASE_VERSION)" >/dev/null; then \
+	  echo "refusing to ship: tag v$(RELEASE_VERSION) already exists"; \
+	  echo "   run 'make bump' first if you want the next version"; \
+	  exit 1; \
+	fi
+	@token=$${CODEBERG_TOKEN:-$${CODEBERG_GENERIC_TOKEN:-}}; \
+	if [ -z "$$token" ]; then \
+	  echo "CODEBERG_TOKEN (or CODEBERG_GENERIC_TOKEN) must be set for publish"; \
+	  exit 1; \
+	fi
+	@echo "==> shipping v$(RELEASE_VERSION)"
+	@# 1. Pin VERSION to the release (strip -dev) and commit if changed.
+	@echo "$(RELEASE_VERSION)" > $(VERSION_FILE)
+	@if ! git diff --quiet $(VERSION_FILE); then \
+	  git add $(VERSION_FILE); \
+	  git commit -m "release $(RELEASE_VERSION)" -q; \
+	fi
+	@# 2. Sign + tag (interactive — pika prompts for passphrase).
+	$(MAKE) release VERSION=$(RELEASE_VERSION)
+	@# 3. Bump VERSION for the next dev cycle and commit.
+	@next=$$(scripts/next-version.sh $(RELEASE_VERSION) $(LEVEL))-dev; \
+	  echo "$$next" > $(VERSION_FILE); \
+	  git add $(VERSION_FILE); \
+	  git commit -m "bump version to $$next" -q
+	@# 4. Push branch + tag.
+	git push origin main v$(RELEASE_VERSION)
+	@# 5. Upload assets to Codeberg.
+	$(MAKE) publish VERSION=$(RELEASE_VERSION)
+	@echo
+	@echo "shipped v$(RELEASE_VERSION). VERSION file is now $$(cat $(VERSION_FILE))."
+
+# ---------------------------------------------------------------------------
 # Release: cross-compile, generate signed SHA256SUMS, create signed git tag.
 #
-# Requires:
-#   - a working SSH signing key (see SIGNING_KEY above)
-#   - clean working tree (git status reports nothing)
-#
-# Usage:
+# Called by `make ship`; you can also run it directly:
 #   make release VERSION=0.1.0
 #
-# Pushes are NOT automatic — push manually after inspecting the tag:
-#   git push origin main v0.1.0
+# Pushes are NOT automatic — `make ship` handles the push + publish.
 # ---------------------------------------------------------------------------
 release:
-	@if [ "$(VERSION)" = "0.0.1-dev" ] || [ -z "$(VERSION)" ]; then \
-	  echo "make release VERSION=x.y.z   (cannot release with dev version)"; \
+	@if [ -z "$(VERSION)" ] || echo "$(VERSION)" | grep -qE '(-dev$$|^0\.0\.1-dev$$)'; then \
+	  echo "make release VERSION=x.y.z   (cannot release with -dev version)"; \
 	  exit 1; \
 	fi
 	@if [ -n "$$(git status --porcelain)" ]; then \

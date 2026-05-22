@@ -196,16 +196,27 @@ make test               # go test ./...
 Maintainer-only:
 
 ```bash
-make release VERSION=0.2.0      # cross-build, ed25519-sign each binary via
-                                # `pika _sign` (interactive — prompts for
-                                # passphrase), ssh-sign SHA256SUMS, create
-                                # signed git tag
-git push origin main v0.2.0     # publish tag
+make show-version               # show what's in VERSION + what `ship` would do
+make bump                       # bump patch in VERSION (no release)
+make bump LEVEL=minor           # or minor / major
+make ship                       # release + push + publish — one command
+make ship LEVEL=minor           # ship as a minor bump (overrides patch default)
+```
 
-# CODEBERG_TOKEN must be set; creates the Release on Codeberg and uploads
-# every binary + .sig + SHA256SUMS + SHA256SUMS.sig
-make publish VERSION=0.2.0
+`make ship` is the maintainer's full publishing pipeline. It reads VERSION
+(e.g. `0.1.1-dev`), strips `-dev`, and ships that. It then auto-bumps VERSION
+to the next `-dev` so the next dev cycle has a clean version. The only
+interactive step is pika's passphrase prompt during signing. Requires
+`CODEBERG_TOKEN` (or `CODEBERG_GENERIC_TOKEN`) in the environment.
 
+Lower-level targets (each piece of `ship`) are still available if you need
+to debug a stuck release:
+
+```bash
+make release VERSION=0.2.0      # cross-build, sign binaries via pika, ssh-sign
+                                # SHA256SUMS, create signed git tag
+git push origin main v0.2.0
+make publish VERSION=0.2.0      # uses CODEBERG_TOKEN to upload assets
 make sign                       # re-sign existing dist/ binaries (no rebuild)
 make release-verify             # verify dist/SHA256SUMS.sig
 ```

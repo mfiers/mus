@@ -58,19 +58,28 @@ mus/
 make build              # host binary -> ./bin/mus
 make build-all          # darwin/arm64 + linux/amd64 + linux/arm64 -> ./dist/
 make test               # go test ./...
-make release VERSION=x.y.z   # signed cross-build + signed tag (interactive)
-make publish VERSION=x.y.z   # upload assets to Codeberg (needs CODEBERG_TOKEN)
+make show-version       # print VERSION file + next planned version
+make bump [LEVEL=minor] # bump VERSION file (no release)
+make ship [LEVEL=minor] # full release pipeline (interactive — passphrase once)
 make release-verify     # verify dist/SHA256SUMS.sig against .gitsigners
 make clean
 ```
 
-Full publishing cycle:
+`make ship` is the maintainer's release pipeline:
+  1. Strip `-dev` from VERSION → that's the released version.
+  2. Commit the pin.
+  3. `make release` (cross-build, ed25519-sign with pika, ssh-sign SHA256SUMS,
+     signed git tag). Pika prompts for passphrase ONCE here.
+  4. Bump VERSION to next `LEVEL`-dev and commit.
+  5. Push main + tag.
+  6. `make publish` (Codeberg API uploads via CODEBERG_TOKEN).
 
-```
-make release VERSION=x.y.z      # interactive: pika prompts for passphrase
-git push origin main vx.y.z
-make publish VERSION=x.y.z      # non-interactive: uses CODEBERG_TOKEN
-```
+Lower-level targets (`make release VERSION=…`, `make publish VERSION=…`) are
+still available for partial reruns.
+
+VERSION file convention: holds the version that the *next* `make ship` will
+ship, plus a `-dev` suffix during development. Single source of truth — no
+separate `Version` constant to update.
 
 The host `go` may be too old — Makefile uses `/usr/local/go/bin/go` if present.
 
