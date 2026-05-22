@@ -58,9 +58,18 @@ mus/
 make build              # host binary -> ./bin/mus
 make build-all          # darwin/arm64 + linux/amd64 + linux/arm64 -> ./dist/
 make test               # go test ./...
-make release VERSION=x.y.z   # signed cross-build + signed tag
+make release VERSION=x.y.z   # signed cross-build + signed tag (interactive)
+make publish VERSION=x.y.z   # upload assets to Codeberg (needs CODEBERG_TOKEN)
 make release-verify     # verify dist/SHA256SUMS.sig against .gitsigners
 make clean
+```
+
+Full publishing cycle:
+
+```
+make release VERSION=x.y.z      # interactive: pika prompts for passphrase
+git push origin main vx.y.z
+make publish VERSION=x.y.z      # non-interactive: uses CODEBERG_TOKEN
 ```
 
 The host `go` may be too old — Makefile uses `/usr/local/go/bin/go` if present.

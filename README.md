@@ -197,8 +197,15 @@ Maintainer-only:
 
 ```bash
 make release VERSION=0.2.0      # cross-build, ed25519-sign each binary via
-                                # `pika _sign`, ssh-sign SHA256SUMS, create
+                                # `pika _sign` (interactive — prompts for
+                                # passphrase), ssh-sign SHA256SUMS, create
                                 # signed git tag
+git push origin main v0.2.0     # publish tag
+
+# CODEBERG_TOKEN must be set; creates the Release on Codeberg and uploads
+# every binary + .sig + SHA256SUMS + SHA256SUMS.sig
+make publish VERSION=0.2.0
+
 make sign                       # re-sign existing dist/ binaries (no rebuild)
 make release-verify             # verify dist/SHA256SUMS.sig
 ```

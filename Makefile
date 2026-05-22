@@ -26,7 +26,7 @@ PKG := ./cmd/mus
 #   make release VERSION=0.1.0 SIGNING_KEY=~/.ssh/some_other_key
 SIGNING_KEY ?= $(HOME)/.ssh/id_ed25519
 
-.PHONY: build build-all test lint clean tidy run release release-verify sign
+.PHONY: build build-all test lint clean tidy run release release-verify sign publish
 
 # Binaries that get signed by `pika _sign`. Must match what `make build-all`
 # emits in dist/. Update both lists together if a platform is added/dropped.
@@ -147,6 +147,21 @@ sign:
 	  test -f $$b.sig || { echo "pika did not produce $$b.sig"; exit 1; }; \
 	done
 	@echo "signed: $(RELEASE_BINARIES)"
+
+# Publish the release built by `make release VERSION=$(VERSION)` to Codeberg.
+# Creates the release object (idempotent if it already exists) and uploads
+# every binary + .sig + SHA256SUMS + SHA256SUMS.sig as an asset.
+#
+# Requires:
+#   - dist/ populated by `make release VERSION=$(VERSION)`
+#   - git tag v$(VERSION) pushed to origin
+#   - CODEBERG_TOKEN (or CODEBERG_GENERIC_TOKEN) in the environment with
+#     `write:repository` scope on atrxia/mus
+publish:
+	@case "$(VERSION)" in \
+	  ""|*-dev) echo "make publish VERSION=x.y.z  (got '$(VERSION)')"; exit 1 ;; \
+	esac
+	bash scripts/publish-release.sh "$(VERSION)"
 
 # Verify the most recent build's signature (smoke test for verifiers).
 release-verify:

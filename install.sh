@@ -119,13 +119,42 @@ find_install_dir() {
 # --- release lookup ----------------------------------------------------------
 
 get_latest_tag() {
-    local url body tag
+    local url body tag http_status
     url="https://codeberg.org/api/v1/repos/$REPO/releases/latest"
-    body=$(curl -fsSL "$url") || die "Could not fetch latest release info from $url"
-    # Parse "tag_name":"vX.Y.Z" without depending on python/jq
-    tag=$(printf "%s" "$body" | grep -o '"tag_name":"[^"]*"' | head -n1 | cut -d'"' -f4)
-    [ -n "$tag" ] || die "Could not parse tag_name from release API response"
-    echo "$tag"
+    # Capture body + HTTP status so we can give a specific error for 404
+    # (which means "no releases published yet" — different from a network
+    # failure or a 5xx).
+    body=$(curl -sSL -w "\n__HTTP__:%{http_code}" "$url") || die "Network error reaching $url"
+    http_status=$(printf "%s" "$body" | tail -n1 | sed 's/__HTTP__://')
+    body=$(printf "%s" "$body" | sed '$d')
+
+    case "$http_status" in
+        200)
+            tag=$(printf "%s" "$body" | grep -o '"tag_name":"[^"]*"' | head -n1 | cut -d'"' -f4)
+            [ -n "$tag" ] || die "Could not parse tag_name from release API response"
+            echo "$tag"
+            ;;
+        404)
+            die "No releases have been published yet for $REPO.
+
+   The git tags exist (https://codeberg.org/$REPO/tags) but no release
+   artifacts have been attached. Options:
+
+   1. Build from source:
+        git clone https://codeberg.org/$REPO.git
+        cd mus && make build
+        cp bin/mus ~/.local/bin/
+
+   2. Install a specific tag once the maintainer publishes a release:
+        MUS_VERSION=v0.1.1 curl -sSL .../install.sh | bash
+
+   If you are the maintainer: run \`make release VERSION=x.y.z\` then
+   \`make publish VERSION=x.y.z\`."
+            ;;
+        *)
+            die "Codeberg release API returned HTTP $http_status: $body"
+            ;;
+    esac
 }
 
 # --- main --------------------------------------------------------------------
