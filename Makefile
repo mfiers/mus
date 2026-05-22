@@ -38,6 +38,16 @@ SIGNING_KEY ?= $(HOME)/.ssh/id_ed25519
 # Bump level for `make bump` / `make ship`. patch (default), minor, or major.
 LEVEL ?= patch
 
+# SIGN=0 skips ed25519-signing of release binaries — useful for fast debug
+# iteration where you don't want to type the pika passphrase. Defaults to 1.
+# Side effects when SIGN=0:
+#   - no <binary>.sig files in dist/
+#   - `mus upgrade` will REFUSE to install the resulting release (because
+#     internal/signing.PubkeyB64 is set; a missing .sig is treated as tampered)
+#   - install.sh prints a warning but installs anyway
+# Tag + SHA256SUMS still get ssh-signed (those are non-interactive).
+SIGN ?= 1
+
 .PHONY: build build-all test lint clean tidy run release release-verify \
         sign publish show-version bump ship
 
@@ -136,14 +146,21 @@ ship:
 	  exit 1; \
 	fi
 	@echo "==> shipping v$(RELEASE_VERSION)"
+	@if [ "$(SIGN)" = "0" ]; then \
+	  printf '\033[33m'; \
+	  echo "==> SIGN=0: skipping ed25519 binary signing"; \
+	  echo "    -> mus upgrade will REFUSE this release"; \
+	  echo "    -> intended for fast debug iteration only"; \
+	  printf '\033[0m'; \
+	fi
 	@# 1. Pin VERSION to the release (strip -dev) and commit if changed.
 	@echo "$(RELEASE_VERSION)" > $(VERSION_FILE)
 	@if ! git diff --quiet $(VERSION_FILE); then \
 	  git add $(VERSION_FILE); \
 	  git commit -m "release $(RELEASE_VERSION)" -q; \
 	fi
-	@# 2. Sign + tag (interactive — pika prompts for passphrase).
-	$(MAKE) release VERSION=$(RELEASE_VERSION)
+	@# 2. Sign + tag. Pika prompts for passphrase unless SIGN=0.
+	$(MAKE) release VERSION=$(RELEASE_VERSION) SIGN=$(SIGN)
 	@# 3. Bump VERSION for the next dev cycle and commit.
 	@next=$$(scripts/next-version.sh $(RELEASE_VERSION) $(LEVEL))-dev; \
 	  echo "$$next" > $(VERSION_FILE); \
@@ -185,8 +202,12 @@ release:
 	@echo "==> building v$(VERSION)"
 	rm -rf dist
 	$(MAKE) build-all VERSION=$(VERSION)
-	@echo "==> ed25519-signing each binary via pika (programmatic upgrade path)"
-	$(MAKE) sign
+	@if [ "$(SIGN)" = "0" ]; then \
+	  echo "==> SIGN=0: skipping pika ed25519 signing"; \
+	else \
+	  echo "==> ed25519-signing each binary via pika (programmatic upgrade path)"; \
+	  $(MAKE) sign; \
+	fi
 	@echo "==> generating SHA256SUMS (covers binaries and per-binary .sig files)"
 	cd dist && sha256sum mus-* > SHA256SUMS
 	@echo "==> ssh-signing SHA256SUMS (manual verification path) with $(SIGNING_KEY)"

@@ -52,16 +52,27 @@ for f in "${required[@]}"; do
     [ -f "$f" ] || { echo "missing $f — run 'make release VERSION=$VERSION'" >&2; exit 1; }
 done
 
-# Every binary must have a .sig (otherwise mus upgrade would refuse to install
-# from this release).
+# Detect whether the release is signed. Either every binary has a .sig or
+# none does. A partial state is a setup bug we want to surface.
+have_sig=0
 missing_sig=0
 for bin in dist/mus-linux-amd64 dist/mus-linux-arm64 dist/mus-darwin-arm64; do
-    if [ ! -f "$bin.sig" ]; then
-        echo "missing $bin.sig — run 'make sign' to ed25519-sign binaries" >&2
-        missing_sig=1
-    fi
+    if [ -f "$bin.sig" ]; then have_sig=$((have_sig + 1)); else missing_sig=$((missing_sig + 1)); fi
 done
-[ "$missing_sig" = 0 ] || exit 1
+if [ "$have_sig" -gt 0 ] && [ "$missing_sig" -gt 0 ]; then
+    echo "partial signing state: $have_sig signed, $missing_sig unsigned" >&2
+    echo "either run 'make sign' or remove dist/*.sig and re-run" >&2
+    exit 1
+fi
+if [ "$have_sig" = 0 ]; then
+    cat >&2 <<'WARN'
+WARNING: no .sig files in dist/ — this release will be UNSIGNED.
+  mus upgrade will refuse to install from it (embedded pubkey is set, so a
+  missing .sig is treated as tampering). install.sh will warn and install.
+  Intended only for fast debug iteration. Set SIGN=1 (default) for a real
+  release.
+WARN
+fi
 
 # Tag must exist locally and have been pushed.
 git rev-parse --verify --quiet "$TAG" >/dev/null \
@@ -176,7 +187,8 @@ upload_one() {
 }
 
 # Upload in a deterministic order: binaries first (most-clicked), then sigs,
-# then checksums.
+# then checksums. Skip any file that doesn't exist — supports the SIGN=0 path
+# where .sig files are absent.
 for f in \
     dist/mus-linux-amd64 \
     dist/mus-linux-arm64 \
@@ -187,6 +199,7 @@ for f in \
     dist/SHA256SUMS \
     dist/SHA256SUMS.sig
 do
+    [ -f "$f" ] || continue
     upload_one "$f"
 done
 

@@ -201,6 +201,8 @@ make bump                       # bump patch in VERSION (no release)
 make bump LEVEL=minor           # or minor / major
 make ship                       # release + push + publish — one command
 make ship LEVEL=minor           # ship as a minor bump (overrides patch default)
+make ship SIGN=0                # skip ed25519 binary signing (fast debug;
+                                # mus upgrade will REFUSE the resulting release)
 ```
 
 `make ship` is the maintainer's full publishing pipeline. It reads VERSION
