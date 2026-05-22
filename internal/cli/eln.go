@@ -20,13 +20,19 @@ func newELNCmd() *cobra.Command {
 }
 
 func newELNTagFolderCmd() *cobra.Command {
-	var expID int64
+	// Flag is a string, not Int64, because cobra's Int64Var parses with
+	// strconv.ParseInt(s, 0, 64) — base-0 means a leading "0" is interpreted
+	// as octal, which breaks on eLabJournal's long-form IDs that copy-paste
+	// in with leading zeros (e.g. "001000000001303549" contains a "9", which
+	// is not a valid octal digit). We parse with base 10 explicitly.
+	var expIDStr string
 	cmd := &cobra.Command{
 		Use:   "tag-folder",
 		Short: "link the current folder to an ELN experiment (writes .mus)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if expID == 0 {
-				return fmt.Errorf("-x/--experiment-id is required")
+			expID, err := parseELNExperimentID(expIDStr)
+			if err != nil {
+				return err
 			}
 			dir, err := workingDir(cmd)
 			if err != nil {
@@ -54,9 +60,32 @@ func newELNTagFolderCmd() *cobra.Command {
 			return config.Save(dir, kv)
 		},
 	}
-	cmd.Flags().Int64VarP(&expID, "experiment-id", "x", 0, "ELN experiment ID")
+	cmd.Flags().StringVarP(&expIDStr, "experiment-id", "x", "", "ELN experiment ID (digits; leading zeros tolerated)")
 	_ = cmd.MarkFlagRequired("experiment-id")
 	return cmd
+}
+
+// parseELNExperimentID accepts a digit string and returns an int64. Leading
+// zeros are stripped — eLabJournal's web UI occasionally copy-pastes IDs with
+// extra leading zeros. Returns an error for anything that isn't a non-empty
+// run of decimal digits.
+func parseELNExperimentID(raw string) (int64, error) {
+	if raw == "" {
+		return 0, fmt.Errorf("-x/--experiment-id is required")
+	}
+	for _, r := range raw {
+		if r < '0' || r > '9' {
+			return 0, fmt.Errorf("experiment ID %q contains non-digit %q", raw, string(r))
+		}
+	}
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("experiment ID %q: %w", raw, err)
+	}
+	if id <= 0 {
+		return 0, fmt.Errorf("experiment ID must be positive, got %d", id)
+	}
+	return id, nil
 }
 
 func newELNUpdateCmd() *cobra.Command {
