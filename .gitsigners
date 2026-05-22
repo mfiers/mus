@@ -1,0 +1,26 @@
+# Authorised release signers for mus.
+#
+# This file is consumed by `git verify-tag`, `git verify-commit`, and
+# `ssh-keygen -Y verify` to confirm that a release artifact was signed by an
+# expected identity.
+#
+# Format (see git-config(1) `gpg.ssh.allowedSignersFile` and ssh-keygen(1)
+# `ALLOWED SIGNERS`): one entry per line:
+#
+#   <principal>   [namespaces=...]   <ssh-pubkey>
+#
+# To verify a checksum file:
+#   ssh-keygen -Y verify -f .gitsigners \
+#       -I mark.fiers@kuleuven.be \
+#       -n file \
+#       -s dist/SHA256SUMS.sig < dist/SHA256SUMS
+#
+# To verify a git tag:
+#   git -c gpg.ssh.allowedSignersFile=.gitsigners verify-tag v0.1.0
+#
+# Trust-bootstrapping note: the entry below is committed inside the repo it
+# verifies, so a clone alone cannot prove it was not tampered with. Cross-check
+# the public key against https://codeberg.org/atrxia.keys before treating
+# signatures as authoritative.
+
+mark.fiers@kuleuven.be namespaces="git,file" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHP0TEW6QS203/gQ9ch11yWEnHrOZwsrWtUnxyLsDpEn

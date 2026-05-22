@@ -1,0 +1,24 @@
+# build artifacts
+/bin/
+/dist/
+
+# go
+/vendor/
+*.test
+*.out
+coverage.txt
+
+# editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# local
+*.local
+.env
+.env.local
