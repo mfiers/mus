@@ -67,17 +67,24 @@ The host `go` may be too old — Makefile uses `/usr/local/go/bin/go` if present
 
 ## Signing
 
-Releases are signed end-to-end with the maintainer's SSH key (no GPG):
+Releases use **two complementary signing schemes**. Both run automatically
+inside `make release`:
 
-- **Tags + commits**: `git config commit.gpgsign=true tag.gpgsign=true` with
-  `gpg.format=ssh` and `user.signingkey=~/.ssh/id_ed25519.pub` (configured at
-  the *repo* level — does not touch `~/.gitconfig`).
-- **Release artifacts**: `make release` cross-builds, generates
-  `dist/SHA256SUMS`, and signs it with `ssh-keygen -Y sign -n file` →
-  `dist/SHA256SUMS.sig`.
-- **Trust root**: `.gitsigners` (checked into the repo) lists the allowed
-  signer keys. Verifiers should cross-check those keys against
-  `https://codeberg.org/atrxia.keys` before trusting blind.
+1. **Per-binary ed25519** (`*.sig` next to each binary) — for the
+   programmatic upgrade path. `make sign` shells out to `pika _sign` from the
+   sibling project; pika owns the only private key file. `mus upgrade`
+   verifies every downloaded binary against the pubkey embedded in
+   `internal/signing.PubkeyB64`. The same key signs every Go binary in this
+   maintainer's projects — do NOT regenerate per-project. See
+   `/data/1/users/mark/pika/doc/signing.md` for the full design + threat model.
+2. **SSH-signed `SHA256SUMS`** — for the manual verification path. The
+   maintainer's `~/.ssh/id_ed25519` signs `dist/SHA256SUMS` via
+   `ssh-keygen -Y sign -n file` → `dist/SHA256SUMS.sig`. `.gitsigners` is the
+   trust root, cross-checked against `https://codeberg.org/atrxia.keys`.
+
+Tags and commits are also SSH-signed via the repo-local
+`commit.gpgsign=true`, `tag.gpgsign=true`, `gpg.format=ssh`,
+`user.signingkey=~/.ssh/id_ed25519.pub` (no `~/.gitconfig` mutation).
 
 Verifier workflow:
 

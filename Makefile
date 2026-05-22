@@ -26,7 +26,14 @@ PKG := ./cmd/mus
 #   make release VERSION=0.1.0 SIGNING_KEY=~/.ssh/some_other_key
 SIGNING_KEY ?= $(HOME)/.ssh/id_ed25519
 
-.PHONY: build build-all test lint clean tidy run release release-verify
+.PHONY: build build-all test lint clean tidy run release release-verify sign
+
+# Binaries that get signed by `pika _sign`. Must match what `make build-all`
+# emits in dist/. Update both lists together if a platform is added/dropped.
+RELEASE_BINARIES := \
+    dist/mus-linux-amd64 \
+    dist/mus-linux-arm64 \
+    dist/mus-darwin-arm64
 
 build:
 	@mkdir -p bin
@@ -95,11 +102,13 @@ release:
 	@echo "==> building v$(VERSION)"
 	rm -rf dist
 	$(MAKE) build-all VERSION=$(VERSION)
-	@echo "==> generating SHA256SUMS"
+	@echo "==> ed25519-signing each binary via pika (programmatic upgrade path)"
+	$(MAKE) sign
+	@echo "==> generating SHA256SUMS (covers binaries and per-binary .sig files)"
 	cd dist && sha256sum mus-* > SHA256SUMS
-	@echo "==> signing SHA256SUMS with $(SIGNING_KEY)"
+	@echo "==> ssh-signing SHA256SUMS (manual verification path) with $(SIGNING_KEY)"
 	ssh-keygen -Y sign -f $(SIGNING_KEY) -n file dist/SHA256SUMS
-	@echo "==> verifying signature locally"
+	@echo "==> verifying ssh signature locally"
 	ssh-keygen -Y verify -f .gitsigners \
 	    -I "$$(git config user.email)" \
 	    -n file -s dist/SHA256SUMS.sig < dist/SHA256SUMS
@@ -113,6 +122,31 @@ release:
 	@echo "  git push origin main 'v$(VERSION)'"
 	@echo "  # then upload dist/mus-* + dist/SHA256SUMS + dist/SHA256SUMS.sig"
 	@echo "  # to https://codeberg.org/atrxia/mus/releases/tag/v$(VERSION)"
+
+# Sign each release binary with the shared ed25519 release key via the pika
+# CLI. pika lives in the sibling project and owns the only private key file
+# (see /data/1/users/mark/pika/doc/signing.md). This target produces a
+# `<binary>.sig` next to each binary; `mus upgrade` later verifies these
+# against the embedded pubkey in internal/signing.PubkeyB64.
+#
+# Standalone: run after `make build-all` if you only want to re-sign without
+# rebuilding (e.g. after rotating to a new key). Otherwise `make release`
+# invokes it automatically.
+sign:
+	@if ! command -v pika >/dev/null 2>&1; then \
+	  echo "pika not found on PATH — install from the sibling project to sign releases"; \
+	  exit 1; \
+	fi
+	@for b in $(RELEASE_BINARIES); do \
+	  if [ ! -f $$b ]; then \
+	    echo "missing $$b — run 'make build-all' first"; exit 1; \
+	  fi; \
+	done
+	pika _sign $(RELEASE_BINARIES)
+	@for b in $(RELEASE_BINARIES); do \
+	  test -f $$b.sig || { echo "pika did not produce $$b.sig"; exit 1; }; \
+	done
+	@echo "signed: $(RELEASE_BINARIES)"
 
 # Verify the most recent build's signature (smoke test for verifiers).
 release-verify:
