@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/mfiers/mus/internal/hashcache"
-	"github.com/mfiers/mus/internal/sidecar"
+	"codeberg.org/atrxia/mus/internal/hashcache"
+	"codeberg.org/atrxia/mus/internal/sidecar"
 	"github.com/spf13/cobra"
 )
 

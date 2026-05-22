@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mfiers/mus/internal/config"
+	"codeberg.org/atrxia/mus/internal/config"
 	"github.com/spf13/cobra"
 )
 

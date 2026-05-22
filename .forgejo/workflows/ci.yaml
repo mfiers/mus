@@ -1,0 +1,72 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+# Cancel in-flight runs on the same ref when a newer push lands.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: docker
+    container:
+      image: golang:1.25
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::unformatted files:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: test
+        run: go test -race ./...
+
+  build-matrix:
+    needs: test
+    runs-on: docker
+    container:
+      image: golang:1.25
+    strategy:
+      matrix:
+        target:
+          - { os: linux,  arch: amd64 }
+          - { os: linux,  arch: arm64 }
+          - { os: darwin, arch: arm64 }
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: build ${{ matrix.target.os }}/${{ matrix.target.arch }}
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.target.os }}
+          GOARCH: ${{ matrix.target.arch }}
+        run: |
+          mkdir -p dist
+          go build -trimpath \
+            -ldflags="-s -w \
+              -X 'codeberg.org/atrxia/mus/internal/cli.Version=${GITHUB_REF_NAME:-dev}' \
+              -X 'codeberg.org/atrxia/mus/internal/cli.Commit=${GITHUB_SHA::7}'" \
+            -o dist/mus-${GOOS}-${GOARCH} \
+            ./cmd/mus
+          ls -lh dist/
+
+# Release artifacts (signed SHA256SUMS + binaries) are produced locally by
+# `make release VERSION=x.y.z` and uploaded manually to the Codeberg release
+# page. We don't sign in CI on purpose: the maintainer's signing key must not
+# live on the runner.

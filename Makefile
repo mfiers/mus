@@ -15,9 +15,9 @@ VERSION  := $(shell cat VERSION 2>/dev/null || echo 0.0.1-dev)
 COMMIT   := $(shell git -C . rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE     := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS  := -s -w \
-            -X 'github.com/mfiers/mus/internal/cli.Version=$(VERSION)' \
-            -X 'github.com/mfiers/mus/internal/cli.Commit=$(COMMIT)' \
-            -X 'github.com/mfiers/mus/internal/cli.BuildDate=$(DATE)'
+            -X 'codeberg.org/atrxia/mus/internal/cli.Version=$(VERSION)' \
+            -X 'codeberg.org/atrxia/mus/internal/cli.Commit=$(COMMIT)' \
+            -X 'codeberg.org/atrxia/mus/internal/cli.BuildDate=$(DATE)'
 
 PKG := ./cmd/mus
 

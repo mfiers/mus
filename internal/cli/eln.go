@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/mfiers/mus/internal/config"
-	"github.com/mfiers/mus/internal/eln"
-	"github.com/mfiers/mus/internal/secret"
+	"codeberg.org/atrxia/mus/internal/config"
+	"codeberg.org/atrxia/mus/internal/eln"
+	"codeberg.org/atrxia/mus/internal/secret"
 	"github.com/spf13/cobra"
 )
 
