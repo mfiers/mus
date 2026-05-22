@@ -52,16 +52,51 @@ mus/
   report/              status reports
 ```
 
-## Build / test
+## Build / test / release
 
 ```
 make build              # host binary -> ./bin/mus
 make build-all          # darwin/arm64 + linux/amd64 + linux/arm64 -> ./dist/
 make test               # go test ./...
+make release VERSION=x.y.z   # signed cross-build + signed tag
+make release-verify     # verify dist/SHA256SUMS.sig against .gitsigners
 make clean
 ```
 
 The host `go` may be too old — Makefile uses `/usr/local/go/bin/go` if present.
+
+## Signing
+
+Releases are signed end-to-end with the maintainer's SSH key (no GPG):
+
+- **Tags + commits**: `git config commit.gpgsign=true tag.gpgsign=true` with
+  `gpg.format=ssh` and `user.signingkey=~/.ssh/id_ed25519.pub` (configured at
+  the *repo* level — does not touch `~/.gitconfig`).
+- **Release artifacts**: `make release` cross-builds, generates
+  `dist/SHA256SUMS`, and signs it with `ssh-keygen -Y sign -n file` →
+  `dist/SHA256SUMS.sig`.
+- **Trust root**: `.gitsigners` (checked into the repo) lists the allowed
+  signer keys. Verifiers should cross-check those keys against
+  `https://codeberg.org/atrxia.keys` before trusting blind.
+
+Verifier workflow:
+
+```
+git -c gpg.ssh.allowedSignersFile=.gitsigners verify-tag v0.1.0
+ssh-keygen -Y verify -f .gitsigners \
+    -I mark.fiers@kuleuven.be \
+    -n file -s dist/SHA256SUMS.sig < dist/SHA256SUMS
+sha256sum -c dist/SHA256SUMS
+```
+
+If `.gitsigners` ever grows multiple maintainers, give each an entry of the
+form `principal namespaces="git,file" keytype base64`. Empty lines in the file
+trigger an "invalid key" parser warning — keep it dense.
+
+## Remotes
+
+`origin` → `ssh://git@codeberg.org/atrxia/mus.git`. Pushes are deliberately
+manual — `make release` only prepares artifacts and prints the push command.
 
 ## Conventions
 
