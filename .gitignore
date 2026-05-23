@@ -20,5 +20,7 @@ Thumbs.db
 
 # local
 *.local
-.env
 .env.local
+# NOTE: `.env` itself is NOT ignored — it's the cascading folder-config file
+# that mus reads (replaces the old TOML `.mus` design). Users typically
+# commit project/experiment-level `.env` files.

@@ -2,7 +2,7 @@
 
 > Research data management CLI — tag files with checksums, sync to iRODS via IRON, push metadata to eLabJournal.
 
-`mus` walks a directory tree, reads `.mus` TOML configs cascading up the tree (project / study / experiment context), and writes one `*.mus` TOML sidecar per data file holding its sha256, size, mtime, and remote-storage status. It then uses those sidecars to sync to the KU Leuven Mango iRODS service via the `iron` CLI and to post metadata + uploads to eLabJournal.
+`mus` walks a directory tree, reads `.env` files cascading up the tree (project / study / experiment context), and writes one `*.mus` sidecar per data file holding its sha256, size, mtime, and remote-storage status. Both file types use the same flat `KEY=VALUE` format. The CLI then uses those sidecars to sync to the KU Leuven Mango iRODS service via the `iron` CLI and to stamp metadata for eLabJournal.
 
 Ground-up Go rewrite of the previous Python `mus`. Statically-linked, no CGO, ~10 MB per platform.
 
@@ -98,48 +98,43 @@ it as metadata; `mus eln update` is disabled until the API path is clear.
 
 ## How it works
 
-### Folder config: cascading `.mus`
+### Folder config: cascading `.env`
 
-`mus` walks the directory tree upward looking for `.mus` files and merges them, root-most first. Closer (deeper) files override or extend ones higher up. Typical lab layout:
+`mus` walks the directory tree upward looking for `.env` files and merges them, root-most first. Closer (deeper) files override or extend ones higher up. The grammar is a flat `KEY=VALUE` format — one pair per line, `#` for comments, blank lines ignored. Two keys (`tag`, `collaborator`) are list-valued: comma-separated, and a value prefixed with `-` removes a previously-added entry.
 
-```toml
-# /lab/projects/.mus
-irods_home = "/zone/home/lab"
-irods_web  = "https://mango.kuleuven.be/data-object/view"
-tag        = ["lab"]                # list-valued; merges, prefix "-" removes
+Typical lab layout:
 
-# /lab/projects/project_alpha/exp_42/.mus
-tag = ["exp42", "-lab"]             # drops the inherited "lab" tag
+```sh
+# /lab/projects/.env  — lab-wide defaults
+irods_home=/zone/home/lab
+irods_web=https://mango.kuleuven.be/data-object/view
+tag=lab,shared
 
-# Optional — only the experiment ID is needed for iRODS upload to work.
-# `mus eln tag-folder -x 12345` writes this for you.
-[eln]
-experiment_id = "12345"
-
-# Optional — explicit iRODS subpath under irods_home. If unset and an
-# eln.experiment_id exists, the default is `exp_<id>/`. Set this when you
-# want a different layout.
-# irods_path = "alpha/raw/exp_42"
+# /lab/projects/project_alpha/exp_42/.env  — per-experiment override
+tag=exp42,-lab                  # drops the inherited "lab" tag
+eln_experiment_id=12345         # `mus eln tag-folder -x 12345` writes this
+# irods_path=alpha/raw/exp_42   # optional; defaults to exp_<eln_experiment_id>
 ```
 
 Inspect:
 
 ```bash
 mus config show          # effective (cascaded) config
-mus config show --local  # only the .mus in the current folder
-mus config files         # paths of every .mus contributing to the cascade
-mus config set tag exp42 # writes to the local .mus
+mus config show --local  # only the .env in the current folder
+mus config files         # paths of every .env contributing to the cascade
+mus config set tag exp42 # writes to the local .env
 ```
 
 ### Per-file sidecars: `<datafile>.mus`
 
-`mus tag data.csv -m "raw"` writes `data.csv.mus` next to the data file. The sidecar carries:
+`mus tag data.csv -m "raw"` writes `data.csv.mus` next to the data file. Same flat `KEY=VALUE` format as `.env`. Fields recorded:
 
-- `[file]` — sha256, size, mtime, hashed time, host, abspath
-- `[irods]` — populated after `mus irods upload`
-- `[eln]` — populated from the `[eln]` section of the `.mus` cascade
-- `[s3]` — populated by `mus s3 upload` (planned)
-- `tags`, `note`
+- File: `sha256`, `size`, `mtime`, `hashed`, `host`, `abspath`
+- iRODS (after `mus irods upload`): `irods_url`, `irods_path`, `irods_status`, `irods_uploaded_at`
+- ELN (from the `.env` cascade): `eln_experiment_id` (and `eln_*_name` / `eln_*_id` if available)
+- S3 (planned): `s3_url`, `s3_bucket`, `s3_key`, `s3_etag`, `s3_uploaded_at`
+- Free-form: `note`, `tags` (comma-separated)
+- Bookkeeping: `version`, `created`, `updated`
 
 A local SQLite cache at `~/.local/share/mus/hashcache.db` (override with `MUS_HASHCACHE_DB`) makes repeat sha256 lookups stat-fast: entries are reused only when both size and mtime match. Modify a file and the next `mus check` rehashes it.
 
@@ -171,8 +166,8 @@ git -c gpg.ssh.allowedSignersFile=.gitsigners verify-tag v0.1.0
 ```
 mus version                    print version + build info
 mus config show [--json|--local]
-mus config set KEY VALUE       write a key to the local .mus
-mus config files               list .mus files in the cascade
+mus config set KEY VALUE       write a key to the local .env
+mus config files               list .env files in the cascade
 mus secret set NAME [VALUE]    set a secret (reads stdin if VALUE omitted)
 mus secret get NAME
 mus secret list

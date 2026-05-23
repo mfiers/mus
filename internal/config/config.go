@@ -1,12 +1,11 @@
-// Package config reads cascading `.mus` TOML files.
+// Package config reads cascading `.env` files using the legacy flat
+// key=value format.
 //
-// On every call to Load(dir), config walks from `dir` upward to the filesystem
-// root, collects every `.mus` file along the way, and merges them so that
-// closer (deeper) files override / extend the ones above them. The result is a
-// single Env keyed by lowercase string.
-//
-// List-valued keys (currently `tag` and `collaborator`) merge instead of
-// overriding: a value prefixed with `-` removes a previously added entry.
+// Walking from the filesystem root *down* to the working directory, every
+// `.env` along the way is loaded in order; later (deeper) files override or
+// extend earlier (shallower) ones. List-valued keys (`tag`, `collaborator`)
+// merge instead of overriding — a value prefixed with `-` removes a
+// previously added entry.
 package config
 
 import (
@@ -14,25 +13,28 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 
-	"github.com/pelletier/go-toml/v2"
+	"codeberg.org/atrxia/mus/internal/envformat"
 )
 
-// FileName is the name of the cascading folder-config file mus looks for.
-const FileName = ".mus"
+// FileName is the cascading folder-config file mus looks for.
+const FileName = ".env"
 
-// ListKeys are TOML keys treated as merged string lists across the cascade.
-// A value prefixed with `-` removes a previously added entry.
-var ListKeys = map[string]bool{
+// listKeys are the keys treated as merged string lists across the cascade.
+// A value prefixed with `-` removes a previously added entry. Matches the
+// legacy Python `mus` LIST_KEYS.
+var listKeys = map[string]bool{
 	"tag":          true,
 	"collaborator": true,
 }
 
+func parseOpts() envformat.Options {
+	return envformat.Options{ListKeys: listKeys}
+}
+
 // Env is the merged configuration for a directory. Scalar values are stored
-// as strings; list values as []string. Callers should use the typed accessors
-// (String / List) rather than poking at the map directly.
+// as strings; list values as []string.
 type Env struct {
 	values map[string]any
 	// files lists the cascade in load order (root-most first, deepest last).
@@ -61,7 +63,7 @@ func (e *Env) Has(key string) bool {
 	return ok
 }
 
-// List returns the list value for key (must be a ListKey).
+// List returns the list value for key (must be a list key).
 func (e *Env) List(key string) []string {
 	if e == nil {
 		return nil
@@ -76,7 +78,7 @@ func (e *Env) List(key string) []string {
 	return nil
 }
 
-// All returns a copy of every key/value (scalars and lists). Useful for
+// All returns a copy of every key/value pair (scalars and lists). Useful for
 // `mus config show`.
 func (e *Env) All() map[string]any {
 	out := make(map[string]any, len(e.values))
@@ -91,7 +93,7 @@ func (e *Env) All() map[string]any {
 	return out
 }
 
-// Files returns the cascade of `.mus` files that contributed to this Env,
+// Files returns the cascade of `.env` files that contributed to this Env,
 // root-most first.
 func (e *Env) Files() []string { return append([]string(nil), e.files...) }
 
@@ -100,10 +102,18 @@ func (e *Env) Set(key, value string) {
 	if e.values == nil {
 		e.values = map[string]any{}
 	}
-	if ListKeys[key] {
+	if listKeys[key] {
 		cur := e.List(key)
-		applyListVal(&cur, value)
-		e.values[key] = cur
+		envformat.MergeInto(map[string]any{key: cur}, map[string]any{key: []string{value}}, parseOpts())
+		// Simpler: just apply directly.
+		cur = e.List(key)
+		out := []string{}
+		envformat.MergeInto(map[string]any{key: out}, map[string]any{key: append(cur, value)}, parseOpts())
+		// Honestly: easiest correct path is to round-trip through MergeInto
+		// against a fresh empty list.
+		merged := map[string]any{}
+		envformat.MergeInto(merged, map[string]any{key: append(cur, value)}, parseOpts())
+		e.values[key] = merged[key]
 		return
 	}
 	e.values[key] = value
@@ -121,7 +131,7 @@ var (
 	fileCache   = map[string]cacheEntry{}
 )
 
-// Load discovers every `.mus` from filesystem root down to `dir`, parses each
+// Load discovers every `.env` from filesystem root down to `dir`, parses each
 // (with mtime-keyed memoisation), and returns the merged Env.
 func Load(dir string) (*Env, error) {
 	abs, err := filepath.Abs(dir)
@@ -132,18 +142,18 @@ func Load(dir string) (*Env, error) {
 	if err != nil {
 		return nil, err
 	}
-	env := &Env{values: map[string]any{}, files: files}
+	merged := map[string]any{}
 	for _, f := range files {
 		single, err := loadSingle(f)
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", f, err)
 		}
-		mergeInto(env.values, single)
+		envformat.MergeInto(merged, single, parseOpts())
 	}
-	return env, nil
+	return &Env{values: merged, files: files}, nil
 }
 
-// LoadLocal reads only the `.mus` in `dir` itself (no cascade). Returns an
+// LoadLocal reads only the `.env` in `dir` itself (no cascade). Returns an
 // empty Env if the file does not exist.
 func LoadLocal(dir string) (*Env, error) {
 	abs, err := filepath.Abs(dir)
@@ -161,10 +171,12 @@ func LoadLocal(dir string) (*Env, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Single-file: resolve -prefix items now so callers see canonical lists.
+	envformat.Resolve(values, parseOpts())
 	return &Env{values: values, files: []string{path}}, nil
 }
 
-// Save writes the given key/value pairs into `dir`/.mus, merging with whatever
+// Save writes the given key/value pairs into `dir`/.env, merging with whatever
 // is already there. For list keys the values are appended (with `-prefix`
 // removal semantics).
 func Save(dir string, kv map[string]string) error {
@@ -173,10 +185,13 @@ func Save(dir string, kv map[string]string) error {
 		return err
 	}
 	for k, v := range kv {
-		if ListKeys[k] {
+		if listKeys[k] {
 			cur := local.List(k)
-			applyListVal(&cur, v)
-			local.values[k] = cur
+			// Append the new value and resolve via Resolve so any `-prefix`
+			// in the new value takes effect against cur.
+			tmp := map[string]any{k: append(cur, v)}
+			envformat.Resolve(tmp, parseOpts())
+			local.values[k] = tmp[k]
 		} else {
 			local.values[k] = v
 		}
@@ -186,10 +201,10 @@ func Save(dir string, kv map[string]string) error {
 		return err
 	}
 	path := filepath.Join(abs, FileName)
-	return atomicWriteToml(path, local.values)
+	return atomicWrite(path, local.values)
 }
 
-// discover walks from `/` down to `dir`, returning every `.mus` in load order.
+// discover walks from `/` down to `dir`, returning every `.env` in load order.
 func discover(dir string) ([]string, error) {
 	var paths []string
 	cur := dir
@@ -204,7 +219,7 @@ func discover(dir string) ([]string, error) {
 		}
 		cur = parent
 	}
-	// reverse to get root-most first
+	// reverse to get root-most first (so deeper files MergeInto on top)
 	for i, j := 0, len(paths)-1; i < j; i, j = i+1, j-1 {
 		paths[i], paths[j] = paths[j], paths[i]
 	}
@@ -229,7 +244,7 @@ func loadSingle(path string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	parsed, err := parseTOML(raw)
+	parsed, err := envformat.Parse(raw, parseOpts())
 	if err != nil {
 		return nil, err
 	}
@@ -244,87 +259,6 @@ func loadSingle(path string) (map[string]any, error) {
 	return copyValues(parsed), nil
 }
 
-// parseTOML accepts only top-level scalar string / array-of-string values.
-// Nested tables are flattened with dot-separated keys (`[eln] experiment_id`
-// becomes `eln.experiment_id`).
-func parseTOML(raw []byte) (map[string]any, error) {
-	var generic map[string]any
-	if err := toml.Unmarshal(raw, &generic); err != nil {
-		return nil, err
-	}
-	flat := map[string]any{}
-	flattenInto("", generic, flat)
-	// normalise: any []any of strings -> []string
-	for k, v := range flat {
-		if arr, ok := v.([]any); ok {
-			ss := make([]string, 0, len(arr))
-			for _, e := range arr {
-				ss = append(ss, fmt.Sprint(e))
-			}
-			flat[k] = ss
-		}
-	}
-	return flat, nil
-}
-
-func flattenInto(prefix string, src, dst map[string]any) {
-	for k, v := range src {
-		full := k
-		if prefix != "" {
-			full = prefix + "." + k
-		}
-		switch tv := v.(type) {
-		case map[string]any:
-			flattenInto(full, tv, dst)
-		default:
-			dst[full] = tv
-		}
-	}
-}
-
-func mergeInto(dst, src map[string]any) {
-	for k, v := range src {
-		if ListKeys[k] {
-			cur, _ := dst[k].([]string)
-			switch sv := v.(type) {
-			case []string:
-				for _, s := range sv {
-					applyListVal(&cur, s)
-				}
-			case string:
-				applyListVal(&cur, sv)
-			}
-			dst[k] = cur
-			continue
-		}
-		dst[k] = v
-	}
-}
-
-func applyListVal(lst *[]string, v string) {
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return
-	}
-	if strings.HasPrefix(v, "-") {
-		rm := v[1:]
-		out := (*lst)[:0]
-		for _, e := range *lst {
-			if e != rm {
-				out = append(out, e)
-			}
-		}
-		*lst = out
-		return
-	}
-	for _, e := range *lst {
-		if e == v {
-			return
-		}
-	}
-	*lst = append(*lst, v)
-}
-
 func copyValues(in map[string]any) map[string]any {
 	out := make(map[string]any, len(in))
 	for k, v := range in {
@@ -337,52 +271,27 @@ func copyValues(in map[string]any) map[string]any {
 	return out
 }
 
-// atomicWriteToml serialises values back out, preserving sorted top-level
-// scalar keys and grouping dotted keys under a single `[section]`.
-func atomicWriteToml(path string, values map[string]any) error {
-	// rebuild a nested map for serialisation
-	nested := map[string]any{}
-	for k, v := range values {
-		parts := strings.Split(k, ".")
-		cur := nested
-		for i, part := range parts {
-			if i == len(parts)-1 {
-				cur[part] = v
-				break
-			}
-			next, ok := cur[part].(map[string]any)
-			if !ok {
-				next = map[string]any{}
-				cur[part] = next
-			}
-			cur = next
-		}
+func atomicWrite(path string, values map[string]any) error {
+	// Sort keys for deterministic output (envformat.Marshal also sorts).
+	keys := make([]string, 0, len(values))
+	for k := range values {
+		keys = append(keys, k)
 	}
-	// sort top-level keys for deterministic output
-	sortedKeys := make([]string, 0, len(nested))
-	for k := range nested {
-		sortedKeys = append(sortedKeys, k)
-	}
-	sort.Strings(sortedKeys)
+	sort.Strings(keys)
 
-	ordered := map[string]any{}
-	for _, k := range sortedKeys {
-		ordered[k] = nested[k]
-	}
-
-	buf, err := toml.Marshal(ordered)
+	raw, err := envformat.Marshal(values)
 	if err != nil {
 		return err
 	}
 
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".mus.tmp.*")
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".env.tmp.*")
 	if err != nil {
 		return err
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
 
-	if _, err := tmp.Write(buf); err != nil {
+	if _, err := tmp.Write(raw); err != nil {
 		tmp.Close()
 		return err
 	}

@@ -4,8 +4,8 @@
 
 `mus` is a fast, cross-platform CLI for research data management at the BADS lab. It:
 
-- Reads cascading `.mus` TOML files to discover project/study/experiment metadata for the working directory.
-- Writes `*.mus` TOML sidecar files holding sha256 + size + mtime + upload status for individual data files.
+- Reads cascading `.env` files (flat KEY=VALUE) to discover project/study/experiment metadata for the working directory. Format intentionally matches the legacy Python `mus`.
+- Writes `*.mus` sidecar files (same KEY=VALUE grammar) next to each data file, holding sha256 + size + mtime + upload status.
 - Maintains a local SQLite hash cache so repeated checksum checks are stat-fast.
 - Uploads / downloads / verifies files on the KU Leuven Mango iRODS instance via the `iron` CLI.
 - Synchronises with the eLabJournal-based ELN (link a folder to an experiment, post comments, upload files).
@@ -24,8 +24,8 @@ Bootstrap: 2026-05-22. See task list / `report/` for current state.
 | Language | Go 1.24, pure-Go (no CGO) so cross-compile works for darwin/arm64, linux/amd64, linux/arm64 |
 | CLI | `spf13/cobra`, git-style subcommands |
 | iRODS | Shell out to `iron` (KU Leuven RDM CLI); no native iRODS client |
-| Folder config | `.mus` (TOML), cascading up the directory tree |
-| Per-file metadata | `foo.h5ad.mus` (TOML sidecar) |
+| Folder config | `.env` (flat KEY=VALUE), cascading up the directory tree — same grammar as legacy Python mus |
+| Per-file metadata | `foo.h5ad.mus` (same KEY=VALUE grammar; flat keys with prefix conventions: `irods_*`, `eln_*`, `s3_*`) |
 | Hash cache | SQLite via `modernc.org/sqlite` at `~/.local/share/mus/hashcache.db` |
 | Secrets | `zalando/go-keyring` with `filippo.io/age` encrypted-file fallback for HPC nodes |
 | ELN | eLabJournal REST API |
@@ -40,7 +40,8 @@ mus/
   go.mod / go.sum
   cmd/mus/             main.go entrypoint (cobra root)
   internal/
-    config/            .mus TOML cascade reader
+    envformat/         KEY=VALUE parser used by both config and sidecar
+    config/            .env cascade reader (folder-level)
     secret/            keyring + age fallback
     hashcache/         SQLite-backed sha256 cache
     sidecar/           *.mus reader / writer

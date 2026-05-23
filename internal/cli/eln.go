@@ -34,7 +34,7 @@ func newELNTagFolderCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "tag-folder",
 		Short: "record an ELN experiment ID for the current folder",
-		Long: "Writes eln.experiment_id into the local .mus so subsequent commands\n" +
+		Long: "Writes eln_experiment_id into the local .mus so subsequent commands\n" +
 			"(notably `mus irods upload`) can stamp sidecars with the experiment ID\n" +
 			"and pick a stable remote subfolder (exp_<id>).\n\n" +
 			"This command does NOT contact the ELN API — the eLabNext API endpoint\n" +
@@ -51,7 +51,7 @@ func newELNTagFolderCmd() *cobra.Command {
 				return err
 			}
 			kv := map[string]string{
-				"eln.experiment_id": strconv.FormatInt(expID, 10),
+				"eln_experiment_id": strconv.FormatInt(expID, 10),
 			}
 			for k, v := range kv {
 				fmt.Printf("%-25s : %s\n", k, v)

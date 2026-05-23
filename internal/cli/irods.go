@@ -29,10 +29,10 @@ func newIRODSCmd() *cobra.Command {
 //
 // Resolution order:
 //  1. `irods_path` from .mus (explicit subpath under irods_home) — wins.
-//  2. `eln.experiment_id` from .mus — fall back to "exp_<id>" subfolder.
+//  2. `eln_experiment_id` from .mus — fall back to "exp_<id>" subfolder.
 //  3. Otherwise: a clear error.
 //
-// We deliberately do NOT depend on eln.project_name / study_name /
+// We deliberately do NOT depend on eln_project_name / study_name /
 // experiment_name (those need an ELN API call to populate, and the eLabNext
 // API situation is unsettled). The experiment ID alone gives every upload a
 // stable, traceable identifier.
@@ -46,7 +46,7 @@ func resolveIRODSCollection(env *config.Env) (string, error) {
 	if sub := env.String("irods_path"); sub != "" {
 		return home + "/" + strings.Trim(sub, "/"), nil
 	}
-	if expID := env.String("eln.experiment_id"); expID != "" {
+	if expID := env.String("eln_experiment_id"); expID != "" {
 		return home + "/exp_" + sanitize(expID), nil
 	}
 	return "", fmt.Errorf("no remote path resolvable.\n" +
@@ -187,24 +187,24 @@ func runIRODSUpload(cmd *cobra.Command, args []string, force, verify, recursive 
 		// load-bearing for the new tag-folder flow; the *_name / *_id fields
 		// are best-effort (populated only if some earlier ELN API call had
 		// filled them into .mus).
-		if env.Has("eln.experiment_id") {
+		if env.Has("eln_experiment_id") {
 			if doc.ELN == nil {
 				doc.ELN = &sidecar.ELN{}
 			}
-			doc.ELN.ExperimentID = env.String("eln.experiment_id")
-			if v := env.String("eln.experiment_name"); v != "" {
+			doc.ELN.ExperimentID = env.String("eln_experiment_id")
+			if v := env.String("eln_experiment_name"); v != "" {
 				doc.ELN.ExperimentName = v
 			}
-			if v := env.String("eln.study_id"); v != "" {
+			if v := env.String("eln_study_id"); v != "" {
 				doc.ELN.StudyID = v
 			}
-			if v := env.String("eln.study_name"); v != "" {
+			if v := env.String("eln_study_name"); v != "" {
 				doc.ELN.StudyName = v
 			}
-			if v := env.String("eln.project_id"); v != "" {
+			if v := env.String("eln_project_id"); v != "" {
 				doc.ELN.ProjectID = v
 			}
-			if v := env.String("eln.project_name"); v != "" {
+			if v := env.String("eln_project_name"); v != "" {
 				doc.ELN.ProjectName = v
 			}
 		}

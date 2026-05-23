@@ -103,16 +103,16 @@ func runTag(cmd *cobra.Command, args []string, note string, tags []string, force
 			doc.Tags = t
 		}
 		// project / study / experiment context from cascade
-		if env.Has("eln.experiment_id") || env.Has("eln.project_id") {
+		if env.Has("eln_experiment_id") || env.Has("eln_project_id") {
 			if doc.ELN == nil {
 				doc.ELN = &sidecar.ELN{}
 			}
-			doc.ELN.ExperimentID = env.String("eln.experiment_id")
-			doc.ELN.ExperimentName = env.String("eln.experiment_name")
-			doc.ELN.StudyID = env.String("eln.study_id")
-			doc.ELN.StudyName = env.String("eln.study_name")
-			doc.ELN.ProjectID = env.String("eln.project_id")
-			doc.ELN.ProjectName = env.String("eln.project_name")
+			doc.ELN.ExperimentID = env.String("eln_experiment_id")
+			doc.ELN.ExperimentName = env.String("eln_experiment_name")
+			doc.ELN.StudyID = env.String("eln_study_id")
+			doc.ELN.StudyName = env.String("eln_study_name")
+			doc.ELN.ProjectID = env.String("eln_project_id")
+			doc.ELN.ProjectName = env.String("eln_project_name")
 		}
 
 		if err := sidecar.Write(scPath, doc); err != nil {

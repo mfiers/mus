@@ -24,38 +24,39 @@ identity key at `~/.config/mus/secrets.key` (chmod 600). The first call to a
 secret command decides which backend the process uses; force a backend with
 `MUS_SECRET_BACKEND=keyring|age`.
 
-## Folder-level config (cascading `.mus`)
+## Folder-level config (cascading `.env`)
 
-`mus` walks the directory tree upward, merging every `.mus` it finds. Closer
-files override / extend ones higher up.
+`mus` walks the directory tree upward, merging every `.env` it finds. Closer
+files override / extend ones higher up. Format is flat `KEY=VALUE` (one per
+line; `#` for comments; blank lines OK). Two keys are list-valued:
+`tag` and `collaborator` — comma-separated, `-prefix` removes a prior entry.
 
-`/proj/.mus`:
-```toml
-irods_home = "/zone/home/lab"
-irods_web  = "https://mango.kuleuven.be/data-object/view"
-tag        = ["lab"]
+`/proj/.env`:
+```sh
+irods_home=/zone/home/lab
+irods_web=https://mango.kuleuven.be/data-object/view
+tag=lab
 ```
 
-`/proj/exp1/.mus`:
-```toml
-tag = ["exp1"]   # adds; use "-lab" to drop an inherited tag
+`/proj/exp1/.env`:
+```sh
+tag=exp1,-lab               # adds exp1; drops the inherited "lab"
 
 # Recommended: record the ELN experiment ID for traceability. Use
 # `mus eln tag-folder -x 1234` to write this for you (no API call).
-[eln]
-experiment_id = "1234"
+eln_experiment_id=1234
 
 # Optional: explicit iRODS subpath under irods_home. Default is
-# `exp_<eln.experiment_id>/`.
-# irods_path = "alpha/exp_1"
+# `exp_<eln_experiment_id>/`.
+# irods_path=alpha/exp_1
 ```
 
 Inspect:
 ```bash
 mus config show          # effective (cascaded) config
-mus config show --local  # only the .mus in the current folder
-mus config files         # paths of every .mus contributing to the cascade
-mus config set tag exp1  # writes to the local .mus
+mus config show --local  # only the .env in the current folder
+mus config files         # paths of every .env contributing to the cascade
+mus config set tag exp1  # writes to the local .env
 ```
 
 ## Per-file sidecars (`*.mus`)
@@ -65,14 +66,15 @@ Tag a data file:
 mus tag data1.csv data2.csv -m "raw sequencing data"
 ```
 
-This writes `data1.csv.mus` and `data2.csv.mus` next to each file. The sidecar
-records:
+This writes `data1.csv.mus` and `data2.csv.mus` next to each file. Same flat
+`KEY=VALUE` grammar as `.env`. The sidecar records:
 
-- `[file]` — sha256, size, mtime, hashed time, host, abspath
-- `[irods]` — populated after `mus irods upload`
-- `[eln]` — populated from the `[eln]` section of the `.mus` cascade
-- `[s3]` — populated by `mus s3 upload` (planned)
-- `tags`, `note` — free-form metadata
+- File: `sha256`, `size`, `mtime`, `hashed`, `host`, `abspath`
+- iRODS (after `mus irods upload`): `irods_url`, `irods_path`, `irods_status`, `irods_uploaded_at`
+- ELN (from the `.env` cascade): `eln_experiment_id` (+ optional name/study/project fields if available)
+- S3 (planned): `s3_url`, `s3_bucket`, `s3_key`, `s3_etag`, `s3_uploaded_at`
+- Free-form: `note`, `tags`
+- Bookkeeping: `version`, `created`, `updated`
 
 Verify integrity later:
 ```bash
@@ -93,9 +95,9 @@ match — modify a file and the next `mus check` will rehash it.
 mus eln tag-folder -x 1234   # 1234 = ELN experiment ID; LOCAL ONLY, no API call
 ```
 
-Writes `eln.experiment_id` into the local `.mus`. Subsequent `mus tag` /
-`mus irods upload` invocations stamp this ID into each sidecar's `[eln]`
-section for traceability.
+Writes `eln_experiment_id` into the local `.env`. Subsequent `mus tag` /
+`mus irods upload` invocations stamp this ID into each sidecar for
+traceability.
 
 **ELN API status.** The eLabNext API endpoint location is currently unsettled
 (legacy `api.elabjournal.com/doc` deprecated; new `developer.elabnext.com`
@@ -115,8 +117,8 @@ mus irods upload data1.csv data2.csv --verify
 
 The remote path is resolved (in order):
 
-1. `irods_path` from the `.mus` cascade — explicit subpath under `irods_home`.
-2. Otherwise, if `eln.experiment_id` is set: `<irods_home>/exp_<id>/`.
+1. `irods_path` from the `.env` cascade — explicit subpath under `irods_home`.
+2. Otherwise, if `eln_experiment_id` is set: `<irods_home>/exp_<id>/`.
 3. Otherwise: error.
 
 After upload, the sidecar `[irods]` section is populated with the remote path,
