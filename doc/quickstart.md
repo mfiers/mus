@@ -34,17 +34,20 @@ files override / extend ones higher up.
 irods_home = "/zone/home/lab"
 irods_web  = "https://mango.kuleuven.be/data-object/view"
 tag        = ["lab"]
-
-[eln]
-project_name = "Project Alpha"
 ```
 
 `/proj/exp1/.mus`:
 ```toml
 tag = ["exp1"]   # adds; use "-lab" to drop an inherited tag
 
+# Recommended: record the ELN experiment ID for traceability. Use
+# `mus eln tag-folder -x 1234` to write this for you (no API call).
 [eln]
-experiment_name = "Experiment 1"
+experiment_id = "1234"
+
+# Optional: explicit iRODS subpath under irods_home. Default is
+# `exp_<eln.experiment_id>/`.
+# irods_path = "alpha/exp_1"
 ```
 
 Inspect:
@@ -84,15 +87,22 @@ The local sha256 cache lives at `~/.local/share/mus/hashcache.db` (override
 with `MUS_HASHCACHE_DB`). Entries are reused only when both size and mtime
 match — modify a file and the next `mus check` will rehash it.
 
-## Linking a folder to ELN
+## Linking a folder to an ELN experiment
 
 ```bash
-mus eln tag-folder -x 1234           # 1234 = ELN experiment ID
-mus eln update                       # refresh names from the server
+mus eln tag-folder -x 1234   # 1234 = ELN experiment ID; LOCAL ONLY, no API call
 ```
 
-Writes `eln.experiment_id`, `eln.experiment_name`, `eln.study_*`,
-`eln.project_*` into the local `.mus`.
+Writes `eln.experiment_id` into the local `.mus`. Subsequent `mus tag` /
+`mus irods upload` invocations stamp this ID into each sidecar's `[eln]`
+section for traceability.
+
+**ELN API status.** The eLabNext API endpoint location is currently unsettled
+(legacy `api.elabjournal.com/doc` deprecated; new `developer.elabnext.com`
+restructured). Until that's resolved, `mus eln update` (which would enrich
+the local `.mus` with project / study / experiment names from the server) is
+disabled. The HTTP client lives in `internal/eln/` and is fully tested; only
+the CLI wiring is removed.
 
 ## Uploading to iRODS via IRON
 
@@ -103,13 +113,11 @@ https://rdm-docs.icts.kuleuven.be/mango/clients/iron.html).
 mus irods upload data1.csv data2.csv --verify
 ```
 
-The remote path is computed from the cascading `.mus`:
+The remote path is resolved (in order):
 
-```
-<irods_home>/<project_name>/<study_name>/<experiment_name>/<basename>
-```
-
-(folder names are lowercased and sanitised to `[a-z0-9_]`).
+1. `irods_path` from the `.mus` cascade — explicit subpath under `irods_home`.
+2. Otherwise, if `eln.experiment_id` is set: `<irods_home>/exp_<id>/`.
+3. Otherwise: error.
 
 After upload, the sidecar `[irods]` section is populated with the remote path,
 URL (using `irods_web`), and a timestamp.

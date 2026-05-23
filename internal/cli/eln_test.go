@@ -14,10 +14,10 @@ func TestParseELNExperimentID(t *testing.T) {
 		{"1303549", 1303549, false},
 		{"00012345", 12345, false},
 		{"1000000001292564", 1000000001292564, false}, // ELN long-form, handled by FixExperimentID downstream
-		{"", 0, true},                                 // empty rejected
-		{"12abc", 0, true},                            // non-digits
-		{"-1", 0, true},                               // negative sign isn't a digit; caught early
-		{"0", 0, true},                                // zero / all-zero rejected as non-positive
+		{"", 0, true},      // empty rejected
+		{"12abc", 0, true}, // non-digits
+		{"-1", 0, true},    // negative sign isn't a digit; caught early
+		{"0", 0, true},     // zero / all-zero rejected as non-positive
 	}
 	for _, tc := range cases {
 		got, err := parseELNExperimentID(tc.in)

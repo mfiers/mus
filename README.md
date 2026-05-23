@@ -69,8 +69,9 @@ mus secret backend         # prints "keyring" or "age" — see Secrets below
 **Use:**
 
 ```bash
-# In a working directory linked to an experiment:
-mus eln tag-folder -x 12345          # writes project / study / experiment IDs into .mus
+# Optional but recommended: record the ELN experiment ID for traceability.
+# This is a LOCAL operation only — it does NOT contact the ELN server.
+mus eln tag-folder -x 12345
 
 # Tag data files with sha256 + metadata:
 mus tag data1.csv data2.csv -m "raw sequencing data" -t qc-pass
@@ -86,6 +87,15 @@ mus irods check         # verify local sha256 against remote
 mus irods get data1.csv.mus   # download from the sidecar's recorded path
 ```
 
+### ELN integration status
+
+The eLabNext API endpoint location is currently unsettled — the legacy
+`api.elabjournal.com` docs are deprecated, the new `developer.elabnext.com`
+portal is restructured, and authentication header conventions changed. As of
+this release **mus does not call the ELN API**. `mus eln tag-folder -x ID`
+still records the experiment ID locally so sidecars and iRODS uploads carry
+it as metadata; `mus eln update` is disabled until the API path is clear.
+
 ## How it works
 
 ### Folder config: cascading `.mus`
@@ -98,16 +108,18 @@ irods_home = "/zone/home/lab"
 irods_web  = "https://mango.kuleuven.be/data-object/view"
 tag        = ["lab"]                # list-valued; merges, prefix "-" removes
 
-# /lab/projects/project_alpha/.mus
-[eln]
-project_name = "Project Alpha"
-
 # /lab/projects/project_alpha/exp_42/.mus
 tag = ["exp42", "-lab"]             # drops the inherited "lab" tag
 
+# Optional — only the experiment ID is needed for iRODS upload to work.
+# `mus eln tag-folder -x 12345` writes this for you.
 [eln]
-experiment_id   = "12345"
-experiment_name = "Experiment 42"
+experiment_id = "12345"
+
+# Optional — explicit iRODS subpath under irods_home. If unset and an
+# eln.experiment_id exists, the default is `exp_<id>/`. Set this when you
+# want a different layout.
+# irods_path = "alpha/raw/exp_42"
 ```
 
 Inspect:

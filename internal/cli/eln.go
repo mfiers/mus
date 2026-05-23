@@ -5,10 +5,15 @@ import (
 	"strconv"
 
 	"codeberg.org/atrxia/mus/internal/config"
-	"codeberg.org/atrxia/mus/internal/eln"
-	"codeberg.org/atrxia/mus/internal/secret"
 	"github.com/spf13/cobra"
 )
+
+// NOTE: the eln HTTP client lives in internal/eln/ and is fully tested, but
+// it is NOT wired into the CLI right now. The eLabNext API endpoint location
+// is currently unsettled (legacy elabjournal.com/doc deprecated; new
+// developer.elabnext.com restructured — see top-level CLAUDE.md). When the
+// API is reachable again, restore openELN() and re-enable the ExpInfo call
+// path in newELNUpdateCmd / newELNTagFolderCmd.
 
 func newELNCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -28,7 +33,14 @@ func newELNTagFolderCmd() *cobra.Command {
 	var expIDStr string
 	cmd := &cobra.Command{
 		Use:   "tag-folder",
-		Short: "link the current folder to an ELN experiment (writes .mus)",
+		Short: "record an ELN experiment ID for the current folder",
+		Long: "Writes eln.experiment_id into the local .mus so subsequent commands\n" +
+			"(notably `mus irods upload`) can stamp sidecars with the experiment ID\n" +
+			"and pick a stable remote subfolder (exp_<id>).\n\n" +
+			"This command does NOT contact the ELN API — the eLabNext API endpoint\n" +
+			"is currently unsettled (see CLAUDE.md). When/if ELN is reachable again,\n" +
+			"`mus eln update` will be re-enabled to enrich .mus with project/study/\n" +
+			"experiment names.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			expID, err := parseELNExperimentID(expIDStr)
 			if err != nil {
@@ -38,21 +50,8 @@ func newELNTagFolderCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client, err := openELN()
-			if err != nil {
-				return err
-			}
-			info, err := client.ExpInfo(expID)
-			if err != nil {
-				return err
-			}
 			kv := map[string]string{
-				"eln.experiment_id":   strconv.FormatInt(info.ExperimentID, 10),
-				"eln.experiment_name": info.ExperimentName,
-				"eln.study_id":        strconv.FormatInt(info.StudyID, 10),
-				"eln.study_name":      info.StudyName,
-				"eln.project_id":      strconv.FormatInt(info.ProjectID, 10),
-				"eln.project_name":    info.ProjectName,
+				"eln.experiment_id": strconv.FormatInt(expID, 10),
 			}
 			for k, v := range kv {
 				fmt.Printf("%-25s : %s\n", k, v)
@@ -91,56 +90,16 @@ func parseELNExperimentID(raw string) (int64, error) {
 func newELNUpdateCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "update",
-		Short: "refresh ELN metadata in local .mus from the server",
+		Short: "(disabled) would refresh ELN metadata from the server",
+		Long: "Disabled. The eLabNext API endpoint location is currently unsettled\n" +
+			"(elabjournal.com/doc deprecated, developer.elabnext.com restructured —\n" +
+			"see CLAUDE.md). Re-enable this command by restoring the call to\n" +
+			"eln.Client.ExpInfo and adjusting auth headers to match whatever the\n" +
+			"new API expects (Authorization vs api_key).\n\n" +
+			"The eln client code in internal/eln/ is intact and tested; only the\n" +
+			"CLI wiring is removed.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			dir, err := workingDir(cmd)
-			if err != nil {
-				return err
-			}
-			env, err := config.Load(dir)
-			if err != nil {
-				return err
-			}
-			idStr := env.String("eln.experiment_id")
-			if idStr == "" {
-				return fmt.Errorf("no eln.experiment_id in .mus cascade — run `mus eln tag-folder -x ID` first")
-			}
-			id, err := strconv.ParseInt(idStr, 10, 64)
-			if err != nil {
-				return fmt.Errorf("invalid eln.experiment_id %q: %w", idStr, err)
-			}
-			client, err := openELN()
-			if err != nil {
-				return err
-			}
-			info, err := client.ExpInfo(id)
-			if err != nil {
-				return err
-			}
-			return config.Save(dir, map[string]string{
-				"eln.experiment_id":   strconv.FormatInt(info.ExperimentID, 10),
-				"eln.experiment_name": info.ExperimentName,
-				"eln.study_id":        strconv.FormatInt(info.StudyID, 10),
-				"eln.study_name":      info.StudyName,
-				"eln.project_id":      strconv.FormatInt(info.ProjectID, 10),
-				"eln.project_name":    info.ProjectName,
-			})
+			return fmt.Errorf("`mus eln update` is currently disabled — see `mus eln update --help`")
 		},
 	}
-}
-
-func openELN() (*eln.Client, error) {
-	s, err := secret.Open()
-	if err != nil {
-		return nil, err
-	}
-	url, err := s.Get("eln_url")
-	if err != nil {
-		return nil, fmt.Errorf("eln_url not in secret store — `mus secret set eln_url <URL>`")
-	}
-	key, err := s.Get("eln_apikey")
-	if err != nil {
-		return nil, fmt.Errorf("eln_apikey not in secret store — `mus secret set eln_apikey <KEY>`")
-	}
-	return eln.New(url, key), nil
 }

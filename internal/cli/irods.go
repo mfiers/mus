@@ -25,6 +25,36 @@ func newIRODSCmd() *cobra.Command {
 	return cmd
 }
 
+// resolveIRODSCollection computes where on iRODS uploads from this folder land.
+//
+// Resolution order:
+//  1. `irods_path` from .mus (explicit subpath under irods_home) — wins.
+//  2. `eln.experiment_id` from .mus — fall back to "exp_<id>" subfolder.
+//  3. Otherwise: a clear error.
+//
+// We deliberately do NOT depend on eln.project_name / study_name /
+// experiment_name (those need an ELN API call to populate, and the eLabNext
+// API situation is unsettled). The experiment ID alone gives every upload a
+// stable, traceable identifier.
+func resolveIRODSCollection(env *config.Env) (string, error) {
+	home := env.String("irods_home")
+	if home == "" {
+		return "", fmt.Errorf("irods_home not set — `mus config set irods_home /zone/home/...`")
+	}
+	home = strings.TrimRight(home, "/")
+
+	if sub := env.String("irods_path"); sub != "" {
+		return home + "/" + strings.Trim(sub, "/"), nil
+	}
+	if expID := env.String("eln.experiment_id"); expID != "" {
+		return home + "/exp_" + sanitize(expID), nil
+	}
+	return "", fmt.Errorf("no remote path resolvable.\n" +
+		"Either:\n" +
+		"  - `mus config set irods_path <subfolder>` for an explicit path, OR\n" +
+		"  - `mus eln tag-folder -x EXPERIMENT_ID` to derive exp_<id>/")
+}
+
 func sanitize(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	s = strings.ReplaceAll(s, " ", "_")
@@ -68,21 +98,11 @@ func runIRODSUpload(cmd *cobra.Command, args []string, force, verify, recursive 
 	if err != nil {
 		return err
 	}
-	home := env.String("irods_home")
-	if home == "" {
-		return fmt.Errorf("irods_home not set — add to .mus or `mus config set irods_home /zone/home/...`")
+	remoteCollection, err := resolveIRODSCollection(env)
+	if err != nil {
+		return err
 	}
-	for _, k := range []string{"eln.project_name", "eln.study_name", "eln.experiment_name"} {
-		if !env.Has(k) {
-			return fmt.Errorf("missing %s — run `mus eln tag-folder -x ID`", k)
-		}
-	}
-	remoteCollection := strings.Join([]string{
-		strings.TrimRight(home, "/"),
-		sanitize(env.String("eln.project_name")),
-		sanitize(env.String("eln.study_name")),
-		sanitize(env.String("eln.experiment_name")),
-	}, "/")
+	fmt.Fprintf(os.Stderr, "→ remote collection: %s\n", remoteCollection)
 
 	client, err := iron.New()
 	if err != nil {
@@ -163,17 +183,30 @@ func runIRODSUpload(cmd *cobra.Command, args []string, force, verify, recursive 
 		if web := env.String("irods_web"); web != "" {
 			doc.IRODS.URL = strings.TrimRight(web, "/") + remote
 		}
-		// stamp ELN context onto the sidecar
+		// Stamp ELN context onto the sidecar. Only the experiment ID is
+		// load-bearing for the new tag-folder flow; the *_name / *_id fields
+		// are best-effort (populated only if some earlier ELN API call had
+		// filled them into .mus).
 		if env.Has("eln.experiment_id") {
 			if doc.ELN == nil {
 				doc.ELN = &sidecar.ELN{}
 			}
 			doc.ELN.ExperimentID = env.String("eln.experiment_id")
-			doc.ELN.ExperimentName = env.String("eln.experiment_name")
-			doc.ELN.StudyID = env.String("eln.study_id")
-			doc.ELN.StudyName = env.String("eln.study_name")
-			doc.ELN.ProjectID = env.String("eln.project_id")
-			doc.ELN.ProjectName = env.String("eln.project_name")
+			if v := env.String("eln.experiment_name"); v != "" {
+				doc.ELN.ExperimentName = v
+			}
+			if v := env.String("eln.study_id"); v != "" {
+				doc.ELN.StudyID = v
+			}
+			if v := env.String("eln.study_name"); v != "" {
+				doc.ELN.StudyName = v
+			}
+			if v := env.String("eln.project_id"); v != "" {
+				doc.ELN.ProjectID = v
+			}
+			if v := env.String("eln.project_name"); v != "" {
+				doc.ELN.ProjectName = v
+			}
 		}
 		if err := sidecar.Write(scPath, doc); err != nil {
 			return err
