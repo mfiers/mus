@@ -93,60 +93,80 @@ func (c *Client) Stream(ctx context.Context, args ...string) error {
 	return nil
 }
 
-// Put uploads a local file/directory to an iRODS collection. Verify means
-// IRON should re-checksum after upload.
-func (c *Client) Put(ctx context.Context, local, remote string, opts PutOpts) error {
-	args := []string{"put"}
-	if opts.Recursive {
-		args = append(args, "--recursive")
+// Upload uploads a local file/directory to an iRODS collection. IRON is
+// idempotent by default: files with matching size+modtime are skipped, others
+// are overwritten. Pass Exclusive to refuse-overwrite. VerifyChecksum re-
+// hashes both ends to confirm transfer integrity.
+//
+// IRON auto-detects directory vs file source and handles recursion natively;
+// no Recursive flag is needed (or supported).
+func (c *Client) Upload(ctx context.Context, local, remote string, opts UploadOpts) error {
+	args := []string{"upload"}
+	if opts.VerifyChecksum {
+		args = append(args, "--verify-checksum")
 	}
-	if opts.Force {
-		args = append(args, "--force")
+	if opts.Exclusive {
+		args = append(args, "--exclusive")
 	}
-	if opts.Verify {
-		args = append(args, "--verify")
+	if opts.Newer {
+		args = append(args, "--newer")
+	}
+	if opts.DryRun {
+		args = append(args, "--dry-run")
 	}
 	args = append(args, local, remote)
 	return c.Stream(ctx, args...)
 }
 
-// PutOpts toggles flags for Put.
-type PutOpts struct {
-	Recursive bool
-	Force     bool
-	Verify    bool
+// UploadOpts toggles flags for Upload. See `iron upload --help` for full
+// semantics — these wrap the most commonly useful flags.
+type UploadOpts struct {
+	VerifyChecksum bool // re-hash both sides after transfer
+	Exclusive      bool // refuse to overwrite existing remote objects
+	Newer          bool // only upload files newer than remote
+	DryRun         bool // print actions, do not perform
 }
 
-// Get downloads remote to local.
-func (c *Client) Get(ctx context.Context, remote, local string, force bool) error {
-	args := []string{"get"}
-	if force {
-		args = append(args, "--force")
+// Download downloads remote to local. Like Upload, IRON handles
+// file-vs-collection automatically.
+func (c *Client) Download(ctx context.Context, remote, local string, opts DownloadOpts) error {
+	args := []string{"download"}
+	if opts.VerifyChecksum {
+		args = append(args, "--verify-checksum")
+	}
+	if opts.Exclusive {
+		args = append(args, "--exclusive")
+	}
+	if opts.Newer {
+		args = append(args, "--newer")
 	}
 	args = append(args, remote, local)
 	return c.Stream(ctx, args...)
 }
 
-// Checksum returns IRON's reported sha256 (or other server-side digest) for
-// `remote`. The exact field surfaced depends on the IRON version; callers
-// should compare to local sha256 with care.
-//
-// Implementation: `iron checksum --algorithm sha256 <remote>` is invoked; if
-// the binary uses different flags the call will fail and the caller should
-// fall back to `ils -L` parsing or skip remote verification.
+// DownloadOpts toggles flags for Download.
+type DownloadOpts struct {
+	VerifyChecksum bool
+	Exclusive      bool
+	Newer          bool
+}
+
+// Checksum returns the server-side checksum for `remote` as reported by
+// `iron checksum <remote>`. IRON does not accept algorithm flags; the digest
+// shape is determined by what was stored on upload. Callers should compare
+// case-insensitively (Mango sometimes stores sha2-base64 prefixed).
 func (c *Client) Checksum(ctx context.Context, remote string) (string, error) {
 	if c.DefaultTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, c.DefaultTimeout)
 		defer cancel()
 	}
-	out, err := c.Run(ctx, "checksum", "--algorithm", "sha256", remote)
+	out, err := c.Run(ctx, "checksum", remote)
 	if err != nil {
 		return "", err
 	}
 	// Best-effort parse: take the last whitespace-separated token of the last
-	// non-empty line. This keeps us robust across minor IRON formatting
-	// changes.
+	// non-empty line. Robust across minor IRON formatting changes.
 	for _, line := range reverse(strings.Split(strings.TrimSpace(out), "\n")) {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -156,6 +176,41 @@ func (c *Client) Checksum(ctx context.Context, remote string) (string, error) {
 		return fields[len(fields)-1], nil
 	}
 	return "", fmt.Errorf("could not parse checksum output: %q", out)
+}
+
+// TreeJSON runs `iron tree --json <collection>` and returns the raw JSON for
+// the caller to decode. The schema follows IRON's tree output: a nested
+// object with name + children + columns (size, checksum, date, status, ...).
+// Use the `cols` parameter to request specific columns (default is name only).
+//
+// Useful for inventory scans / mus-irods-scan-style workflows.
+func (c *Client) TreeJSON(ctx context.Context, remote string, cols ...string) (string, error) {
+	args := []string{"tree", "--json"}
+	if len(cols) > 0 {
+		args = append(args, "--columns", strings.Join(cols, ","))
+	}
+	args = append(args, remote)
+	return c.Run(ctx, args...)
+}
+
+// FindJSON runs `iron find <collection>` with a glob and JSON output.
+func (c *Client) FindJSON(ctx context.Context, remote string, cols ...string) (string, error) {
+	args := []string{"find", "--json"}
+	if len(cols) > 0 {
+		args = append(args, "--columns", strings.Join(cols, ","))
+	}
+	args = append(args, remote)
+	return c.Run(ctx, args...)
+}
+
+// ListJSON runs `iron ls --json <collection>`.
+func (c *Client) ListJSON(ctx context.Context, remote string, cols ...string) (string, error) {
+	args := []string{"ls", "--json"}
+	if len(cols) > 0 {
+		args = append(args, "--columns", strings.Join(cols, ","))
+	}
+	args = append(args, remote)
+	return c.Run(ctx, args...)
 }
 
 // Exists reports whether the remote object or collection exists.

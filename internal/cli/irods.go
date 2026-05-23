@@ -73,23 +73,34 @@ func sanitize(s string) string {
 }
 
 func newIRODSUploadCmd() *cobra.Command {
-	var force, verify bool
-	var recursive bool
+	// IRON's upload is idempotent by default: matching size+modtime → skip;
+	// different → overwrite. There is no "force" concept to expose.
+	var exclusive, newer, dryRun bool
+	verify := true // verify-checksum on by default; opt-out below
 	cmd := &cobra.Command{
 		Use:   "upload FILE [FILE...]",
 		Short: "upload via IRON; writes/refreshes *.mus sidecars",
-		Args:  cobra.MinimumNArgs(1),
+		Long: "IRON handles recursion automatically when given a directory and is\n" +
+			"idempotent for already-uploaded files. The --verify-checksum flag\n" +
+			"(default on) re-hashes both sides after transfer.",
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runIRODSUpload(cmd, args, force, verify, recursive)
+			return runIRODSUpload(cmd, args, iron.UploadOpts{
+				VerifyChecksum: verify,
+				Exclusive:      exclusive,
+				Newer:          newer,
+				DryRun:         dryRun,
+			})
 		},
 	}
-	cmd.Flags().BoolVarP(&force, "force", "f", false, "force overwrite remote")
-	cmd.Flags().BoolVar(&verify, "verify", true, "ask IRON to verify after upload")
-	cmd.Flags().BoolVarP(&recursive, "recursive", "r", false, "upload directories recursively")
+	cmd.Flags().BoolVar(&verify, "verify-checksum", true, "re-hash both sides after upload (default: on)")
+	cmd.Flags().BoolVar(&exclusive, "exclusive", false, "refuse to overwrite existing remote objects")
+	cmd.Flags().BoolVar(&newer, "newer", false, "only upload files newer than the remote copy")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print actions without uploading")
 	return cmd
 }
 
-func runIRODSUpload(cmd *cobra.Command, args []string, force, verify, recursive bool) error {
+func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts) error {
 	dir, err := workingDir(cmd)
 	if err != nil {
 		return err
@@ -134,17 +145,10 @@ func runIRODSUpload(cmd *cobra.Command, args []string, force, verify, recursive 
 		if err != nil {
 			return err
 		}
-		if st.IsDir() && !recursive {
-			return fmt.Errorf("%s is a directory — use -r/--recursive", abs)
-		}
-
+		// IRON auto-detects file vs directory; no special handling needed.
 		remote := remoteCollection + "/" + filepath.Base(abs)
 		fmt.Printf("→ %s\n", remote)
-		if err := client.Put(ctx, abs, remote, iron.PutOpts{
-			Recursive: st.IsDir(),
-			Force:     force,
-			Verify:    verify,
-		}); err != nil {
+		if err := client.Upload(ctx, abs, remote, opts); err != nil {
 			return err
 		}
 
@@ -309,7 +313,7 @@ func runIRODSCheck(cmd *cobra.Command, args []string) error {
 }
 
 func newIRODSGetCmd() *cobra.Command {
-	var force bool
+	var force, verify bool
 	cmd := &cobra.Command{
 		Use:   "get SIDECAR [SIDECAR...]",
 		Short: "download the file each *.mus sidecar refers to",
@@ -335,7 +339,10 @@ func newIRODSGetCmd() *cobra.Command {
 				if _, err := os.Stat(localPath); err == nil && !force {
 					return fmt.Errorf("%s already exists — use --force", localPath)
 				}
-				if err := client.Get(ctx, doc.IRODS.Path, localPath, force); err != nil {
+				if err := client.Download(ctx, doc.IRODS.Path, localPath, iron.DownloadOpts{
+					Exclusive:      !force,
+					VerifyChecksum: verify,
+				}); err != nil {
 					return err
 				}
 			}
@@ -343,5 +350,6 @@ func newIRODSGetCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "overwrite local file if present")
+	cmd.Flags().BoolVar(&verify, "verify-checksum", true, "re-hash both sides after download")
 	return cmd
 }
