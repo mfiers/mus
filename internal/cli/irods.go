@@ -21,7 +21,7 @@ func newIRODSCmd() *cobra.Command {
 		Aliases: []string{"mango"},
 		Short:   "iRODS sync via the IRON CLI",
 	}
-	cmd.AddCommand(newIRODSUploadCmd(), newIRODSCheckCmd(), newIRODSGetCmd())
+	cmd.AddCommand(newIRODSUploadCmd(), newIRODSCheckCmd(), newIRODSGetCmd(), newIRODSScanCmd())
 	return cmd
 }
 

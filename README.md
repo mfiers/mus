@@ -183,6 +183,11 @@ mus irods upload FILE...       upload via IRON; writes/refreshes sidecars
                                -f force  -r recursive  --verify
 mus irods check                verify local sha256 against IRON checksum
 mus irods get SIDECAR...       download files referred to by sidecars
+mus irods scan run PATH        snapshot a remote collection (with checksums) to local cache
+mus irods scan show PATH       print every cached entry (--data-only, --prefix, etc.)
+mus irods scan list            list cached scans
+mus irods scan find CHECKSUM   locate iRODS objects by server-side checksum
+mus irods scan rm PATH         drop a cached scan
 mus s3 upload FILE...          stub — coming later
 mus upgrade [--tag] [--check]  self-update from Codeberg
 mus -C DIR ...                 run as if from DIR (like git -C)
