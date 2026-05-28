@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"codeberg.org/atrxia/mus/internal/folder"
-	"codeberg.org/atrxia/mus/internal/hashcache"
-	"codeberg.org/atrxia/mus/internal/sidecar"
+	"codeberg.org/mfiers/mus/internal/folder"
+	"codeberg.org/mfiers/mus/internal/hashcache"
+	"codeberg.org/mfiers/mus/internal/sidecar"
 	"github.com/spf13/cobra"
 )
 

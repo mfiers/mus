@@ -14,9 +14,9 @@
 // To override at build time:
 //
 //	go build -ldflags="\
-//	  -X codeberg.org/atrxia/mus/internal/defaults.IRODSHome=/your/zone/home/lab \
-//	  -X codeberg.org/atrxia/mus/internal/defaults.IRODSWeb=https://your-portal/data-object/view \
-//	  -X codeberg.org/atrxia/mus/internal/defaults.IRODSPIDBase=https://your-portal/PID \
+//	  -X codeberg.org/mfiers/mus/internal/defaults.IRODSHome=/your/zone/home/lab \
+//	  -X codeberg.org/mfiers/mus/internal/defaults.IRODSWeb=https://your-portal/data-object/view \
+//	  -X codeberg.org/mfiers/mus/internal/defaults.IRODSPIDBase=https://your-portal/PID \
 //	" ./cmd/mus
 //
 // Defaults are pre-set for the BADS lab on KU Leuven Mango — that's the

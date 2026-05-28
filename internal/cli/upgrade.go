@@ -19,12 +19,12 @@ import (
 	"strings"
 	"time"
 
-	"codeberg.org/atrxia/mus/internal/signing"
+	"codeberg.org/mfiers/mus/internal/signing"
 	"github.com/spf13/cobra"
 )
 
 const (
-	upgradeRepoOwner = "atrxia"
+	upgradeRepoOwner = "mfiers"
 	upgradeRepoName  = "mus"
 	upgradeAPI       = "https://codeberg.org/api/v1"
 )

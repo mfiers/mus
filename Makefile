@@ -24,9 +24,9 @@ RELEASE_VERSION := $(shell cat $(VERSION_FILE) 2>/dev/null | sed 's/-dev$$//' ||
 COMMIT   := $(shell git -C . rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE     := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS  := -s -w \
-            -X 'codeberg.org/atrxia/mus/internal/cli.Version=$(VERSION)' \
-            -X 'codeberg.org/atrxia/mus/internal/cli.Commit=$(COMMIT)' \
-            -X 'codeberg.org/atrxia/mus/internal/cli.BuildDate=$(DATE)'
+            -X 'codeberg.org/mfiers/mus/internal/cli.Version=$(VERSION)' \
+            -X 'codeberg.org/mfiers/mus/internal/cli.Commit=$(COMMIT)' \
+            -X 'codeberg.org/mfiers/mus/internal/cli.BuildDate=$(DATE)'
 
 PKG := ./cmd/mus
 
@@ -249,7 +249,7 @@ release:
 	@echo "to publish:"
 	@echo "  git push origin main 'v$(VERSION)'"
 	@echo "  # then upload dist/mus-* + dist/SHA256SUMS + dist/SHA256SUMS.sig"
-	@echo "  # to https://codeberg.org/atrxia/mus/releases/tag/v$(VERSION)"
+	@echo "  # to https://codeberg.org/mfiers/mus/releases/tag/v$(VERSION)"
 
 # Sign each release binary with the shared ed25519 release key via the pika
 # CLI. pika lives in the sibling project and owns the only private key file
@@ -284,7 +284,7 @@ sign:
 #   - dist/ populated by `make release VERSION=$(VERSION)`
 #   - git tag v$(VERSION) pushed to origin
 #   - CODEBERG_TOKEN (or CODEBERG_GENERIC_TOKEN) in the environment with
-#     `write:repository` scope on atrxia/mus
+#     `write:repository` scope on mfiers/mus
 publish:
 	@case "$(VERSION)" in \
 	  ""|*-dev) echo "make publish VERSION=x.y.z  (got '$(VERSION)')"; exit 1 ;; \

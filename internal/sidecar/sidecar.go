@@ -26,7 +26,7 @@ import (
 	"strings"
 	"time"
 
-	"codeberg.org/atrxia/mus/internal/envformat"
+	"codeberg.org/mfiers/mus/internal/envformat"
 )
 
 // Suffix is the sidecar filename suffix.

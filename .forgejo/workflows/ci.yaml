@@ -60,8 +60,8 @@ jobs:
           mkdir -p dist
           go build -trimpath \
             -ldflags="-s -w \
-              -X 'codeberg.org/atrxia/mus/internal/cli.Version=${GITHUB_REF_NAME:-dev}' \
-              -X 'codeberg.org/atrxia/mus/internal/cli.Commit=${GITHUB_SHA::7}'" \
+              -X 'codeberg.org/mfiers/mus/internal/cli.Version=${GITHUB_REF_NAME:-dev}' \
+              -X 'codeberg.org/mfiers/mus/internal/cli.Commit=${GITHUB_SHA::7}'" \
             -o dist/mus-${GOOS}-${GOARCH} \
             ./cmd/mus
           ls -lh dist/

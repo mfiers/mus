@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"codeberg.org/atrxia/mus/internal/irodscache"
-	"codeberg.org/atrxia/mus/internal/iron"
+	"codeberg.org/mfiers/mus/internal/irodscache"
+	"codeberg.org/mfiers/mus/internal/iron"
 	"github.com/spf13/cobra"
 )
 

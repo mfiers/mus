@@ -5,7 +5,7 @@ import (
 	"os"
 	"sort"
 
-	"codeberg.org/atrxia/mus/internal/secret"
+	"codeberg.org/mfiers/mus/internal/secret"
 	"github.com/spf13/cobra"
 )
 

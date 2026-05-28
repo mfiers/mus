@@ -3,10 +3,10 @@
 # mus CLI installer
 #
 # Usage:
-#   curl -sSL https://codeberg.org/atrxia/mus/raw/branch/main/install.sh | bash
+#   curl -sSL https://codeberg.org/mfiers/mus/raw/branch/main/install.sh | bash
 #
 # Or to inspect first (recommended):
-#   curl -sSL https://codeberg.org/atrxia/mus/raw/branch/main/install.sh -o install.sh
+#   curl -sSL https://codeberg.org/mfiers/mus/raw/branch/main/install.sh -o install.sh
 #   less install.sh
 #   bash install.sh
 #
@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-REPO="atrxia/mus"
+REPO="mfiers/mus"
 BIN_NAME="mus"
 TAG="${MUS_VERSION:-}"
 

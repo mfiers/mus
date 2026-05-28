@@ -11,7 +11,7 @@ Ground-up Go rewrite of the previous Python `mus`. Statically-linked, no CGO, ~1
 **Install** (Linux x86_64 / Linux ARM64 / macOS Apple Silicon):
 
 ```bash
-curl -sSL https://codeberg.org/atrxia/mus/raw/branch/main/install.sh | bash
+curl -sSL https://codeberg.org/mfiers/mus/raw/branch/main/install.sh | bash
 ```
 
 The installer auto-detects your platform, downloads the latest release binary, **verifies its ed25519 signature** against the embedded pubkey, and places it in the first writable directory it finds in your `$PATH` — preferring `~/bin`, then `~/.local/bin`, then `/usr/local/bin`. If `mus` is already installed somewhere writable it'll upgrade in place.
@@ -20,7 +20,7 @@ Pin a specific version or override the location:
 
 ```bash
 MUS_VERSION=v0.1.0 MUS_INSTALL_DIR=/opt/mus \
-  curl -sSL https://codeberg.org/atrxia/mus/raw/branch/main/install.sh | bash
+  curl -sSL https://codeberg.org/mfiers/mus/raw/branch/main/install.sh | bash
 ```
 
 **Upgrade** an already-installed mus:
@@ -36,7 +36,7 @@ The `upgrade` command refuses unsigned releases — if a release has no `.sig` a
 
 **Manual install** (or for unsupported platforms — build from source):
 
-Download from the [latest release](https://codeberg.org/atrxia/mus/releases/latest) and put the binary somewhere on `$PATH`:
+Download from the [latest release](https://codeberg.org/mfiers/mus/releases/latest) and put the binary somewhere on `$PATH`:
 
 | Platform | File |
 |---|---|
@@ -142,7 +142,7 @@ Three values are baked into the binary as defaults (see `internal/defaults/`):
 | `irods_web` | `https://mango.kuleuven.be/data-object/view` (path-based, browse-only) |
 | `irods_pid_base` | `https://mango.kuleuven.be/PID` (PURL prefix — survives moves) |
 
-Defaults are the lowest priority — any `.env` value overrides them. Other labs can ship their own binary by passing `-ldflags="-X codeberg.org/atrxia/mus/internal/defaults.IRODSHome=/your/zone/..."` at `go build` time.
+Defaults are the lowest priority — any `.env` value overrides them. Other labs can ship their own binary by passing `-ldflags="-X codeberg.org/mfiers/mus/internal/defaults.IRODSHome=/your/zone/..."` at `go build` time.
 
 Inspect:
 
@@ -180,8 +180,8 @@ mus secret delete eln_apikey
 
 Releases carry **two complementary signatures**:
 
-1. **Per-binary ed25519 `.sig`** (`<binary>.sig` next to each release binary) — for the programmatic upgrade path. Signed by the shared maintainer key (same key signs all of `atrxia`'s Go projects); pubkey embedded in `internal/signing.PubkeyB64`. `mus upgrade` and `mus _verify` verify against this.
-2. **SSH-signed `SHA256SUMS`** (`SHA256SUMS` + `SHA256SUMS.sig`) — for the manual verification path. Signed with the maintainer's `~/.ssh/id_ed25519`. Trust root is `.gitsigners` in this repo (cross-check against `https://codeberg.org/atrxia.keys` before treating signatures as authoritative).
+1. **Per-binary ed25519 `.sig`** (`<binary>.sig` next to each release binary) — for the programmatic upgrade path. Signed by the shared maintainer key (same key signs all of `mfiers`'s Go projects); pubkey embedded in `internal/signing.PubkeyB64`. `mus upgrade` and `mus _verify` verify against this.
+2. **SSH-signed `SHA256SUMS`** (`SHA256SUMS` + `SHA256SUMS.sig`) — for the manual verification path. Signed with the maintainer's `~/.ssh/id_ed25519`. Trust root is `.gitsigners` in this repo (cross-check against `https://codeberg.org/mfiers.keys` before treating signatures as authoritative).
 
 Tags and commits in this repo are also SSH-signed; verify any tag with:
 
@@ -228,7 +228,7 @@ mus -C DIR ...                 run as if from DIR (like git -C)
 Go 1.24+ required.
 
 ```bash
-git clone ssh://git@codeberg.org/atrxia/mus.git
+git clone ssh://git@codeberg.org/mfiers/mus.git
 cd mus
 make build              # ./bin/mus for your host
 make build-all          # cross-compile darwin/arm64 + linux/{amd64,arm64} → ./dist/
@@ -282,6 +282,6 @@ MIT
 
 ## Links
 
-- Source: https://codeberg.org/atrxia/mus
-- Issues: https://codeberg.org/atrxia/mus/issues
-- Releases: https://codeberg.org/atrxia/mus/releases
+- Source: https://codeberg.org/mfiers/mus
+- Issues: https://codeberg.org/mfiers/mus/issues
+- Releases: https://codeberg.org/mfiers/mus/releases

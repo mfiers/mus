@@ -18,8 +18,8 @@ import (
 	"io"
 	"strconv"
 
-	"codeberg.org/atrxia/mus/internal/iron"
-	"codeberg.org/atrxia/mus/internal/sidecar"
+	"codeberg.org/mfiers/mus/internal/iron"
+	"codeberg.org/mfiers/mus/internal/sidecar"
 )
 
 // applyMetadataToIRODS writes selected sidecar fields onto the iRODS object

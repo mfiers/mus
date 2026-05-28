@@ -99,7 +99,7 @@ inside `make release`:
 2. **SSH-signed `SHA256SUMS`** — for the manual verification path. The
    maintainer's `~/.ssh/id_ed25519` signs `dist/SHA256SUMS` via
    `ssh-keygen -Y sign -n file` → `dist/SHA256SUMS.sig`. `.gitsigners` is the
-   trust root, cross-checked against `https://codeberg.org/atrxia.keys`.
+   trust root, cross-checked against `https://codeberg.org/mfiers.keys`.
 
 Tags and commits are also SSH-signed via the repo-local
 `commit.gpgsign=true`, `tag.gpgsign=true`, `gpg.format=ssh`,
@@ -121,7 +121,7 @@ trigger an "invalid key" parser warning — keep it dense.
 
 ## Remotes
 
-`origin` → `ssh://git@codeberg.org/atrxia/mus.git`. Pushes are deliberately
+`origin` → `ssh://git@codeberg.org/mfiers/mus.git`. Pushes are deliberately
 manual — `make release` only prepares artifacts and prints the push command.
 
 ## Conventions

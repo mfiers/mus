@@ -22,7 +22,7 @@
 set -euo pipefail
 
 VERSION="${1:-}"
-REPO="${REPO:-atrxia/mus}"
+REPO="${REPO:-mfiers/mus}"
 API="https://codeberg.org/api/v1"
 TOKEN="${CODEBERG_TOKEN:-${CODEBERG_GENERIC_TOKEN:-}}"
 

@@ -1,4 +1,4 @@
-module codeberg.org/atrxia/mus
+module codeberg.org/mfiers/mus
 
 go 1.25.0
 

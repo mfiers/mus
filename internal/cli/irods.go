@@ -10,12 +10,12 @@ import (
 	"strings"
 	"time"
 
-	"codeberg.org/atrxia/mus/internal/config"
-	"codeberg.org/atrxia/mus/internal/dataproject"
-	"codeberg.org/atrxia/mus/internal/defaults"
-	"codeberg.org/atrxia/mus/internal/hashcache"
-	"codeberg.org/atrxia/mus/internal/iron"
-	"codeberg.org/atrxia/mus/internal/sidecar"
+	"codeberg.org/mfiers/mus/internal/config"
+	"codeberg.org/mfiers/mus/internal/dataproject"
+	"codeberg.org/mfiers/mus/internal/defaults"
+	"codeberg.org/mfiers/mus/internal/hashcache"
+	"codeberg.org/mfiers/mus/internal/iron"
+	"codeberg.org/mfiers/mus/internal/sidecar"
 	"github.com/spf13/cobra"
 )
 

@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"os"
 
-	"codeberg.org/atrxia/mus/internal/signing"
+	"codeberg.org/mfiers/mus/internal/signing"
 	"github.com/spf13/cobra"
 )
 

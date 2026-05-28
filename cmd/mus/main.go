@@ -4,7 +4,7 @@ package main
 import (
 	"os"
 
-	"codeberg.org/atrxia/mus/internal/cli"
+	"codeberg.org/mfiers/mus/internal/cli"
 )
 
 func main() {

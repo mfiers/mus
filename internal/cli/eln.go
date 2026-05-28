@@ -26,11 +26,11 @@ import (
 	"strings"
 	"time"
 
-	"codeberg.org/atrxia/mus/internal/config"
-	"codeberg.org/atrxia/mus/internal/dataproject"
-	"codeberg.org/atrxia/mus/internal/eln"
-	"codeberg.org/atrxia/mus/internal/elnmap"
-	"codeberg.org/atrxia/mus/internal/secret"
+	"codeberg.org/mfiers/mus/internal/config"
+	"codeberg.org/mfiers/mus/internal/dataproject"
+	"codeberg.org/mfiers/mus/internal/eln"
+	"codeberg.org/mfiers/mus/internal/elnmap"
+	"codeberg.org/mfiers/mus/internal/secret"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )

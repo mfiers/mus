@@ -15,7 +15,7 @@ import (
 	"sort"
 	"sync"
 
-	"codeberg.org/atrxia/mus/internal/envformat"
+	"codeberg.org/mfiers/mus/internal/envformat"
 )
 
 // FileName is the cascading folder-config file mus looks for.

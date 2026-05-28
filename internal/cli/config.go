@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	"codeberg.org/atrxia/mus/internal/config"
-	"codeberg.org/atrxia/mus/internal/dataproject"
+	"codeberg.org/mfiers/mus/internal/config"
+	"codeberg.org/mfiers/mus/internal/dataproject"
 	"github.com/spf13/cobra"
 )
 
