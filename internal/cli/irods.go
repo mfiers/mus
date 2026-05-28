@@ -95,27 +95,37 @@ func newIRODSUploadCmd() *cobra.Command {
 	// IRON's upload is idempotent by default: matching size+modtime → skip;
 	// different → overwrite. There is no "force" concept to expose.
 	var exclusive, newer, dryRun bool
-	var dataProject, remoteName string
+	var dataProject, remoteName, packRaw string
 	verify := true // verify-checksum on by default; opt-out below
 	cmd := &cobra.Command{
-		Use:   "upload FILE [FILE...]",
+		Use:   "upload FILE_OR_FOLDER [FILE_OR_FOLDER...]",
 		Short: "upload via IRON; writes/refreshes *.mus sidecars",
 		Long: "Uploads land at <irods_home>/project/<data_project>/<exp_name>/.\n" +
 			"data_project and a non-empty experiment-name are MANDATORY.\n" +
 			"data_project comes from .env (set via `mus config set` or `mus eln tag`);\n" +
 			"the experiment-name component is a sanitised eln_experiment_name unless\n" +
 			"overridden with --remote-name.\n\n" +
-			"IRON handles recursion automatically when given a directory and is\n" +
-			"idempotent for already-uploaded files. The --verify-checksum flag\n" +
-			"(default on) re-hashes both sides after transfer.",
+			"Folder uploads: each folder gets ONE sidecar at <folder>.mus (sibling of\n" +
+			"the folder) — no per-file sidecars are written inside the folder. mus\n" +
+			"profiles the folder and, if it has too many small files (density check),\n" +
+			"prompts to bundle into <folder>.tar.gz before upload. Force the choice\n" +
+			"with --pack tar.gz / --pack none. The folder sidecar also carries a\n" +
+			"recursive_sha256 Merkle hash so `mus check <folder>.mus` can detect\n" +
+			"local drift later.\n\n" +
+			"IRON handles file vs directory automatically; --verify-checksum (default\n" +
+			"on) re-hashes both sides after transfer.",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			pack, err := resolvePackMode(packRaw)
+			if err != nil {
+				return err
+			}
 			return runIRODSUpload(cmd, args, iron.UploadOpts{
 				VerifyChecksum: verify,
 				Exclusive:      exclusive,
 				Newer:          newer,
 				DryRun:         dryRun,
-			}, dataProject, remoteName)
+			}, dataProject, remoteName, pack)
 		},
 	}
 	cmd.Flags().BoolVar(&verify, "verify-checksum", true, "re-hash both sides after upload (default: on)")
@@ -126,10 +136,12 @@ func newIRODSUploadCmd() *cobra.Command {
 		"override the data_project component (NameYear format, e.g. Fiers2025)")
 	cmd.Flags().StringVar(&remoteName, "remote-name", "",
 		"override the experiment-name component of the remote path")
+	cmd.Flags().StringVar(&packRaw, "pack", "auto",
+		"folder packing: auto (prompt on TTY) | tar.gz | none")
 	return cmd
 }
 
-func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, overrideDataProject, overrideRemoteName string) error {
+func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, overrideDataProject, overrideRemoteName string, pack packMode) error {
 	dir, err := workingDir(cmd)
 	if err != nil {
 		return err
@@ -174,7 +186,15 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 		if err != nil {
 			return err
 		}
-		// IRON auto-detects file vs directory; no special handling needed.
+		// Folder args go through the dedicated folder-upload path
+		// (density check + optional tar.gz + folder sidecar).
+		if st.IsDir() {
+			if err := runIRODSUploadFolder(cmd, abs, opts, remoteCollection, env, pack); err != nil {
+				return err
+			}
+			continue
+		}
+		// File arg: existing flat code path below.
 		remote := remoteCollection + "/" + filepath.Base(abs)
 		fmt.Printf("→ %s\n", remote)
 		if err := client.Upload(ctx, abs, remote, opts); err != nil {

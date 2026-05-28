@@ -79,15 +79,37 @@ type S3 struct {
 // Doc is the full sidecar document.
 type Doc struct {
 	Version     int
+	Kind        string // "" (default; file sidecar) or "folder" (folder-level sidecar)
 	Note        string
 	Tags        []string
 	DataProject string // NameYear group label (e.g. "Fiers2025"); empty if not set
 	Created     time.Time
 	Updated     time.Time
 	File        FileInfo
+	Folder      *FolderInfo
+	Archive     *ArchiveInfo
 	IRODS       *IRODS
 	ELN         *ELN
 	S3          *S3
+}
+
+// FolderInfo is populated on folder-level sidecars (Kind=="folder").
+type FolderInfo struct {
+	FileCount       int64
+	TotalBytes      int64
+	MedianBytes     int64   // 0 if FileCount == 0
+	Density         float64 // MedianBytes / FileCount²
+	RecursiveSha256 string  // Merkle-style hash of (sorted relpath, sha256) lines
+}
+
+// ArchiveInfo is populated when a folder was packed before upload.
+// It describes the archive object that lives on iRODS.
+type ArchiveInfo struct {
+	Format   string // "tar.gz"
+	Filename string // e.g. "scripts.tar.gz"
+	Size     int64
+	Sha256   string
+	PURL     string // persistent URL of the archive object
 }
 
 // SidecarPath returns the sidecar path for a given data file.
@@ -201,10 +223,33 @@ func docToMap(d *Doc) map[string]any {
 	out["version"] = strconv.Itoa(d.Version)
 	putTime(out, "created", d.Created)
 	putTime(out, "updated", d.Updated)
+	putStr(out, "kind", d.Kind)
 	putStr(out, "note", d.Note)
 	putStr(out, "data_project", d.DataProject)
 	if len(d.Tags) > 0 {
 		out["tags"] = append([]string(nil), d.Tags...)
+	}
+
+	if d.Folder != nil {
+		if d.Folder.FileCount > 0 {
+			out["file_count"] = strconv.FormatInt(d.Folder.FileCount, 10)
+		}
+		if d.Folder.TotalBytes > 0 {
+			out["total_size"] = strconv.FormatInt(d.Folder.TotalBytes, 10)
+		}
+		if d.Folder.MedianBytes > 0 {
+			out["median_size"] = strconv.FormatInt(d.Folder.MedianBytes, 10)
+		}
+		putStr(out, "recursive_sha256", d.Folder.RecursiveSha256)
+	}
+	if d.Archive != nil {
+		putStr(out, "archive_format", d.Archive.Format)
+		putStr(out, "archive_filename", d.Archive.Filename)
+		if d.Archive.Size > 0 {
+			out["archive_size"] = strconv.FormatInt(d.Archive.Size, 10)
+		}
+		putStr(out, "archive_sha256", d.Archive.Sha256)
+		putStr(out, "archive_purl", d.Archive.PURL)
 	}
 
 	// [file] — always emit sha256/size/mtime if set; they are the load-bearing
@@ -250,8 +295,26 @@ func docFromMap(in map[string]any) (*Doc, error) {
 	d.Version = parseInt(getStr(in, "version"), 1)
 	d.Created = parseTime(getStr(in, "created"))
 	d.Updated = parseTime(getStr(in, "updated"))
+	d.Kind = getStr(in, "kind")
 	d.Note = getStr(in, "note")
 	d.DataProject = getStr(in, "data_project")
+	if d.Kind == "folder" || hasPrefix(in, "recursive_sha256") || getStr(in, "file_count") != "" {
+		d.Folder = &FolderInfo{
+			FileCount:       parseInt64(getStr(in, "file_count"), 0),
+			TotalBytes:      parseInt64(getStr(in, "total_size"), 0),
+			MedianBytes:     parseInt64(getStr(in, "median_size"), 0),
+			RecursiveSha256: getStr(in, "recursive_sha256"),
+		}
+	}
+	if hasPrefix(in, "archive_") {
+		d.Archive = &ArchiveInfo{
+			Format:   getStr(in, "archive_format"),
+			Filename: getStr(in, "archive_filename"),
+			Size:     parseInt64(getStr(in, "archive_size"), 0),
+			Sha256:   getStr(in, "archive_sha256"),
+			PURL:     getStr(in, "archive_purl"),
+		}
+	}
 	if v, ok := in["tags"].([]string); ok {
 		d.Tags = append([]string(nil), v...)
 	}
