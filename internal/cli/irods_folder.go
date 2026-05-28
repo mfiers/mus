@@ -175,6 +175,31 @@ func promptPackChoice(stdin io.Reader, stdout io.Writer) (packMode, error) {
 	return "", errors.New("too many invalid choices")
 }
 
+// promptOverwriteArchive asks whether to overwrite an existing tar.gz from a
+// previous packing attempt. Returns true on yes, false on no, error only on
+// IO failure or after too many invalid responses. Default (empty line) is no
+// — we don't want a stray Enter to nuke a 50 GB archive.
+func promptOverwriteArchive(stdin io.Reader, stdout io.Writer, path string, size int64) (bool, error) {
+	r := bufio.NewReader(stdin)
+	for attempts := 0; attempts < 3; attempts++ {
+		fmt.Fprintf(stdout, "  → %s already exists (%s).\n",
+			path, folder.FormatHumanBytes(size))
+		fmt.Fprintf(stdout, "  Overwrite? [y/N]: ")
+		line, err := r.ReadString('\n')
+		if err != nil && err != io.EOF {
+			return false, err
+		}
+		switch strings.ToLower(strings.TrimSpace(line)) {
+		case "y", "yes":
+			return true, nil
+		case "n", "no", "":
+			return false, nil
+		}
+		fmt.Fprintln(stdout, "  invalid choice")
+	}
+	return false, errors.New("too many invalid choices")
+}
+
 // uploadFolderDirect uploads the source folder tree as a collection on
 // iRODS, then writes one folder-level sidecar.
 func uploadFolderDirect(
@@ -220,14 +245,28 @@ func uploadFolderArchived(
 	cleanupAfter bool,
 	uploads *[]uploadedItem,
 ) error {
+	stdin := cmd.InOrStdin()
 	stdout := cmd.OutOrStdout()
 	stderr := cmd.ErrOrStderr()
 	base := filepath.Base(srcAbs)
 	archiveLocal := filepath.Join(filepath.Dir(srcAbs), base+".tar.gz")
 
-	if _, err := os.Stat(archiveLocal); err == nil {
-		return fmt.Errorf("%s already exists; remove it or pick a different name",
-			archiveLocal)
+	if st, err := os.Stat(archiveLocal); err == nil {
+		if !stdinIsTTY(stdin) {
+			return fmt.Errorf("%s already exists (%s) and stdin is not a TTY.\n"+
+				"  Remove it manually or re-run interactively to confirm overwrite.",
+				archiveLocal, folder.FormatHumanBytes(st.Size()))
+		}
+		ok, perr := promptOverwriteArchive(stdin, stdout, archiveLocal, st.Size())
+		if perr != nil {
+			return perr
+		}
+		if !ok {
+			return errors.New("upload cancelled (existing archive kept)")
+		}
+		if err := os.Remove(archiveLocal); err != nil {
+			return fmt.Errorf("could not remove existing archive: %w", err)
+		}
 	}
 
 	fmt.Fprintf(stdout, "  packing %s → %s\n", base, filepath.Base(archiveLocal))
