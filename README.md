@@ -121,16 +121,28 @@ use `mus eln update` to refresh, or `tag ID --force` to relink.
 Typical lab layout:
 
 ```sh
-# /lab/projects/.env  — lab-wide defaults
-irods_home=/zone/home/lab
-irods_web=https://mango.kuleuven.be/data-object/view
+# /lab/projects/.env  — lab-wide defaults (only needed to override the
+# baked-in defaults; for BADS users these three already match)
+# irods_home=/gbiomed/home/BADS
+# irods_web=https://mango.kuleuven.be/data-object/view
+# irods_pid_base=https://mango.kuleuven.be/PID
 tag=lab,shared
 
 # /lab/projects/project_alpha/exp_42/.env  — per-experiment override
 tag=exp42,-lab                  # drops the inherited "lab" tag
+data_project=Fiers2025          # mandatory for iRODS upload (NameYear format)
 eln_experiment_id=12345         # `mus eln tag 12345` writes this
-# irods_path=alpha/raw/exp_42   # optional; defaults to exp_<eln_experiment_id>
 ```
+
+Three values are baked into the binary as defaults (see `internal/defaults/`):
+
+| Key | Default |
+|---|---|
+| `irods_home` | `/gbiomed/home/BADS` |
+| `irods_web` | `https://mango.kuleuven.be/data-object/view` (path-based, browse-only) |
+| `irods_pid_base` | `https://mango.kuleuven.be/PID` (PURL prefix — survives moves) |
+
+Defaults are the lowest priority — any `.env` value overrides them. Other labs can ship their own binary by passing `-ldflags="-X codeberg.org/atrxia/mus/internal/defaults.IRODSHome=/your/zone/..."` at `go build` time.
 
 Inspect:
 
@@ -146,7 +158,7 @@ mus config set tag exp42 # writes to the local .env
 `mus tag data.csv -m "raw"` writes `data.csv.mus` next to the data file. Same flat `KEY=VALUE` format as `.env`. Fields recorded:
 
 - File: `sha256`, `size`, `mtime`, `hashed`, `host`, `abspath`
-- iRODS (after `mus irods upload`): `irods_url`, `irods_path`, `irods_status`, `irods_uploaded_at`
+- iRODS (after `mus irods upload`): `irods_url` (path-based browse URL), `irods_purl` (persistent URL keyed on the iRODS catalog id — survives renames/moves), `irods_path`, `irods_status`, `irods_uploaded_at`
 - ELN (from the `.env` cascade): `eln_experiment_id` (and `eln_*_name` / `eln_*_id` if available)
 - S3 (planned): `s3_url`, `s3_bucket`, `s3_key`, `s3_etag`, `s3_uploaded_at`
 - Free-form: `note`, `tags` (comma-separated)

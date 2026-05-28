@@ -48,9 +48,10 @@ type FileInfo struct {
 
 // IRODS captures iRODS upload state.
 type IRODS struct {
-	URL        string
-	Path       string
-	Status     string // ok, mismatch, pending, uploaded, ...
+	URL        string    // path-based browse URL — convenient but breaks on moves
+	PURL       string    // persistent URL keyed on catalog id — survives moves
+	Path       string    // canonical iRODS path
+	Status     string    // ok, mismatch, pending, uploaded, ...
 	UploadedAt time.Time
 	UploadedBy string
 }
@@ -219,6 +220,7 @@ func docToMap(d *Doc) map[string]any {
 
 	if d.IRODS != nil {
 		putStr(out, "irods_url", d.IRODS.URL)
+		putStr(out, "irods_purl", d.IRODS.PURL)
 		putStr(out, "irods_path", d.IRODS.Path)
 		putStr(out, "irods_status", d.IRODS.Status)
 		putTime(out, "irods_uploaded_at", d.IRODS.UploadedAt)
@@ -266,6 +268,7 @@ func docFromMap(in map[string]any) (*Doc, error) {
 	if hasPrefix(in, "irods_") {
 		d.IRODS = &IRODS{
 			URL:        getStr(in, "irods_url"),
+			PURL:       getStr(in, "irods_purl"),
 			Path:       getStr(in, "irods_path"),
 			Status:     getStr(in, "irods_status"),
 			UploadedAt: parseTime(getStr(in, "irods_uploaded_at")),

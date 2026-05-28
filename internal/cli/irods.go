@@ -10,6 +10,7 @@ import (
 
 	"codeberg.org/atrxia/mus/internal/config"
 	"codeberg.org/atrxia/mus/internal/dataproject"
+	"codeberg.org/atrxia/mus/internal/defaults"
 	"codeberg.org/atrxia/mus/internal/hashcache"
 	"codeberg.org/atrxia/mus/internal/iron"
 	"codeberg.org/atrxia/mus/internal/sidecar"
@@ -41,8 +42,23 @@ func newIRODSCmd() *cobra.Command {
 // Refuses (no fallbacks, no auto-derivation) if any piece is missing or
 // invalid. Users see a clear message pointing at `mus eln tag <id>` /
 // `mus config set data_project ...` as remediations.
+// firstPathSegment returns the first non-empty path component of an absolute
+// iRODS path. For `/gbiomed/home/BADS/file.csv` it returns `gbiomed`. Used to
+// derive the zone for PURL construction.
+func firstPathSegment(p string) string {
+	for _, seg := range strings.Split(strings.TrimPrefix(p, "/"), "/") {
+		if seg != "" {
+			return seg
+		}
+	}
+	return ""
+}
+
 func resolveIRODSCollection(env *config.Env, overrideDataProject, overrideRemoteName string) (string, error) {
 	home := env.String("irods_home")
+	if home == "" {
+		home = defaults.IRODSHome // baked-in fallback; overridable via -ldflags
+	}
 	if home == "" {
 		return "", fmt.Errorf("irods_home not set — `mus config set irods_home /zone/home/...`")
 	}
@@ -197,8 +213,30 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 		doc.IRODS.Path = remote
 		doc.IRODS.Status = "uploaded"
 		doc.IRODS.UploadedAt = time.Now().UTC().Truncate(time.Second)
-		if web := env.String("irods_web"); web != "" {
+
+		// Path-based browse URL (`irods_url`). Convenient but does NOT
+		// survive moves — see irods_purl for the location-independent one.
+		web := env.String("irods_web")
+		if web == "" {
+			web = defaults.IRODSWeb // baked-in fallback
+		}
+		if web != "" {
 			doc.IRODS.URL = strings.TrimRight(web, "/") + remote
+		}
+
+		// Persistent URL (`irods_purl`) — keyed on iRODS catalog ID, stable
+		// across renames/moves. Built from <pid_base>/<zone>/<id>/. Best-
+		// effort: if `iron stat -j` fails for any reason we just skip it.
+		if stat, statErr := client.Stat(ctx, remote); statErr == nil {
+			zone := firstPathSegment(remote)
+			pidBase := env.String("irods_pid_base")
+			if pidBase == "" {
+				pidBase = defaults.IRODSPIDBase
+			}
+			if zone != "" && pidBase != "" && stat.ID != 0 {
+				doc.IRODS.PURL = fmt.Sprintf("%s/%s/%d/",
+					strings.TrimRight(pidBase, "/"), zone, stat.ID)
+			}
 		}
 		// Stamp the data_project we used into the sidecar so the file
 		// carries the membership label even after the .env cascade changes.

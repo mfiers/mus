@@ -8,6 +8,7 @@ package iron
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -176,6 +177,39 @@ func (c *Client) Checksum(ctx context.Context, remote string) (string, error) {
 		return fields[len(fields)-1], nil
 	}
 	return "", fmt.Errorf("could not parse checksum output: %q", out)
+}
+
+// StatInfo is the subset of `iron stat -j` output mus consumes. iRODS's
+// catalog `id` is the stable identifier; combined with the zone (parsed by
+// the caller from the path's first segment) it forms a persistent URL via
+// Mango's /PID/<zone>/<id>/ route.
+type StatInfo struct {
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Size     int64  `json:"size"`
+	Creator  string `json:"creator"`
+	Modified string `json:"modified"`
+}
+
+// Stat runs `iron stat -j <path>` and decodes the result.
+func (c *Client) Stat(ctx context.Context, remote string) (*StatInfo, error) {
+	if c.DefaultTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.DefaultTimeout)
+		defer cancel()
+	}
+	out, err := c.Run(ctx, "stat", "-j", remote)
+	if err != nil {
+		return nil, err
+	}
+	var info StatInfo
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &info); err != nil {
+		return nil, fmt.Errorf("decoding iron stat output: %w (raw=%q)", err, out)
+	}
+	if info.ID == 0 {
+		return nil, fmt.Errorf("iron stat returned no catalog id for %s", remote)
+	}
+	return &info, nil
 }
 
 // TreeJSON runs `iron tree --json <collection>` and returns the raw JSON for
