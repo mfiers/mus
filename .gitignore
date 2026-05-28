@@ -27,6 +27,12 @@ Thumbs.db
 # `.env` files in subdirs (examples, fixtures, …) stay trackable.
 /.env
 
+# Sidecars generated when testing `mus irods upload` inside the repo
+# (e.g. `mus irods upload scripts/` writes scripts.mus at the root).
+# Anchored at the root only — sidecars in subdirs (fixtures, testdata)
+# can still be checked in.
+/*.mus
+
 # user-side data dumps that should never be tracked
 *.ndjson
 all_gbiomed_mango_data.json

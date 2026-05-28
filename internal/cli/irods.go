@@ -485,10 +485,54 @@ func downloadOne(ctx context.Context, client *iron.Client,
 			return fmt.Errorf("%s already exists — use --force to overwrite", local)
 		}
 	}
-	return client.Download(ctx, doc.IRODS.Path, local, iron.DownloadOpts{
+	if err := client.Download(ctx, doc.IRODS.Path, local, iron.DownloadOpts{
 		Exclusive:      !force,
 		VerifyChecksum: verify,
-	})
+	}); err != nil {
+		return err
+	}
+
+	// After download, re-verify what landed against what the sidecar says
+	// SHOULD be there. iron --verify-checksum confirms transport integrity
+	// (bytes match the current iRODS object); this confirms PROVENANCE
+	// integrity (the iRODS object hasn't drifted from what mus uploaded).
+	// On mismatch we keep the file but return a non-zero status — the
+	// caller knows scripts get a clean exit only when both checks pass.
+	if err := verifyDownloadedSidecar(arg, doc, stderr); err != nil {
+		return err
+	}
+	return nil
+}
+
+// verifyDownloadedSidecar runs the same logic as `mus check` against a
+// just-downloaded sidecar. Reuses the hashcache so subsequent `mus check`
+// calls are stat-fast.
+func verifyDownloadedSidecar(sidecarPath string, doc *sidecar.Doc, stderr io.Writer) error {
+	cache, err := hashcache.Open("")
+	if err != nil {
+		return err
+	}
+	defer cache.Close()
+
+	res := checkOne(cache, sidecarPath)
+	switch res.status {
+	case "ok":
+		fmt.Fprintf(stderr, "  ✓ verified %s against sidecar checksum\n", res.path)
+		return nil
+	case "missing":
+		// Shouldn't happen — we just downloaded it — but report cleanly.
+		return fmt.Errorf("downloaded file not present at %s after download", res.path)
+	case "mismatch", "stale":
+		return fmt.Errorf(
+			"PROVENANCE MISMATCH at %s: %s\n"+
+				"  The downloaded bytes do NOT match what the sidecar says was uploaded.\n"+
+				"  Possible causes:\n"+
+				"    - the iRODS object was modified after `mus irods upload` wrote the sidecar\n"+
+				"    - the sidecar is stale (manually edited, regenerated from a different source)\n"+
+				"  The downloaded file has been LEFT in place; inspect or remove it manually.",
+			res.path, res.detail)
+	}
+	return fmt.Errorf("verify %s: %s (%s)", res.path, res.status, res.detail)
 }
 
 // downloadFromMango handles the legacy *.mango sidecar files emitted by the
