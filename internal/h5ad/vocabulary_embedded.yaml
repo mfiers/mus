@@ -1,0 +1,134 @@
+# Embedded fallback for the h5ad ingestion vocabulary.
+#
+# The canonical source is the YAML at
+#   <irods_home>/project/h5ad_vocabulary.yaml
+# pulled at runtime. This file is mus's last-resort copy when iRODS is
+# unreachable AND the user has never run mus before (no local cache).
+#
+# Update this only when the spec at
+#   /data/1/users/mark/anthive4/doc/H5AD_INGESTION_SPEC.md
+# changes AND the iRODS file is also being updated.
+
+schema_version: 1
+
+required:
+  - organism
+  - celltype
+  - technology
+  - preparation
+  - tissue
+  - internal
+  - accession
+
+soft:
+  - doi
+  - year
+  - contributor
+  - region
+  - disease
+  - sex
+  - license
+  - source
+  - title
+
+vocabulary:
+
+  organism:
+    - human          # Homo sapiens
+    - mouse          # Mus musculus
+    - rat            # Rattus norvegicus
+    - macaque        # Macaca mulatta
+    - zebrafish      # Danio rerio
+
+  internal:
+    - "yes"
+    - "no"
+
+  celltype:
+    - microglia
+    - macrophage
+    - dendritic
+    - monocyte
+    - astrocyte
+    - oligodendrocyte
+    - opc
+    - neuron
+    - excitatory_neuron
+    - inhibitory_neuron
+    - endothelial
+    - pericyte
+    - fibroblast
+    - ependymal
+    - vascular
+    - myeloid
+    - glia
+    - mixed
+
+  technology:
+    - 10x_chromium_3p_v2
+    - 10x_chromium_3p_v3
+    - 10x_chromium_5p
+    - 10x_multiome
+    - 10x_chromium
+    - drop_seq
+    - smart_seq2
+    - smart_seq3
+    - cel_seq2
+    - parse_evercode
+    - bd_rhapsody
+    - mars_seq
+    - microwell_seq
+
+  preparation:
+    - whole_cell
+    - single_nucleus
+    - cultured
+    - xenograft
+    - bulk
+
+  tissue:
+    - brain
+    - blood
+    - bone_marrow
+    - lung
+    - liver
+    - spinal_cord
+    - retina
+    - skin
+    - csf
+
+  region:
+    - prefrontal_cortex
+    - motor_cortex
+    - occipital_cortex
+    - temporal_cortex
+    - parietal_cortex
+    - hippocampus
+    - striatum
+    - thalamus
+    - cerebellum
+    - midbrain
+    - substantia_nigra
+    - white_matter
+    - subventricular_zone
+
+  disease:
+    - control
+    - alzheimer
+    - parkinson
+    - amyotrophic_lateral_sclerosis
+    - multiple_sclerosis
+    - huntington
+    - frontotemporal_dementia
+    - down_syndrome
+    - autism_spectrum
+    - schizophrenia
+    - glioma
+    - glioblastoma
+    - covid
+
+  sex:
+    - male
+    - female
+    - mixed
+    - unknown
