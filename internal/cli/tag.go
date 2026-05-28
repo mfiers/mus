@@ -114,6 +114,10 @@ func runTag(cmd *cobra.Command, args []string, note string, tags []string, force
 			doc.ELN.ProjectID = env.String("eln_project_id")
 			doc.ELN.ProjectName = env.String("eln_project_name")
 		}
+		// data_project membership label from cascade
+		if dp := env.String("data_project"); dp != "" {
+			doc.DataProject = dp
+		}
 
 		if err := sidecar.Write(scPath, doc); err != nil {
 			return err

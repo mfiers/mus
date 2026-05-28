@@ -24,9 +24,12 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"codeberg.org/atrxia/mus/internal/config"
+	"codeberg.org/atrxia/mus/internal/dataproject"
 	"codeberg.org/atrxia/mus/internal/eln"
+	"codeberg.org/atrxia/mus/internal/elnmap"
 	"codeberg.org/atrxia/mus/internal/secret"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -209,21 +212,27 @@ func readSecretLine(stdin io.Reader, stdout io.Writer, prompt string) (string, e
 // no -x flag — shorter to type, no flag-base-10 footgun.
 func newELNTagCmd() *cobra.Command {
 	var force bool
+	var dataProject string
 	cmd := &cobra.Command{
 		Use:   "tag EXPERIMENT_ID",
 		Short: "link the current folder to an ELN experiment (writes .env)",
 		Long: "Fetches project / study / experiment names from the ELN API and writes\n" +
 			"eln_experiment_id / eln_experiment_name / eln_study_id / eln_study_name /\n" +
 			"eln_project_id / eln_project_name into the current folder's .env.\n\n" +
+			"Also prompts for a `data_project` name (format e.g. Fiers2025), needed\n" +
+			"by `mus irods upload`. Previous associations for the same experiment ID\n" +
+			"are remembered across folders so you only confirm once.\n\n" +
 			"Refuses to overwrite an existing linkage; use `mus eln update` to refresh\n" +
 			"after a server-side rename, or --force to relink to a different experiment.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runELNTag(cmd, args[0], force)
+			return runELNTag(cmd, args[0], force, dataProject)
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false,
 		"overwrite an existing linkage in this folder")
+	cmd.Flags().StringVar(&dataProject, "data-project", "",
+		"data_project name (skip the interactive prompt; must match the data_project format)")
 	return cmd
 }
 
@@ -237,6 +246,7 @@ func newELNTagFolderCmd() *cobra.Command {
 	// that copy-paste with leading zeros. parseELNExperimentID handles it.
 	var expIDStr string
 	var force bool
+	var dataProject string
 	cmd := &cobra.Command{
 		Use:        "tag-folder",
 		Short:      "(deprecated) use `mus eln tag EXPERIMENT_ID` instead",
@@ -245,23 +255,27 @@ func newELNTagFolderCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fmt.Fprintln(cmd.ErrOrStderr(),
 				"note: `mus eln tag-folder -x ID` is deprecated; use `mus eln tag ID` instead")
-			return runELNTag(cmd, expIDStr, force)
+			return runELNTag(cmd, expIDStr, force, dataProject)
 		},
 	}
 	cmd.Flags().StringVarP(&expIDStr, "experiment-id", "x", "",
 		"ELN experiment ID (digits; leading zeros tolerated)")
 	cmd.Flags().BoolVar(&force, "force", false,
 		"overwrite an existing linkage in this folder")
+	cmd.Flags().StringVar(&dataProject, "data-project", "",
+		"data_project name (skip interactive prompt)")
 	_ = cmd.MarkFlagRequired("experiment-id")
 	return cmd
 }
 
 // runELNTag is the shared body of `eln tag` and `eln tag-folder`.
-func runELNTag(cmd *cobra.Command, expIDRaw string, force bool) error {
+func runELNTag(cmd *cobra.Command, expIDRaw string, force bool, explicitDataProject string) error {
 	expID, err := parseELNExperimentID(expIDRaw)
 	if err != nil {
 		return err
 	}
+	expIDStr := strconv.FormatInt(expID, 10)
+
 	dir, err := workingDir(cmd)
 	if err != nil {
 		return err
@@ -269,7 +283,7 @@ func runELNTag(cmd *cobra.Command, expIDRaw string, force bool) error {
 	// Idempotency guard: refuse if a different experiment is already linked.
 	localEnv, _ := config.LoadLocal(dir)
 	if existing := localEnv.String("eln_experiment_id"); existing != "" && !force {
-		if existing == strconv.FormatInt(expID, 10) {
+		if existing == expIDStr {
 			fmt.Fprintf(cmd.OutOrStdout(),
 				"folder is already linked to experiment %s — running `mus eln update` to refresh\n", existing)
 			return runELNUpdate(cmd.OutOrStdout())
@@ -288,11 +302,154 @@ func runELNTag(cmd *cobra.Command, expIDRaw string, force bool) error {
 	if err != nil {
 		return fmt.Errorf("fetch experiment %d: %w", expID, err)
 	}
+
+	// Resolve data_project (cache → ELN-derived suggestion → confirm).
+	dp, err := resolveDataProject(cmd, expIDStr, info, explicitDataProject, localEnv.String("data_project"))
+	if err != nil {
+		return err
+	}
+
 	kv := experimentToKV(info)
+	kv["data_project"] = dp
 	for k, v := range kv {
 		fmt.Fprintf(cmd.OutOrStdout(), "%-25s : %s\n", k, v)
 	}
 	return config.Save(dir, kv)
+}
+
+// resolveDataProject picks the data_project for an experiment, in priority:
+//
+//  1. Explicit --data-project flag (skip prompt; validate; persist mapping).
+//  2. data_project already in this folder's .env (no prompt; just keep it).
+//  3. Cross-folder cache (~/.local/share/mus/eln_mappings.json) — propose
+//     the cached value and ask for confirmation.
+//  4. ELN-derived suggestion (first-collaborator surname + current year) —
+//     propose and ask for confirmation.
+//
+// In all cases the chosen value is validated against dataproject.ValidateName
+// and persisted to the cross-folder cache before being returned.
+//
+// Non-interactive (no TTY) callers must supply --data-project explicitly;
+// they cannot be prompted.
+func resolveDataProject(cmd *cobra.Command, expIDStr string, info *eln.ExperimentInfo, explicit, existing string) (string, error) {
+	stdin := cmd.InOrStdin()
+	stdout := cmd.OutOrStdout()
+
+	store, err := elnmap.Open("")
+	if err != nil {
+		return "", fmt.Errorf("open eln mapping store: %w", err)
+	}
+
+	// 1. Explicit flag wins.
+	if explicit != "" {
+		if err := dataproject.ValidateName(explicit); err != nil {
+			return "", err
+		}
+		_ = store.Remember(expIDStr, explicit, info.ExperimentName)
+		return explicit, nil
+	}
+
+	// 2. Already in this folder's .env → keep silently.
+	if existing != "" {
+		if err := dataproject.ValidateName(existing); err != nil {
+			return "", fmt.Errorf("existing data_project in .env: %w", err)
+		}
+		_ = store.Remember(expIDStr, existing, info.ExperimentName)
+		return existing, nil
+	}
+
+	// 3. + 4. Build a suggestion.
+	var suggestion, source string
+	if cached, _ := store.Lookup(expIDStr); cached != nil && dataproject.ValidateName(cached.DataProject) == nil {
+		suggestion = cached.DataProject
+		source = "cached from a previous folder"
+	} else {
+		suggestion = suggestDataProjectFromELN(info)
+		source = "derived from ELN metadata"
+	}
+
+	// Interactive confirm. Always prompt — per the design decision.
+	chosen, err := promptForDataProject(stdin, stdout, suggestion, source)
+	if err != nil {
+		return "", err
+	}
+	if err := dataproject.ValidateName(chosen); err != nil {
+		return "", err
+	}
+	_ = store.Remember(expIDStr, chosen, info.ExperimentName)
+	return chosen, nil
+}
+
+// suggestDataProjectFromELN returns "<LastName><YYYY>" where LastName is the
+// surname of the first collaborator (sanitised) and YYYY is the current year.
+// If no collaborators are available, returns "Project<YYYY>" so the user has
+// something to edit rather than a blank prompt.
+func suggestDataProjectFromELN(info *eln.ExperimentInfo) string {
+	year := time.Now().Year()
+	for _, c := range info.Collaborators {
+		// "First Middle Last" → "Last"
+		fields := strings.Fields(c)
+		if len(fields) == 0 {
+			continue
+		}
+		last := fields[len(fields)-1]
+		// Strip non-alphanumerics; preserve case of first letter.
+		cleaned := stripNonAlnum(last)
+		if cleaned == "" {
+			continue
+		}
+		// Capitalise the first rune so it satisfies the ValidateName regex.
+		first := strings.ToUpper(cleaned[:1])
+		return first + cleaned[1:] + strconv.Itoa(year)
+	}
+	return "Project" + strconv.Itoa(year)
+}
+
+func stripNonAlnum(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// promptForDataProject shows the suggestion + source and asks the user to
+// confirm (Enter) or type a new value. Non-TTY stdin → error.
+func promptForDataProject(stdin io.Reader, stdout io.Writer, suggestion, source string) (string, error) {
+	f, ok := stdin.(*os.File)
+	if !ok || !term.IsTerminal(int(f.Fd())) {
+		return "", fmt.Errorf(
+			"data_project required but no TTY available — re-run with --data-project NAME\n"+
+				"  suggestion: %s (%s)", suggestion, source)
+	}
+	for attempts := 0; attempts < 3; attempts++ {
+		fmt.Fprintf(stdout, "\nSuggested data_project: %s\n", suggestion)
+		fmt.Fprintf(stdout, "  source: %s\n", source)
+		fmt.Fprintf(stdout, "Press Enter to accept, or type a new value: ")
+
+		reader := bufio.NewReader(f)
+		line, err := reader.ReadString('\n')
+		if err != nil && err != io.EOF {
+			return "", err
+		}
+		line = strings.TrimRight(line, "\r\n")
+		line = strings.TrimSpace(line)
+
+		chosen := suggestion
+		if line != "" {
+			chosen = line
+		}
+		if err := dataproject.ValidateName(chosen); err != nil {
+			fmt.Fprintf(stdout, "  ✗ %v\n", err)
+			suggestion = chosen // keep the user's last input as the next suggestion
+			continue
+		}
+		return chosen, nil
+	}
+	return "", errors.New("too many invalid attempts")
 }
 
 func newELNUpdateCmd() *cobra.Command {

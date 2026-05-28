@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"codeberg.org/atrxia/mus/internal/config"
+	"codeberg.org/atrxia/mus/internal/dataproject"
 	"codeberg.org/atrxia/mus/internal/hashcache"
 	"codeberg.org/atrxia/mus/internal/iron"
 	"codeberg.org/atrxia/mus/internal/sidecar"
@@ -25,62 +26,70 @@ func newIRODSCmd() *cobra.Command {
 	return cmd
 }
 
-// resolveIRODSCollection computes where on iRODS uploads from this folder land.
+// resolveIRODSCollection computes where on iRODS uploads from this folder
+// land. The layout is now MANDATORY:
 //
-// Resolution order:
-//  1. `irods_path` from .mus (explicit subpath under irods_home) — wins.
-//  2. `eln_experiment_id` from .mus — fall back to "exp_<id>" subfolder.
-//  3. Otherwise: a clear error.
+//	<irods_home>/project/<data_project>/<safe_experiment_name>/
 //
-// We deliberately do NOT depend on eln_project_name / study_name /
-// experiment_name (those need an ELN API call to populate, and the eLabNext
-// API situation is unsettled). The experiment ID alone gives every upload a
-// stable, traceable identifier.
-func resolveIRODSCollection(env *config.Env) (string, error) {
+// Components:
+//   - irods_home          required, from .env cascade
+//   - data_project        required; must pass dataproject.ValidateName.
+//                          Override via --data-project flag.
+//   - safe_experiment_name reproducible sanitisation of eln_experiment_name.
+//                          Override via --remote-name flag.
+//
+// Refuses (no fallbacks, no auto-derivation) if any piece is missing or
+// invalid. Users see a clear message pointing at `mus eln tag <id>` /
+// `mus config set data_project ...` as remediations.
+func resolveIRODSCollection(env *config.Env, overrideDataProject, overrideRemoteName string) (string, error) {
 	home := env.String("irods_home")
 	if home == "" {
 		return "", fmt.Errorf("irods_home not set — `mus config set irods_home /zone/home/...`")
 	}
 	home = strings.TrimRight(home, "/")
 
-	if sub := env.String("irods_path"); sub != "" {
-		return home + "/" + strings.Trim(sub, "/"), nil
+	dp := overrideDataProject
+	if dp == "" {
+		dp = env.String("data_project")
 	}
-	if expID := env.String("eln_experiment_id"); expID != "" {
-		return home + "/exp_" + sanitize(expID), nil
+	if dp == "" {
+		return "", fmt.Errorf("data_project not set.\n" +
+			"  - `mus config set data_project Fiers2025` (or pick your own NameYear), OR\n" +
+			"  - `mus eln tag <experiment_id>` (prompts for a data_project), OR\n" +
+			"  - pass --data-project NAME on the command line.")
 	}
-	return "", fmt.Errorf("no remote path resolvable.\n" +
-		"Either:\n" +
-		"  - `mus config set irods_path <subfolder>` for an explicit path, OR\n" +
-		"  - `mus eln tag-folder -x EXPERIMENT_ID` to derive exp_<id>/")
-}
+	if err := dataproject.ValidateName(dp); err != nil {
+		return "", err
+	}
 
-func sanitize(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	s = strings.ReplaceAll(s, " ", "_")
-	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '_':
-			b.WriteRune(r)
-		}
+	expName := overrideRemoteName
+	if expName == "" {
+		expName = dataproject.SanitizeForPath(env.String("eln_experiment_name"))
 	}
-	out := b.String()
-	for strings.Contains(out, "__") {
-		out = strings.ReplaceAll(out, "__", "_")
+	if expName == "" {
+		return "", fmt.Errorf("no experiment-name component for remote path.\n" +
+			"  - `mus eln tag <experiment_id>` populates eln_experiment_name in .env, OR\n" +
+			"  - pass --remote-name NAME on the command line.")
 	}
-	return out
+
+	return home + "/project/" + dp + "/" + expName, nil
 }
 
 func newIRODSUploadCmd() *cobra.Command {
 	// IRON's upload is idempotent by default: matching size+modtime → skip;
 	// different → overwrite. There is no "force" concept to expose.
 	var exclusive, newer, dryRun bool
+	var dataProject, remoteName string
 	verify := true // verify-checksum on by default; opt-out below
 	cmd := &cobra.Command{
 		Use:   "upload FILE [FILE...]",
 		Short: "upload via IRON; writes/refreshes *.mus sidecars",
-		Long: "IRON handles recursion automatically when given a directory and is\n" +
+		Long: "Uploads land at <irods_home>/project/<data_project>/<exp_name>/.\n" +
+			"data_project and a non-empty experiment-name are MANDATORY.\n" +
+			"data_project comes from .env (set via `mus config set` or `mus eln tag`);\n" +
+			"the experiment-name component is a sanitised eln_experiment_name unless\n" +
+			"overridden with --remote-name.\n\n" +
+			"IRON handles recursion automatically when given a directory and is\n" +
 			"idempotent for already-uploaded files. The --verify-checksum flag\n" +
 			"(default on) re-hashes both sides after transfer.",
 		Args: cobra.MinimumNArgs(1),
@@ -90,17 +99,21 @@ func newIRODSUploadCmd() *cobra.Command {
 				Exclusive:      exclusive,
 				Newer:          newer,
 				DryRun:         dryRun,
-			})
+			}, dataProject, remoteName)
 		},
 	}
 	cmd.Flags().BoolVar(&verify, "verify-checksum", true, "re-hash both sides after upload (default: on)")
 	cmd.Flags().BoolVar(&exclusive, "exclusive", false, "refuse to overwrite existing remote objects")
 	cmd.Flags().BoolVar(&newer, "newer", false, "only upload files newer than the remote copy")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print actions without uploading")
+	cmd.Flags().StringVar(&dataProject, "data-project", "",
+		"override the data_project component (NameYear format, e.g. Fiers2025)")
+	cmd.Flags().StringVar(&remoteName, "remote-name", "",
+		"override the experiment-name component of the remote path")
 	return cmd
 }
 
-func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts) error {
+func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, overrideDataProject, overrideRemoteName string) error {
 	dir, err := workingDir(cmd)
 	if err != nil {
 		return err
@@ -109,7 +122,7 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts) err
 	if err != nil {
 		return err
 	}
-	remoteCollection, err := resolveIRODSCollection(env)
+	remoteCollection, err := resolveIRODSCollection(env, overrideDataProject, overrideRemoteName)
 	if err != nil {
 		return err
 	}
@@ -186,6 +199,13 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts) err
 		doc.IRODS.UploadedAt = time.Now().UTC().Truncate(time.Second)
 		if web := env.String("irods_web"); web != "" {
 			doc.IRODS.URL = strings.TrimRight(web, "/") + remote
+		}
+		// Stamp the data_project we used into the sidecar so the file
+		// carries the membership label even after the .env cascade changes.
+		if dp := overrideDataProject; dp != "" {
+			doc.DataProject = dp
+		} else if dp := env.String("data_project"); dp != "" {
+			doc.DataProject = dp
 		}
 		// Stamp ELN context onto the sidecar. Only the experiment ID is
 		// load-bearing for the new tag-folder flow; the *_name / *_id fields

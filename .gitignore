@@ -21,9 +21,11 @@ Thumbs.db
 # local
 *.local
 .env.local
-# NOTE: `.env` itself is NOT ignored — it's the cascading folder-config file
-# that mus reads (replaces the old TOML `.mus` design). Users typically
-# commit project/experiment-level `.env` files.
+
+# `.env` at the REPO ROOT is ignored — that's where `mus eln tag` writes
+# personal workspace state when run inside the mus checkout for testing.
+# `.env` files in subdirs (examples, fixtures, …) stay trackable.
+/.env
 
 # user-side data dumps that should never be tracked
 *.ndjson

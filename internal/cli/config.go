@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"codeberg.org/atrxia/mus/internal/config"
+	"codeberg.org/atrxia/mus/internal/dataproject"
 	"github.com/spf13/cobra"
 )
 
@@ -69,16 +70,30 @@ func newConfigShowCmd() *cobra.Command {
 func newConfigSetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "set KEY VALUE",
-		Short: "set a key in the local .mus",
+		Short: "set a key in the local .env",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			key, value := args[0], args[1]
+			if err := validateConfigValue(key, value); err != nil {
+				return err
+			}
 			dir, err := workingDir(cmd)
 			if err != nil {
 				return err
 			}
-			return config.Save(dir, map[string]string{args[0]: args[1]})
+			return config.Save(dir, map[string]string{key: value})
 		},
 	}
+}
+
+// validateConfigValue applies key-specific validation when writing to .env.
+// Keys without a registered validator are accepted as-is.
+func validateConfigValue(key, value string) error {
+	switch key {
+	case "data_project":
+		return dataproject.ValidateName(value)
+	}
+	return nil
 }
 
 func newConfigFilesCmd() *cobra.Command {

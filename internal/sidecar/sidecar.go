@@ -77,15 +77,16 @@ type S3 struct {
 
 // Doc is the full sidecar document.
 type Doc struct {
-	Version int
-	Note    string
-	Tags    []string
-	Created time.Time
-	Updated time.Time
-	File    FileInfo
-	IRODS   *IRODS
-	ELN     *ELN
-	S3      *S3
+	Version     int
+	Note        string
+	Tags        []string
+	DataProject string // NameYear group label (e.g. "Fiers2025"); empty if not set
+	Created     time.Time
+	Updated     time.Time
+	File        FileInfo
+	IRODS       *IRODS
+	ELN         *ELN
+	S3          *S3
 }
 
 // SidecarPath returns the sidecar path for a given data file.
@@ -200,6 +201,7 @@ func docToMap(d *Doc) map[string]any {
 	putTime(out, "created", d.Created)
 	putTime(out, "updated", d.Updated)
 	putStr(out, "note", d.Note)
+	putStr(out, "data_project", d.DataProject)
 	if len(d.Tags) > 0 {
 		out["tags"] = append([]string(nil), d.Tags...)
 	}
@@ -247,6 +249,7 @@ func docFromMap(in map[string]any) (*Doc, error) {
 	d.Created = parseTime(getStr(in, "created"))
 	d.Updated = parseTime(getStr(in, "updated"))
 	d.Note = getStr(in, "note")
+	d.DataProject = getStr(in, "data_project")
 	if v, ok := in["tags"].([]string); ok {
 		d.Tags = append([]string(nil), v...)
 	}
