@@ -89,22 +89,37 @@ The local sha256 cache lives at `~/.local/share/mus/hashcache.db` (override
 with `MUS_HASHCACHE_DB`). Entries are reused only when both size and mtime
 match — modify a file and the next `mus check` will rehash it.
 
-## Linking a folder to an ELN experiment
+## ELN setup + linking
+
+One-time per machine:
 
 ```bash
-mus eln tag-folder -x 1234   # 1234 = ELN experiment ID; LOCAL ONLY, no API call
+mus eln login
 ```
 
-Writes `eln_experiment_id` into the local `.env`. Subsequent `mus tag` /
-`mus irods upload` invocations stamp this ID into each sidecar for
-traceability.
+The wizard walks you through generating an API token in the ELN web UI
+(`Apps & Connections → Manage authentication → Generate`), accepts the
+`host;key` form the web UI emits, verifies the token by calling
+`GET /users/getCurrentUserInfo`, then stores `eln_url` + `eln_apikey` in
+your OS keyring (or the age-encrypted fallback on headless hosts).
 
-**ELN API status.** The eLabNext API endpoint location is currently unsettled
-(legacy `api.elabjournal.com/doc` deprecated; new `developer.elabnext.com`
-restructured). Until that's resolved, `mus eln update` (which would enrich
-the local `.mus` with project / study / experiment names from the server) is
-disabled. The HTTP client lives in `internal/eln/` and is fully tested; only
-the CLI wiring is removed.
+Then per project folder:
+
+```bash
+mus eln tag-folder -x 1234   # fetches project/study/experiment names from API
+mus eln update               # refresh if anything was renamed server-side
+mus eln whoami               # confirm the stored token still authenticates
+```
+
+`tag-folder` writes six keys to the local `.env`: `eln_experiment_id`,
+`eln_experiment_name`, `eln_study_id`, `eln_study_name`, `eln_project_id`,
+`eln_project_name`. Subsequent `mus tag` / `mus irods upload` invocations
+stamp those into each sidecar.
+
+**Multiple tenants on one machine?** Today `eln_url`/`eln_apikey` are
+per-user (keyring scope), so one credential set across all your projects.
+Different ELN instances would need a follow-up to override via `.env` —
+not implemented yet.
 
 ## Uploading to iRODS via IRON
 

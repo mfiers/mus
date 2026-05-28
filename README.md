@@ -69,8 +69,12 @@ mus secret backend         # prints "keyring" or "age" — see Secrets below
 **Use:**
 
 ```bash
-# Optional but recommended: record the ELN experiment ID for traceability.
-# This is a LOCAL operation only — it does NOT contact the ELN server.
+# One-time setup: store an ELN API key (interactive wizard with on-screen
+# instructions for generating the token in the eLabJournal web UI).
+mus eln login
+
+# Link the current folder to an ELN experiment. Fetches project/study/
+# experiment names from the API and writes them into the local .env.
 mus eln tag-folder -x 12345
 
 # Tag data files with sha256 + metadata:
@@ -87,14 +91,26 @@ mus irods check         # verify local sha256 against remote
 mus irods get data1.csv.mus   # download from the sidecar's recorded path
 ```
 
-### ELN integration status
+### ELN integration
 
-The eLabNext API endpoint location is currently unsettled — the legacy
-`api.elabjournal.com` docs are deprecated, the new `developer.elabnext.com`
-portal is restructured, and authentication header conventions changed. As of
-this release **mus does not call the ELN API**. `mus eln tag-folder -x ID`
-still records the experiment ID locally so sidecars and iRODS uploads carry
-it as metadata; `mus eln update` is disabled until the API path is clear.
+`mus eln login` is the interactive entry point. It walks you through
+generating an API token in your ELN instance (default tenant
+`vib.elabjournal.com`; other VIB / KU Leuven hosts also work), accepts the
+full `host;key` form the web UI emits, **verifies the token** with a
+`GET /users/getCurrentUserInfo` round-trip before storing it, then writes
+`eln_url` + `eln_apikey` to the OS keyring (or the age-encrypted fallback
+file on hosts without a keyring).
+
+Once stored:
+
+```bash
+mus eln whoami                 # who does the stored token authenticate as?
+mus eln tag-folder -x 12345    # link folder to experiment; fetches names from API
+mus eln update                 # refresh names if renamed on the server
+```
+
+`tag-folder` refuses to overwrite an existing linkage in the same folder —
+use `mus eln update` to refresh, or `tag-folder -x ID --force` to relink.
 
 ## How it works
 
@@ -177,8 +193,10 @@ mus tag FILE...                write/refresh sidecars
                                -m note  -t tag  -f force-rehash
 mus check [FILE_OR_DIR...]     verify sidecar sha256 against current files
                                -r recursive  -q quiet
-mus eln tag-folder -x EXPID    link current dir to an ELN experiment
+mus eln login                  interactive: obtain + verify + store API token
+mus eln tag-folder -x EXPID    link current dir to an ELN experiment (calls API)
 mus eln update                 refresh ELN metadata from the server
+mus eln whoami                 verify the stored token still works
 mus irods upload FILE...       upload via IRON; writes/refreshes sidecars
                                -f force  -r recursive  --verify
 mus irods check                verify local sha256 against IRON checksum

@@ -98,6 +98,59 @@ func TestCreateCommentSection(t *testing.T) {
 	}
 }
 
+func TestCurrentUser(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/users/getCurrentUserInfo", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"userID":       42,
+			"firstName":    "Ada",
+			"lastName":     "Lovelace",
+			"emailAddress": "ada@example.com",
+		})
+	})
+	mux.HandleFunc("/badauth/users/getCurrentUserInfo", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	})
+	srv := httptest.NewServer(authMiddleware(t, "good-key", mux))
+	defer srv.Close()
+
+	c := New(srv.URL, "good-key")
+	u, err := c.CurrentUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.UserID != 42 || u.FullName() != "Ada Lovelace" {
+		t.Errorf("CurrentUser = %+v", u)
+	}
+}
+
+func TestCurrentUserBadAuthFails(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/users/getCurrentUserInfo", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "good-key" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"userID": 1, "firstName": "x"})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(srv.URL, "wrong-key")
+	if _, err := c.CurrentUser(); err == nil {
+		t.Errorf("expected error for wrong key")
+	} else if !strings.Contains(err.Error(), "401") {
+		t.Errorf("error did not mention 401: %v", err)
+	}
+}
+
+func TestFullNameFallsBackToEmail(t *testing.T) {
+	u := &UserInfo{Email: "x@y"}
+	if u.FullName() != "x@y" {
+		t.Errorf("FullName = %q", u.FullName())
+	}
+}
+
 func authMiddleware(t *testing.T, key string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != key {

@@ -36,6 +36,39 @@ func New(baseURL, apiKey string) *Client {
 	}
 }
 
+// UserInfo is the slice of `users/getCurrentUserInfo` we care about. The
+// real response carries many more fields; we ignore them.
+type UserInfo struct {
+	UserID    int64  `json:"userID"`
+	FirstName string `json:"firstName"`
+	LastName  string `json:"lastName"`
+	Email     string `json:"emailAddress"`
+}
+
+// FullName returns "First Last" or whatever portion of the name was supplied.
+func (u *UserInfo) FullName() string {
+	if u == nil {
+		return ""
+	}
+	parts := []string{strings.TrimSpace(u.FirstName), strings.TrimSpace(u.LastName)}
+	out := strings.TrimSpace(strings.Join(parts, " "))
+	if out == "" {
+		return u.Email
+	}
+	return out
+}
+
+// CurrentUser hits GET /users/getCurrentUserInfo. Used by `mus eln login` to
+// verify an API key before storing it. Returns an error on non-2xx (including
+// 401 for a bad token).
+func (c *Client) CurrentUser() (*UserInfo, error) {
+	var u UserInfo
+	if err := c.get("users/getCurrentUserInfo", nil, &u); err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
 // ExperimentInfo bundles the project / study / experiment names and IDs we
 // need to tag a folder. Collaborators is a list of full names.
 type ExperimentInfo struct {
