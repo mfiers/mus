@@ -90,6 +90,8 @@ mus irods get scripts.mus
 - a `*.mus` sidecar next to the data (or next to the folder, for folder uploads),
 - a set of `mus_*` AVU metadata triplets on the iRODS object itself, so the object stays self-describing even if the local sidecar is lost.
 
+If the folder is linked to an ELN experiment (`eln_experiment_id` in the cascade) and you've stored a token, `mus irods upload` *also* posts a single COMMENT section to that experiment summarising the upload (one comment per invocation, listing every file/folder with its iRODS path + PURL). Best-effort — never blocks the upload. Suppress with `--no-eln-comment`.
+
 ---
 
 ## Subcommand reference

@@ -74,6 +74,7 @@ func runIRODSUploadFolder(
 	remoteCollection string,
 	env *config.Env,
 	mode packMode,
+	uploads *[]uploadedItem,
 ) error {
 	stdin := cmd.InOrStdin()
 	stdout := cmd.OutOrStdout()
@@ -139,9 +140,9 @@ func runIRODSUploadFolder(
 	cleanup, _ := cmd.Flags().GetBool("cleanup-archive")
 	switch chosen {
 	case packTarGz:
-		return uploadFolderArchived(cmd, srcAbs, remoteCollection, opts, env, prof, cleanup)
+		return uploadFolderArchived(cmd, srcAbs, remoteCollection, opts, env, prof, cleanup, uploads)
 	case packNone:
-		return uploadFolderDirect(cmd, srcAbs, remoteCollection, opts, env, prof)
+		return uploadFolderDirect(cmd, srcAbs, remoteCollection, opts, env, prof, uploads)
 	}
 	_ = stderr
 	return fmt.Errorf("unknown pack mode %q", chosen)
@@ -182,6 +183,7 @@ func uploadFolderDirect(
 	opts iron.UploadOpts,
 	env *config.Env,
 	prof *folder.Profile,
+	uploads *[]uploadedItem,
 ) error {
 	client, err := iron.New()
 	if err != nil {
@@ -203,7 +205,7 @@ func uploadFolderDirect(
 	if err := client.Upload(ctx, srcAbs, remoteTarget, opts); err != nil {
 		return err
 	}
-	return finalizeFolderSidecar(cmd, srcAbs, remotePath, env, prof, nil, client, ctx)
+	return finalizeFolderSidecar(cmd, srcAbs, remotePath, env, prof, nil, client, ctx, uploads, "folder")
 }
 
 // uploadFolderArchived builds <basename>.tar.gz, uploads the archive, and
@@ -216,6 +218,7 @@ func uploadFolderArchived(
 	env *config.Env,
 	prof *folder.Profile,
 	cleanupAfter bool,
+	uploads *[]uploadedItem,
 ) error {
 	stdout := cmd.OutOrStdout()
 	stderr := cmd.ErrOrStderr()
@@ -260,7 +263,7 @@ func uploadFolderArchived(
 		Size:     res.Size,
 		Sha256:   res.Sha256,
 	}
-	if err := finalizeFolderSidecar(cmd, srcAbs, remotePath, env, prof, archive, client, ctx); err != nil {
+	if err := finalizeFolderSidecar(cmd, srcAbs, remotePath, env, prof, archive, client, ctx, uploads, "archive"); err != nil {
 		return err
 	}
 
@@ -292,6 +295,8 @@ func finalizeFolderSidecar(
 	archive *sidecar.ArchiveInfo,
 	client *iron.Client,
 	ctx context.Context,
+	uploads *[]uploadedItem,
+	itemKind string,
 ) error {
 	stdout := cmd.OutOrStdout()
 
@@ -402,6 +407,21 @@ func finalizeFolderSidecar(
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	if !noMeta && !dryRun {
 		applyMetadataToIRODS(ctx, client, remotePath, doc, cmd.ErrOrStderr())
+	}
+
+	if uploads != nil {
+		size := prof.TotalBytes
+		if archive != nil {
+			size = archive.Size
+		}
+		*uploads = append(*uploads, uploadedItem{
+			Kind:       itemKind,
+			LocalPath:  srcAbs,
+			RemotePath: remotePath,
+			URL:        doc.IRODS.URL,
+			PURL:       doc.IRODS.PURL,
+			Size:       size,
+		})
 	}
 	return nil
 }

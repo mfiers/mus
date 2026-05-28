@@ -150,7 +150,7 @@ func resolveIRODSCollection(env *config.Env, overrideDataProject, overrideRemote
 func newIRODSUploadCmd() *cobra.Command {
 	// IRON's upload is idempotent by default: matching size+modtime → skip;
 	// different → overwrite. There is no "force" concept to expose.
-	var exclusive, newer, dryRun bool
+	var exclusive, newer, dryRun, noELNComment bool
 	var dataProject, remoteName, packRaw string
 	verify := true // verify-checksum on by default; opt-out below
 	cmd := &cobra.Command{
@@ -181,7 +181,7 @@ func newIRODSUploadCmd() *cobra.Command {
 				Exclusive:      exclusive,
 				Newer:          newer,
 				DryRun:         dryRun,
-			}, dataProject, remoteName, pack)
+			}, dataProject, remoteName, pack, !noELNComment)
 		},
 	}
 	cmd.Flags().BoolVar(&verify, "verify-checksum", true, "re-hash both sides after upload (default: on)")
@@ -198,10 +198,12 @@ func newIRODSUploadCmd() *cobra.Command {
 		"after a successful tar.gz upload, delete the local archive (default: keep + warn)")
 	cmd.Flags().Bool("no-metadata", false,
 		"skip applying mus_* AVU metadata to the uploaded iRODS object")
+	cmd.Flags().BoolVar(&noELNComment, "no-eln-comment", false,
+		"don't post an upload summary as a COMMENT section in the linked ELN experiment")
 	return cmd
 }
 
-func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, overrideDataProject, overrideRemoteName string, pack packMode) error {
+func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, overrideDataProject, overrideRemoteName string, pack packMode, postELNComment bool) error {
 	dir, err := workingDir(cmd)
 	if err != nil {
 		return err
@@ -233,6 +235,8 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 		return fmt.Errorf("imkdir %s: %w", remoteCollection, err)
 	}
 
+	var uploads []uploadedItem
+
 	for _, raw := range args {
 		if sidecar.IsSidecar(raw) {
 			fmt.Fprintf(os.Stderr, "mus: skipping sidecar %s\n", raw)
@@ -249,7 +253,7 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 		// Folder args go through the dedicated folder-upload path
 		// (density check + optional tar.gz + folder sidecar).
 		if st.IsDir() {
-			if err := runIRODSUploadFolder(cmd, abs, opts, remoteCollection, env, pack); err != nil {
+			if err := runIRODSUploadFolder(cmd, abs, opts, remoteCollection, env, pack, &uploads); err != nil {
 				return err
 			}
 			continue
@@ -359,7 +363,18 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 		if !noMeta && !opts.DryRun {
 			applyMetadataToIRODS(ctx, client, remote, doc, cmd.ErrOrStderr())
 		}
+
+		uploads = append(uploads, uploadedItem{
+			Kind:       "file",
+			LocalPath:  abs,
+			RemotePath: remote,
+			URL:        doc.IRODS.URL,
+			PURL:       doc.IRODS.PURL,
+			Size:       st.Size(),
+		})
 	}
+
+	postUploadCommentToELN(env, uploads, opts.DryRun, postELNComment, cmd.ErrOrStderr())
 	return nil
 }
 

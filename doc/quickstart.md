@@ -176,6 +176,14 @@ mus check -r .           # recurse
 
 Refuses to overwrite an existing linkage; use `mus eln update` to refresh, or `mus eln tag NEW_ID --force` to relink.
 
+### Auto-comment on upload
+
+Every successful `mus irods upload` from an ELN-linked folder posts a single COMMENT section to the experiment summarising what just went up — kind, local path, iRODS path, size, and a clickable PURL link per item. One comment per invocation, not per file.
+
+This is strictly best-effort: ELN being down, the token having expired, or the experiment having been archived all degrade to a one-line stderr warning rather than failing the upload. The iRODS bytes have already landed by the time the comment is attempted.
+
+Opt out per-invocation with `--no-eln-comment`. There is no global toggle yet (the assumption is that if you've linked a folder to an experiment, you want the audit trail).
+
 ### Without ELN
 
 Skip `mus eln login` entirely. The only thing `mus eln tag` does that you still need for iRODS upload is:
