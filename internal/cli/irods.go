@@ -35,9 +35,9 @@ func newIRODSCmd() *cobra.Command {
 // Components:
 //   - irods_home          required, from .env cascade
 //   - data_project        required; must pass dataproject.ValidateName.
-//                          Override via --data-project flag.
+//     Override via --data-project flag.
 //   - safe_experiment_name reproducible sanitisation of eln_experiment_name.
-//                          Override via --remote-name flag.
+//     Override via --remote-name flag.
 //
 // Refuses (no fallbacks, no auto-derivation) if any piece is missing or
 // invalid. Users see a clear message pointing at `mus eln tag <id>` /

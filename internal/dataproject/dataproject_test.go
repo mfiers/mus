@@ -41,8 +41,8 @@ func TestValidateNameRejects(t *testing.T) {
 // clearly malformed — left in to lock the parser's behaviour.
 func TestValidateNameAcceptsEdgeCases(t *testing.T) {
 	cases := []string{
-		"Fiers20250",  // 5 trailing digits — regex matches last 4 as year
-		"Fiers_2025",  // explicit underscore separator before year
+		"Fiers20250", // 5 trailing digits — regex matches last 4 as year
+		"Fiers_2025", // explicit underscore separator before year
 	}
 	for _, in := range cases {
 		if err := ValidateName(in); err != nil {
@@ -53,14 +53,14 @@ func TestValidateNameAcceptsEdgeCases(t *testing.T) {
 
 func TestSanitizeForPath(t *testing.T) {
 	cases := map[string]string{
-		"Fiers2025":                                "Fiers2025",
-		"Single-cell pilot — Fiers lab":            "Single_cell_pilot_Fiers_lab",
-		"Single-cell RNA-seq of microglia (PRS)":   "Single_cell_RNA_seq_of_microglia_PRS",
-		"   Lots   of   whitespace   ":             "Lots_of_whitespace",
-		"___leading_trailing___":                   "leading_trailing",
-		"":                                         "",
-		"!@#$%^&*()":                               "", // no alphanumerics → empty
-		"a":                                        "a",
+		"Fiers2025":                              "Fiers2025",
+		"Single-cell pilot — Fiers lab":          "Single_cell_pilot_Fiers_lab",
+		"Single-cell RNA-seq of microglia (PRS)": "Single_cell_RNA_seq_of_microglia_PRS",
+		"   Lots   of   whitespace   ":           "Lots_of_whitespace",
+		"___leading_trailing___":                 "leading_trailing",
+		"":                                       "",
+		"!@#$%^&*()":                             "", // no alphanumerics → empty
+		"a":                                      "a",
 	}
 	for in, want := range cases {
 		if got := SanitizeForPath(in); got != want {

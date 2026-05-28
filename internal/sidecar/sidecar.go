@@ -48,10 +48,10 @@ type FileInfo struct {
 
 // IRODS captures iRODS upload state.
 type IRODS struct {
-	URL        string    // path-based browse URL — convenient but breaks on moves
-	PURL       string    // persistent URL keyed on catalog id — survives moves
-	Path       string    // canonical iRODS path
-	Status     string    // ok, mismatch, pending, uploaded, ...
+	URL        string // path-based browse URL — convenient but breaks on moves
+	PURL       string // persistent URL keyed on catalog id — survives moves
+	Path       string // canonical iRODS path
+	Status     string // ok, mismatch, pending, uploaded, ...
 	UploadedAt time.Time
 	UploadedBy string
 }
