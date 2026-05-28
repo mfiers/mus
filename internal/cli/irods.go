@@ -363,18 +363,29 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 }
 
 func newIRODSCheckCmd() *cobra.Command {
+	var deep bool
 	cmd := &cobra.Command{
 		Use:   "check [SIDECAR_OR_FILE...]",
 		Short: "verify local sha256 against the remote checksum reported by IRON",
-		Args:  cobra.MinimumNArgs(0),
+		Long: "By default:\n" +
+			"  - file sidecar              → hash local file vs iron checksum of remote\n" +
+			"  - folder sidecar + archived  → hash local archive vs iron checksum of remote\n" +
+			"  - folder sidecar + as-is     → local Merkle drift only (no remote round-trip)\n\n" +
+			"With --deep, the as-is folder case fully walks `iron tree --json` and\n" +
+			"compares every remote file's checksum against the local one. Slow on big\n" +
+			"trees, but the only way to confirm bytes-on-disk match bytes-on-iRODS for\n" +
+			"folders that were uploaded as collections.",
+		Args: cobra.MinimumNArgs(0),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runIRODSCheck(cmd, args)
+			return runIRODSCheck(cmd, args, deep)
 		},
 	}
+	cmd.Flags().BoolVar(&deep, "deep", false,
+		"for as-is folder sidecars, walk iron tree to compare every file's checksum")
 	return cmd
 }
 
-func runIRODSCheck(cmd *cobra.Command, args []string) error {
+func runIRODSCheck(cmd *cobra.Command, args []string, deep bool) error {
 	if len(args) == 0 {
 		args = []string{"."}
 	}
@@ -430,7 +441,7 @@ func runIRODSCheck(cmd *cobra.Command, args []string) error {
 
 		// Folder sidecars: pick the right thing to hash + compare.
 		if doc.Kind == "folder" {
-			c, f := irodsCheckFolder(ctx, cache, client, sc, doc)
+			c, f := irodsCheckFolder(ctx, cache, client, sc, doc, deep)
 			checked += c
 			failed += f
 			continue
@@ -477,7 +488,7 @@ func runIRODSCheck(cmd *cobra.Command, args []string) error {
 //
 // Returns (checked, failed) — caller folds into the running totals.
 func irodsCheckFolder(ctx context.Context, cache *hashcache.Cache,
-	client *iron.Client, scPath string, doc *sidecar.Doc) (int, int) {
+	client *iron.Client, scPath string, doc *sidecar.Doc, deep bool) (int, int) {
 
 	stderr := os.Stderr
 	stdout := os.Stdout
@@ -531,11 +542,125 @@ func irodsCheckFolder(ctx context.Context, cache *hashcache.Cache,
 	if !strings.EqualFold(actual, doc.Folder.RecursiveSha256) {
 		fmt.Fprintf(stderr, "MISMATCH %s  local Merkle drift (now=%s, sidecar=%s)\n",
 			dataPath, short(actual), short(doc.Folder.RecursiveSha256))
+		// Local already disagrees with sidecar; --deep wouldn't add info.
 		return 1, 1
 	}
-	fmt.Fprintf(stdout, "OK       %s  (local Merkle matches sidecar; per-file iRODS comparison not implemented for as-is folder uploads — see `mus irods scan` for remote inventory)\n",
-		dataPath)
+
+	if !deep {
+		fmt.Fprintf(stdout,
+			"OK       %s  (local Merkle ok; pass --deep for per-file iRODS comparison)\n",
+			dataPath)
+		return 1, 0
+	}
+
+	// Deep mode: walk the remote collection's tree, build a map of remote
+	// relpath → checksum, then compare every local file to its remote
+	// counterpart. Slow but exact.
+	mism, miss, extra, derr := deepFolderCheckAgainstIRODS(ctx, cache, client,
+		dataPath, doc.IRODS.Path, stdout, stderr)
+	if derr != nil {
+		fmt.Fprintf(stderr, "ERROR    %s deep check: %v\n", dataPath, derr)
+		return 1, 1
+	}
+	if mism+miss+extra > 0 {
+		fmt.Fprintf(stderr,
+			"MISMATCH %s  per-file deep check: %d mismatched, %d missing on iRODS, %d extra on iRODS\n",
+			dataPath, mism, miss, extra)
+		return 1, 1
+	}
+	fmt.Fprintf(stdout, "OK       %s  (deep: every file matches iRODS)\n", dataPath)
 	return 1, 0
+}
+
+// deepFolderCheckAgainstIRODS walks the remote collection via iron tree, then
+// the local folder. For each local file, finds the corresponding remote
+// object by relpath and compares checksums.
+//
+// Returns (mismatched, missingOnIRODS, extraOnIRODS, error). Missing-on-iRODS
+// = a local file with no remote counterpart. Extra-on-iRODS = a remote file
+// not present locally.
+//
+// Comparison is hex-string case-insensitive. iron's tree --columns checksum
+// emits hex sha256 today (per the BADS scan output); if Mango ever switches
+// to sha2-base64 we'll have to canonicalise here.
+func deepFolderCheckAgainstIRODS(ctx context.Context, cache *hashcache.Cache,
+	client *iron.Client, localDir, remoteColl string,
+	stdout, stderr io.Writer) (mism, miss, extra int, err error) {
+
+	raw, err := client.TreeJSON(ctx, remoteColl, "name", "size", "checksum")
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("iron tree: %w", err)
+	}
+
+	// Build remote map: relpath (forward slashes) → checksum.
+	remoteByRel := map[string]string{}
+	remotePrefix := strings.TrimRight(remoteColl, "/") + "/"
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var rec struct {
+			Name     string `json:"name"`
+			Checksum string `json:"checksum"`
+		}
+		if jerr := json.Unmarshal([]byte(line), &rec); jerr != nil {
+			return 0, 0, 0, fmt.Errorf("parse iron tree line: %w", jerr)
+		}
+		if rec.Checksum == "" {
+			continue // collection or unchecksummed object — skip
+		}
+		if !strings.HasPrefix(rec.Name, remotePrefix) {
+			continue
+		}
+		rel := strings.TrimPrefix(rec.Name, remotePrefix)
+		remoteByRel[rel] = rec.Checksum
+	}
+
+	// Walk local; compare each file.
+	seenLocal := map[string]bool{}
+	werr := filepath.WalkDir(localDir, func(p string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		rel, _ := filepath.Rel(localDir, p)
+		rel = filepath.ToSlash(rel)
+		seenLocal[rel] = true
+
+		remoteSum, ok := remoteByRel[rel]
+		if !ok {
+			fmt.Fprintf(stderr, "  MISSING on iRODS: %s\n", rel)
+			miss++
+			return nil
+		}
+		localSum, herr := cache.Sum(p)
+		if herr != nil {
+			return herr
+		}
+		if !strings.EqualFold(localSum, remoteSum) {
+			fmt.Fprintf(stderr, "  MISMATCH %s  local=%s remote=%s\n",
+				rel, short(localSum), short(remoteSum))
+			mism++
+		}
+		return nil
+	})
+	if werr != nil {
+		return mism, miss, extra, werr
+	}
+
+	for rel := range remoteByRel {
+		if !seenLocal[rel] {
+			fmt.Fprintf(stderr, "  EXTRA on iRODS: %s\n", rel)
+			extra++
+		}
+	}
+	return mism, miss, extra, nil
 }
 
 func newIRODSGetCmd() *cobra.Command {
