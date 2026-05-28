@@ -38,6 +38,7 @@ import (
 type Profile struct {
 	Path       string  // absolute path of the folder
 	FileCount  int64   // total number of regular files (recursive)
+	DirCount   int64   // total number of subdirectories (recursive, root excluded)
 	TotalBytes int64   // sum of sizes
 	MedianSize int64   // median file size in bytes; 0 if FileCount == 0
 	Density    float64 // MedianSize / FileCount²; +Inf if FileCount == 0
@@ -62,11 +63,15 @@ func ProfileFolder(path string) (*Profile, error) {
 
 	var sizes []int64
 	var total int64
+	var dirs int64
 	err = filepath.WalkDir(abs, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
+			if p != abs {
+				dirs++ // count subdirectories, exclude the root itself
+			}
 			return nil
 		}
 		if d.Type()&fs.ModeSymlink != 0 {
@@ -97,6 +102,7 @@ func ProfileFolder(path string) (*Profile, error) {
 	p := &Profile{
 		Path:       abs,
 		FileCount:  int64(len(sizes)),
+		DirCount:   dirs,
 		TotalBytes: total,
 	}
 	if len(sizes) == 0 {

@@ -41,6 +41,11 @@ type uploadedItem struct {
 	PURL       string
 	Sha256     string
 	Size       int64
+	// FileCount / DirCount are populated for Kind == "folder" or "archive"
+	// (the original source tree counts, regardless of whether we shipped a
+	// flat collection or a single tarball). Zero for Kind == "file".
+	FileCount int64
+	DirCount  int64
 }
 
 // postUploadCommentToELN posts a single COMMENT section summarising `items`
@@ -96,6 +101,22 @@ func postUploadCommentToELN(env *config.Env, items []uploadedItem,
 		return
 	}
 	fmt.Fprintf(stderr, "  posted ELN comment to experiment %d (section %d)\n", expID, jid)
+}
+
+// contentsCellHTML renders the "Contents" column for a folder / archive
+// row. Falls back to em-dash for file rows (or when counts are absent).
+func contentsCellHTML(it uploadedItem) string {
+	if it.Kind != "folder" && it.Kind != "archive" {
+		return "—"
+	}
+	if it.FileCount == 0 && it.DirCount == 0 {
+		return "—"
+	}
+	parts := []string{pluralNoun(int(it.FileCount), "file")}
+	if it.DirCount > 0 {
+		parts = append(parts, pluralNoun(int(it.DirCount), "subdir"))
+	}
+	return html.EscapeString(strings.Join(parts, ", "))
 }
 
 func buildELNCommentTitle(items []uploadedItem) string {
@@ -179,9 +200,22 @@ func buildELNCommentHTML(env *config.Env, items []uploadedItem) string {
 	}
 
 	// --- per-item table ---
+	// Add the "Contents" column only when at least one item is a folder /
+	// archive — keeps file-only uploads visually lean.
+	showContents := false
+	for _, it := range items {
+		if it.Kind == "folder" || it.Kind == "archive" {
+			showContents = true
+			break
+		}
+	}
 	anyFallback := false
 	b.WriteString(`<table border="1" cellpadding="4" cellspacing="0">`)
-	b.WriteString(`<thead><tr><th>Kind</th><th>Name</th><th>Size</th><th>sha256</th></tr></thead><tbody>`)
+	if showContents {
+		b.WriteString(`<thead><tr><th>Kind</th><th>Name</th><th>Contents</th><th>Size</th><th>sha256</th></tr></thead><tbody>`)
+	} else {
+		b.WriteString(`<thead><tr><th>Kind</th><th>Name</th><th>Size</th><th>sha256</th></tr></thead><tbody>`)
+	}
 	for _, it := range items {
 		// Always prefer PURL. Fall back to URL with a visible marker; the
 		// stderr message above already nagged the operator.
@@ -222,12 +256,22 @@ func buildELNCommentHTML(env *config.Env, items []uploadedItem) string {
 			shaCell = fmt.Sprintf(`<code title="%s">%s</code>`,
 				html.EscapeString(it.Sha256), html.EscapeString(shortSha))
 		}
-		fmt.Fprintf(&b,
-			`<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>`,
-			html.EscapeString(it.Kind),
-			pathCell,
-			html.EscapeString(folder.FormatHumanBytes(it.Size)),
-			shaCell)
+		if showContents {
+			fmt.Fprintf(&b,
+				`<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>`,
+				html.EscapeString(it.Kind),
+				pathCell,
+				contentsCellHTML(it),
+				html.EscapeString(folder.FormatHumanBytes(it.Size)),
+				shaCell)
+		} else {
+			fmt.Fprintf(&b,
+				`<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>`,
+				html.EscapeString(it.Kind),
+				pathCell,
+				html.EscapeString(folder.FormatHumanBytes(it.Size)),
+				shaCell)
+		}
 	}
 	b.WriteString(`</tbody></table>`)
 	if anyFallback {

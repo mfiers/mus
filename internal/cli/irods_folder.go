@@ -363,6 +363,7 @@ func finalizeFolderSidecar(
 	doc.Kind = "folder"
 	doc.Folder = &sidecar.FolderInfo{
 		FileCount:       prof.FileCount,
+		DirCount:        prof.DirCount,
 		TotalBytes:      prof.TotalBytes,
 		MedianBytes:     prof.MedianSize,
 		RecursiveSha256: recursive,
@@ -463,6 +464,8 @@ func finalizeFolderSidecar(
 			PURL:       doc.IRODS.PURL,
 			Sha256:     sha,
 			Size:       size,
+			FileCount:  prof.FileCount,
+			DirCount:   prof.DirCount,
 		})
 	}
 	return nil

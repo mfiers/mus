@@ -62,6 +62,42 @@ func TestRoundtrip(t *testing.T) {
 	}
 }
 
+func TestFolderInfoRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	scPath := filepath.Join(dir, "scripts.mus")
+
+	in := &Doc{
+		Kind: "folder",
+		Folder: &FolderInfo{
+			FileCount:       42,
+			DirCount:        7,
+			TotalBytes:      123456,
+			MedianBytes:     2048,
+			RecursiveSha256: "abc123",
+		},
+	}
+	if err := Write(scPath, in); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(scPath)
+	if !strings.Contains(string(raw), "dir_count=7") {
+		t.Errorf("dir_count not serialised, got:\n%s", raw)
+	}
+	out, err := Read(scPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Folder == nil {
+		t.Fatalf("folder info missing on read: %+v", out)
+	}
+	if out.Folder.FileCount != 42 {
+		t.Errorf("FileCount roundtrip: got %d, want 42", out.Folder.FileCount)
+	}
+	if out.Folder.DirCount != 7 {
+		t.Errorf("DirCount roundtrip: got %d, want 7", out.Folder.DirCount)
+	}
+}
+
 func TestStale(t *testing.T) {
 	dir := t.TempDir()
 	data := filepath.Join(dir, "x.bin")

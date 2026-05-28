@@ -120,6 +120,40 @@ func TestBuildELNCommentHTML_EscapesAngleBrackets(t *testing.T) {
 	}
 }
 
+func TestBuildELNCommentHTML_ContentsColumnFolderArchive(t *testing.T) {
+	items := []uploadedItem{
+		{Kind: "file", RemotePath: "/r/a.csv", PURL: "https://example/PID/x/1/"},
+		{Kind: "folder", RemotePath: "/r/scripts", PURL: "https://example/PID/x/2/", FileCount: 23, DirCount: 4},
+		{Kind: "archive", RemotePath: "/r/data.tar.gz", PURL: "https://example/PID/x/3/", FileCount: 1000, DirCount: 0},
+	}
+	out := buildELNCommentHTML(emptyEnv(t), items)
+	if !strings.Contains(out, "<th>Contents</th>") {
+		t.Errorf("expected Contents column header, got:\n%s", out)
+	}
+	// folder row: 23 files + 4 subdirs
+	if !strings.Contains(out, "23 files, 4 subdirs") {
+		t.Errorf("folder contents cell missing 23 files / 4 subdirs:\n%s", out)
+	}
+	// archive row: 1000 files, no subdirs → DirCount=0 should be omitted
+	if !strings.Contains(out, "1000 files") {
+		t.Errorf("archive contents cell missing 1000 files:\n%s", out)
+	}
+	if strings.Contains(out, "0 subdirs") {
+		t.Errorf("zero DirCount should be omitted, got:\n%s", out)
+	}
+}
+
+func TestBuildELNCommentHTML_NoContentsColumnForFileOnly(t *testing.T) {
+	items := []uploadedItem{
+		{Kind: "file", RemotePath: "/r/a.csv", PURL: "https://example/PID/x/1/"},
+		{Kind: "file", RemotePath: "/r/b.csv", PURL: "https://example/PID/x/2/"},
+	}
+	out := buildELNCommentHTML(emptyEnv(t), items)
+	if strings.Contains(out, "Contents") {
+		t.Errorf("Contents column should be omitted on file-only batch:\n%s", out)
+	}
+}
+
 func TestBuildELNCommentHTML_SummaryIncludesContextWhenSet(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)

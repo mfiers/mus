@@ -52,6 +52,9 @@ func TestProfileFolderBasic(t *testing.T) {
 	if p.FileCount != 4 {
 		t.Errorf("FileCount = %d, want 4", p.FileCount)
 	}
+	if p.DirCount != 1 {
+		t.Errorf("DirCount = %d, want 1 (only the `sub` subdirectory)", p.DirCount)
+	}
 	if p.TotalBytes != 1000 {
 		t.Errorf("TotalBytes = %d, want 1000", p.TotalBytes)
 	}

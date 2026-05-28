@@ -96,6 +96,7 @@ type Doc struct {
 // FolderInfo is populated on folder-level sidecars (Kind=="folder").
 type FolderInfo struct {
 	FileCount       int64
+	DirCount        int64   // subdirectories (recursive, root excluded)
 	TotalBytes      int64
 	MedianBytes     int64   // 0 if FileCount == 0
 	Density         float64 // MedianBytes / FileCount²
@@ -234,6 +235,9 @@ func docToMap(d *Doc) map[string]any {
 		if d.Folder.FileCount > 0 {
 			out["file_count"] = strconv.FormatInt(d.Folder.FileCount, 10)
 		}
+		if d.Folder.DirCount > 0 {
+			out["dir_count"] = strconv.FormatInt(d.Folder.DirCount, 10)
+		}
 		if d.Folder.TotalBytes > 0 {
 			out["total_size"] = strconv.FormatInt(d.Folder.TotalBytes, 10)
 		}
@@ -301,6 +305,7 @@ func docFromMap(in map[string]any) (*Doc, error) {
 	if d.Kind == "folder" || hasPrefix(in, "recursive_sha256") || getStr(in, "file_count") != "" {
 		d.Folder = &FolderInfo{
 			FileCount:       parseInt64(getStr(in, "file_count"), 0),
+			DirCount:        parseInt64(getStr(in, "dir_count"), 0),
 			TotalBytes:      parseInt64(getStr(in, "total_size"), 0),
 			MedianBytes:     parseInt64(getStr(in, "median_size"), 0),
 			RecursiveSha256: getStr(in, "recursive_sha256"),
