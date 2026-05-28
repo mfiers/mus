@@ -13,6 +13,7 @@ import (
 	"codeberg.org/mfiers/mus/internal/config"
 	"codeberg.org/mfiers/mus/internal/dataproject"
 	"codeberg.org/mfiers/mus/internal/defaults"
+	"codeberg.org/mfiers/mus/internal/folder"
 	"codeberg.org/mfiers/mus/internal/hashcache"
 	"codeberg.org/mfiers/mus/internal/iron"
 	"codeberg.org/mfiers/mus/internal/sidecar"
@@ -426,6 +427,15 @@ func runIRODSCheck(cmd *cobra.Command, args []string) error {
 			continue
 		}
 		dataPath := sidecar.DataPath(sc)
+
+		// Folder sidecars: pick the right thing to hash + compare.
+		if doc.Kind == "folder" {
+			c, f := irodsCheckFolder(ctx, cache, client, sc, doc)
+			checked += c
+			failed += f
+			continue
+		}
+
 		localSum, err := cache.Sum(dataPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ERROR %s: %v\n", dataPath, err)
@@ -452,6 +462,80 @@ func runIRODSCheck(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("%d failure(s)", failed)
 	}
 	return nil
+}
+
+// irodsCheckFolder runs the appropriate local-vs-remote check for a folder
+// sidecar:
+//
+//   - archived form  → local archive sha256 vs iron-reported remote checksum
+//                       of the archive object. Direct file analogue.
+//   - as-is form     → the iRODS object is a collection; iron checksum
+//                       refuses collections. We do a LOCAL-only verification
+//                       (Merkle hash of source folder vs recursive_sha256 in
+//                       sidecar) and print a one-line note that there is no
+//                       per-file remote comparison yet.
+//
+// Returns (checked, failed) — caller folds into the running totals.
+func irodsCheckFolder(ctx context.Context, cache *hashcache.Cache,
+	client *iron.Client, scPath string, doc *sidecar.Doc) (int, int) {
+
+	stderr := os.Stderr
+	stdout := os.Stdout
+
+	if doc.Archive != nil && doc.Archive.Filename != "" {
+		// Archived: hash local archive, ask iron for the remote checksum.
+		archivePath := filepath.Join(filepath.Dir(scPath), doc.Archive.Filename)
+		if _, err := os.Stat(archivePath); err != nil {
+			fmt.Fprintf(stderr, "MISSING  %s  (archive sibling absent — `mus irods get %s` to fetch)\n",
+				archivePath, scPath)
+			return 0, 1
+		}
+		localSum, err := cache.Sum(archivePath)
+		if err != nil {
+			fmt.Fprintf(stderr, "ERROR    %s: %v\n", archivePath, err)
+			return 0, 1
+		}
+		remoteSum, err := client.Checksum(ctx, doc.IRODS.Path)
+		if err != nil {
+			fmt.Fprintf(stderr, "ERROR    %s remote checksum: %v\n", archivePath, err)
+			return 0, 1
+		}
+		if strings.EqualFold(localSum, remoteSum) {
+			fmt.Fprintf(stdout, "OK       %s  (archive)\n", archivePath)
+			return 1, 0
+		}
+		fmt.Fprintf(stderr, "MISMATCH %s  local=%s remote=%s\n",
+			archivePath, short(localSum), short(remoteSum))
+		return 1, 1
+	}
+
+	// As-is folder upload — iRODS object is a collection. No per-call iron
+	// checksum exists for collections. We fall back to LOCAL Merkle drift
+	// detection, which is what `mus check` already does. Surface that with
+	// a clear status so users know nothing is being compared against iRODS.
+	dataPath := sidecar.DataPath(scPath)
+	st, err := os.Stat(dataPath)
+	if err != nil || !st.IsDir() {
+		fmt.Fprintf(stderr, "MISSING  %s  (source folder absent)\n", dataPath)
+		return 0, 1
+	}
+	if doc.Folder == nil || doc.Folder.RecursiveSha256 == "" {
+		fmt.Fprintf(stderr, "STALE    %s  (sidecar has no recursive_sha256)\n", dataPath)
+		return 0, 1
+	}
+	actual, err := folder.RecursiveSHA256(dataPath, cache.Sum)
+	if err != nil {
+		fmt.Fprintf(stderr, "ERROR    %s: %v\n", dataPath, err)
+		return 0, 1
+	}
+	if !strings.EqualFold(actual, doc.Folder.RecursiveSha256) {
+		fmt.Fprintf(stderr, "MISMATCH %s  local Merkle drift (now=%s, sidecar=%s)\n",
+			dataPath, short(actual), short(doc.Folder.RecursiveSha256))
+		return 1, 1
+	}
+	fmt.Fprintf(stdout, "OK       %s  (local Merkle matches sidecar; per-file iRODS comparison not implemented for as-is folder uploads — see `mus irods scan` for remote inventory)\n",
+		dataPath)
+	return 1, 0
 }
 
 func newIRODSGetCmd() *cobra.Command {
