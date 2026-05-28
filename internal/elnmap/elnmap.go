@@ -156,6 +156,11 @@ func (s *Store) Forget(experimentID string) error {
 	return s.save()
 }
 
+// Save persists the in-memory map to the store's backing file. Called
+// automatically by Remember / Forget; exposed here so callers can persist
+// after a bulk MergeIn (Stage 2 sync from iRODS).
+func (s *Store) Save() error { return s.save() }
+
 // All returns a snapshot copy of every mapping. Read-only — mutate by going
 // through Remember / Forget.
 func (s *Store) All() map[string]Mapping {
@@ -166,4 +171,83 @@ func (s *Store) All() map[string]Mapping {
 		out[k] = v
 	}
 	return out
+}
+
+// MergeIn applies remote into the in-memory store. Per key:
+//
+//   - present locally only      → keep local
+//   - present remote only       → take remote
+//   - present both, remote newer → take remote
+//   - present both, local newer → keep local
+//
+// Returns the number of mappings added/replaced from remote (informational).
+// Caller is responsible for persisting via save().
+func (s *Store) MergeIn(remote map[string]Mapping) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	changed := 0
+	for k, r := range remote {
+		local, exists := s.data[k]
+		if !exists || r.SetAt.After(local.SetAt) {
+			s.data[k] = r
+			changed++
+		}
+	}
+	return changed
+}
+
+// SaveToFile writes the current in-memory map to an arbitrary path (atomic).
+// Used by Stage 2 sync to stage a merged copy before pushing to iRODS.
+func (s *Store) SaveToFile(path string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return writeJSONAtomic(path, s.data, 0o600)
+}
+
+// ReadFromFile loads mappings from an arbitrary path (e.g. a temp file just
+// downloaded from iRODS). Returns the parsed map without touching the
+// in-memory state — use MergeIn() to apply it.
+func ReadFromFile(path string) (map[string]Mapping, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 {
+		return map[string]Mapping{}, nil
+	}
+	out := map[string]Mapping{}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	return out, nil
+}
+
+// writeJSONAtomic encodes data as indented JSON and writes via temp+rename
+// so partial writes are never visible.
+func writeJSONAtomic(path string, data any, mode os.FileMode) error {
+	raw, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".elnmap.tmp.*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(raw); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, mode); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }

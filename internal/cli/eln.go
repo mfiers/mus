@@ -30,6 +30,7 @@ import (
 	"codeberg.org/mfiers/mus/internal/dataproject"
 	"codeberg.org/mfiers/mus/internal/eln"
 	"codeberg.org/mfiers/mus/internal/elnmap"
+	"codeberg.org/mfiers/mus/internal/iron"
 	"codeberg.org/mfiers/mus/internal/secret"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -303,8 +304,12 @@ func runELNTag(cmd *cobra.Command, expIDRaw string, force bool, explicitDataProj
 		return fmt.Errorf("fetch experiment %d: %w", expID, err)
 	}
 
+	// Full cascade for Stage-2 sync (needs irods_home from the cascade,
+	// not just the local .env).
+	fullEnv, _ := config.Load(dir)
+
 	// Resolve data_project (cache → ELN-derived suggestion → confirm).
-	dp, err := resolveDataProject(cmd, expIDStr, info, explicitDataProject, localEnv.String("data_project"))
+	dp, err := resolveDataProject(cmd, expIDStr, info, explicitDataProject, localEnv.String("data_project"), fullEnv)
 	if err != nil {
 		return err
 	}
@@ -331,13 +336,27 @@ func runELNTag(cmd *cobra.Command, expIDRaw string, force bool, explicitDataProj
 //
 // Non-interactive (no TTY) callers must supply --data-project explicitly;
 // they cannot be prompted.
-func resolveDataProject(cmd *cobra.Command, expIDStr string, info *eln.ExperimentInfo, explicit, existing string) (string, error) {
+func resolveDataProject(cmd *cobra.Command, expIDStr string, info *eln.ExperimentInfo, explicit, existing string, env *config.Env) (string, error) {
 	stdin := cmd.InOrStdin()
 	stdout := cmd.OutOrStdout()
+	stderr := cmd.ErrOrStderr()
 
 	store, err := elnmap.Open("")
 	if err != nil {
 		return "", fmt.Errorf("open eln mapping store: %w", err)
+	}
+
+	// Stage 2: pull the shared iRODS mappings file (best-effort). This may
+	// surface a cached suggestion from another collaborator for this same
+	// experiment ID.
+	ctx := cmd.Context()
+	remotePath := stageTwoRemotePath(env)
+	var ironClient *iron.Client
+	if remotePath != "" {
+		if c, err := iron.New(); err == nil {
+			ironClient = c
+			pullStage2(ctx, ironClient, store, remotePath, stderr)
+		}
 	}
 
 	// 1. Explicit flag wins.
@@ -346,6 +365,7 @@ func resolveDataProject(cmd *cobra.Command, expIDStr string, info *eln.Experimen
 			return "", err
 		}
 		_ = store.Remember(expIDStr, explicit, info.ExperimentName)
+		pushStage2(ctx, ironClient, store, remotePath, stderr)
 		return explicit, nil
 	}
 
@@ -355,6 +375,7 @@ func resolveDataProject(cmd *cobra.Command, expIDStr string, info *eln.Experimen
 			return "", fmt.Errorf("existing data_project in .env: %w", err)
 		}
 		_ = store.Remember(expIDStr, existing, info.ExperimentName)
+		pushStage2(ctx, ironClient, store, remotePath, stderr)
 		return existing, nil
 	}
 
@@ -377,6 +398,7 @@ func resolveDataProject(cmd *cobra.Command, expIDStr string, info *eln.Experimen
 		return "", err
 	}
 	_ = store.Remember(expIDStr, chosen, info.ExperimentName)
+	pushStage2(ctx, ironClient, store, remotePath, stderr)
 	return chosen, nil
 }
 

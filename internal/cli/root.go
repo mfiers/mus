@@ -51,6 +51,15 @@ func NewRootCmd() *cobra.Command {
 		newUpgradeCmd(),
 		newVerifyCmd(),
 	)
+	// cobra creates the `completion` subcommand lazily during Execute();
+	// force it to exist now so we can attach `install` under it.
+	root.InitDefaultCompletionCmd()
+	for _, sub := range root.Commands() {
+		if sub.Name() == "completion" {
+			sub.AddCommand(newCompletionInstallCmd(root))
+			break
+		}
+	}
 	return root
 }
 

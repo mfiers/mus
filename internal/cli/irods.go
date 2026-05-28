@@ -25,7 +25,13 @@ func newIRODSCmd() *cobra.Command {
 		Aliases: []string{"mango"},
 		Short:   "iRODS sync via the IRON CLI",
 	}
-	cmd.AddCommand(newIRODSUploadCmd(), newIRODSCheckCmd(), newIRODSGetCmd(), newIRODSScanCmd())
+	cmd.AddCommand(
+		newIRODSLoginCmd(),
+		newIRODSUploadCmd(),
+		newIRODSCheckCmd(),
+		newIRODSGetCmd(),
+		newIRODSScanCmd(),
+	)
 	return cmd
 }
 
@@ -44,6 +50,52 @@ func newIRODSCmd() *cobra.Command {
 // Refuses (no fallbacks, no auto-derivation) if any piece is missing or
 // invalid. Users see a clear message pointing at `mus eln tag <id>` /
 // `mus config set data_project ...` as remediations.
+// parseMangoFile extracts the iRODS path from a legacy *.mango sidecar's
+// raw bytes. Accepts:
+//
+//   - JSON: `{"url": "https://mango.kuleuven.be/data-object/view/<path>"}`
+//   - bare iRODS URL on one or more lines
+//
+// In both cases the iRODS path is "everything after the literal substring
+// `data-object/view`". Returns an error if the marker isn't found or if the
+// extracted path is empty.
+//
+// Pure function — no I/O, no client. Unit-testable.
+func parseMangoFile(raw []byte) (string, error) {
+	content := strings.TrimSpace(string(raw))
+	if content == "" {
+		return "", fmt.Errorf("mango file is empty")
+	}
+
+	var remoteURL string
+	// Try JSON first.
+	if strings.HasPrefix(content, "{") {
+		var obj struct {
+			URL string `json:"url"`
+		}
+		if jerr := json.Unmarshal([]byte(content), &obj); jerr == nil && obj.URL != "" {
+			remoteURL = obj.URL
+		}
+	}
+	if remoteURL == "" {
+		// Plain URL form.
+		remoteURL = content
+	}
+
+	const marker = "data-object/view"
+	idx := strings.Index(remoteURL, marker)
+	if idx < 0 {
+		return "", fmt.Errorf(
+			"cannot extract iRODS path from %q (expected URL containing %q)",
+			remoteURL, marker)
+	}
+	remotePath := remoteURL[idx+len(marker):]
+	if remotePath == "" || remotePath == "/" {
+		return "", fmt.Errorf("extracted iRODS path is empty")
+	}
+	return remotePath, nil
+}
+
 // firstPathSegment returns the first non-empty path component of an absolute
 // iRODS path. For `/gbiomed/home/BADS/file.csv` it returns `gbiomed`. Used to
 // derive the zone for PURL construction.
@@ -592,12 +644,8 @@ func verifyDownloadedSidecar(sidecarPath string, doc *sidecar.Doc, stderr io.Wri
 }
 
 // downloadFromMango handles the legacy *.mango sidecar files emitted by the
-// Python mus. The file is EITHER:
-//
-//   - JSON like `{"url": "https://mango.kuleuven.be/data-object/view/<irods-path>", ...}`
-//   - a bare iRODS URL on one line (newer-style mango files)
-//
-// In both cases the iRODS path is the part after "data-object/view".
+// Python mus. Delegates the actual parsing to parseMangoFile so the URL
+// extraction is unit-testable without spinning up an iron client.
 func downloadFromMango(ctx context.Context, client *iron.Client,
 	mangoPath string, force, verify bool) error {
 
@@ -605,33 +653,9 @@ func downloadFromMango(ctx context.Context, client *iron.Client,
 	if err != nil {
 		return err
 	}
-	content := strings.TrimSpace(string(raw))
-
-	var remoteURL string
-	// Try JSON first.
-	if strings.HasPrefix(content, "{") {
-		var obj struct {
-			URL string `json:"url"`
-		}
-		if jerr := json.Unmarshal([]byte(content), &obj); jerr == nil && obj.URL != "" {
-			remoteURL = obj.URL
-		}
-	}
-	if remoteURL == "" {
-		// Plain URL form.
-		remoteURL = content
-	}
-
-	const marker = "data-object/view"
-	idx := strings.Index(remoteURL, marker)
-	if idx < 0 {
-		return fmt.Errorf(
-			"%s: cannot extract iRODS path from %q (expected URL containing %q)",
-			mangoPath, remoteURL, marker)
-	}
-	remotePath := remoteURL[idx+len(marker):]
-	if remotePath == "" || remotePath == "/" {
-		return fmt.Errorf("%s: extracted iRODS path is empty", mangoPath)
+	remotePath, err := parseMangoFile(raw)
+	if err != nil {
+		return fmt.Errorf("%s: %w", mangoPath, err)
 	}
 
 	// Local destination: drop the trailing ".mango" off the sidecar name.
