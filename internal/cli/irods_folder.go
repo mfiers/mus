@@ -136,9 +136,10 @@ func runIRODSUploadFolder(
 		}
 	}
 
+	cleanup, _ := cmd.Flags().GetBool("cleanup-archive")
 	switch chosen {
 	case packTarGz:
-		return uploadFolderArchived(cmd, srcAbs, remoteCollection, opts, env, prof)
+		return uploadFolderArchived(cmd, srcAbs, remoteCollection, opts, env, prof, cleanup)
 	case packNone:
 		return uploadFolderDirect(cmd, srcAbs, remoteCollection, opts, env, prof)
 	}
@@ -214,8 +215,10 @@ func uploadFolderArchived(
 	opts iron.UploadOpts,
 	env *config.Env,
 	prof *folder.Profile,
+	cleanupAfter bool,
 ) error {
 	stdout := cmd.OutOrStdout()
+	stderr := cmd.ErrOrStderr()
 	base := filepath.Base(srcAbs)
 	archiveLocal := filepath.Join(filepath.Dir(srcAbs), base+".tar.gz")
 
@@ -257,7 +260,25 @@ func uploadFolderArchived(
 		Size:     res.Size,
 		Sha256:   res.Sha256,
 	}
-	return finalizeFolderSidecar(cmd, srcAbs, remotePath, env, prof, archive, client, ctx)
+	if err := finalizeFolderSidecar(cmd, srcAbs, remotePath, env, prof, archive, client, ctx); err != nil {
+		return err
+	}
+
+	// Cleanup or warn — the archive is local cruft after a successful upload.
+	if cleanupAfter {
+		if err := os.Remove(archiveLocal); err != nil {
+			fmt.Fprintf(stderr, "  WARNING: could not remove %s: %v\n", archiveLocal, err)
+		} else {
+			fmt.Fprintf(stdout, "  removed local archive %s\n", archiveLocal)
+		}
+	} else {
+		// Loud warning so users don't accidentally leak archives over time.
+		fmt.Fprintf(stderr, "\n  \033[33m⚠  local archive kept: %s (%s)\033[0m\n",
+			archiveLocal, folder.FormatHumanBytes(res.Size))
+		fmt.Fprintf(stderr,
+			"     delete it manually or re-run with --cleanup-archive next time.\n\n")
+	}
+	return nil
 }
 
 // finalizeFolderSidecar handles the post-upload bookkeeping for both the
@@ -374,6 +395,14 @@ func finalizeFolderSidecar(
 		return err
 	}
 	fmt.Fprintf(stdout, "  wrote %s\n", scPath)
+
+	// Apply mus_* AVU metadata unless explicitly skipped or this was a
+	// dry-run (where the catalog object may be a phantom).
+	noMeta, _ := cmd.Flags().GetBool("no-metadata")
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	if !noMeta && !dryRun {
+		applyMetadataToIRODS(ctx, client, remotePath, doc, cmd.ErrOrStderr())
+	}
 	return nil
 }
 

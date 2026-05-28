@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"codeberg.org/atrxia/mus/internal/folder"
 	"codeberg.org/atrxia/mus/internal/hashcache"
 	"codeberg.org/atrxia/mus/internal/sidecar"
 	"github.com/spf13/cobra"
@@ -114,6 +115,14 @@ func checkOne(cache *hashcache.Cache, scPath string) checkResult {
 		return checkResult{path: scPath, status: "error", detail: err.Error()}
 	}
 	data := sidecar.DataPath(scPath)
+
+	// Folder sidecars: walk the source folder, recompute the Merkle hash,
+	// compare to recursive_sha256. If the source folder is gone, fall back
+	// to checking a local archive (if archived) before declaring missing.
+	if doc.Kind == "folder" {
+		return checkFolder(cache, scPath, data, doc)
+	}
+
 	st, err := os.Stat(data)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -136,6 +145,49 @@ func checkOne(cache *hashcache.Cache, scPath string) checkResult {
 			detail: fmt.Sprintf("file=%s sidecar=%s", short(sum), short(doc.File.Sha256))}
 	}
 	return checkResult{path: data, status: "ok"}
+}
+
+// checkFolder verifies a folder sidecar in priority:
+//
+//  1. Source folder present → walk it, recompute Merkle, compare to
+//     Folder.RecursiveSha256.
+//  2. Source folder gone but archive sibling present → check archive sha256.
+//  3. Both gone → missing.
+func checkFolder(cache *hashcache.Cache, scPath, data string, doc *sidecar.Doc) checkResult {
+	if doc.Folder == nil || doc.Folder.RecursiveSha256 == "" {
+		return checkResult{path: data, status: "stale",
+			detail: "folder sidecar has no recursive_sha256"}
+	}
+	st, err := os.Stat(data)
+	if err == nil && st.IsDir() {
+		actual, err := folder.RecursiveSHA256(data, cache.Sum)
+		if err != nil {
+			return checkResult{path: data, status: "error", detail: err.Error()}
+		}
+		if !strings.EqualFold(actual, doc.Folder.RecursiveSha256) {
+			return checkResult{path: data, status: "mismatch",
+				detail: fmt.Sprintf("folder Merkle drift (now=%s, sidecar=%s)",
+					short(actual), short(doc.Folder.RecursiveSha256))}
+		}
+		return checkResult{path: data, status: "ok"}
+	}
+	// Source folder absent. Try local archive sibling if archived.
+	if doc.Archive != nil && doc.Archive.Filename != "" && doc.Archive.Sha256 != "" {
+		archPath := filepath.Join(filepath.Dir(scPath), doc.Archive.Filename)
+		if _, err := os.Stat(archPath); err == nil {
+			sum, err := cache.Sum(archPath)
+			if err != nil {
+				return checkResult{path: archPath, status: "error", detail: err.Error()}
+			}
+			if !strings.EqualFold(sum, doc.Archive.Sha256) {
+				return checkResult{path: archPath, status: "mismatch",
+					detail: fmt.Sprintf("archive sha256 (local=%s, sidecar=%s)",
+						short(sum), short(doc.Archive.Sha256))}
+			}
+			return checkResult{path: archPath, status: "ok"}
+		}
+	}
+	return checkResult{path: data, status: "missing"}
 }
 
 func walkForSidecars(root string, recursive bool) ([]string, error) {

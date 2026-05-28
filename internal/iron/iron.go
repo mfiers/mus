@@ -191,6 +191,36 @@ type StatInfo struct {
 	Modified string `json:"modified"`
 }
 
+// MetaSet runs `iron meta set <remote> <key> <value>`. Replaces any
+// existing AVU with the same key. Empty value is rejected (use MetaUnset).
+func (c *Client) MetaSet(ctx context.Context, remote, key, value string) error {
+	if key == "" {
+		return errors.New("MetaSet: empty key")
+	}
+	if value == "" {
+		return errors.New("MetaSet: empty value (use MetaUnset to remove)")
+	}
+	if c.DefaultTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.DefaultTimeout)
+		defer cancel()
+	}
+	_, err := c.Run(ctx, "meta", "set", remote, key, value)
+	return err
+}
+
+// MetaUnset removes ALL AVU triplets with the given key on `remote`.
+// Safe to call when the key isn't present (iron returns 0).
+func (c *Client) MetaUnset(ctx context.Context, remote, key string) error {
+	if c.DefaultTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.DefaultTimeout)
+		defer cancel()
+	}
+	_, err := c.Run(ctx, "meta", "unset", remote, key)
+	return err
+}
+
 // Stat runs `iron stat -j <path>` and decodes the result.
 func (c *Client) Stat(ctx context.Context, remote string) (*StatInfo, error) {
 	if c.DefaultTimeout > 0 {

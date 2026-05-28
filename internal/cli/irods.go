@@ -2,7 +2,9 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -138,6 +140,10 @@ func newIRODSUploadCmd() *cobra.Command {
 		"override the experiment-name component of the remote path")
 	cmd.Flags().StringVar(&packRaw, "pack", "auto",
 		"folder packing: auto (prompt on TTY) | tar.gz | none")
+	cmd.Flags().Bool("cleanup-archive", false,
+		"after a successful tar.gz upload, delete the local archive (default: keep + warn)")
+	cmd.Flags().Bool("no-metadata", false,
+		"skip applying mus_* AVU metadata to the uploaded iRODS object")
 	return cmd
 }
 
@@ -293,6 +299,12 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 		if err := sidecar.Write(scPath, doc); err != nil {
 			return err
 		}
+		// Apply mus_* AVU metadata unless explicitly skipped or this was a
+		// dry-run (where the catalog object may be a phantom).
+		noMeta, _ := cmd.Flags().GetBool("no-metadata")
+		if !noMeta && !opts.DryRun {
+			applyMetadataToIRODS(ctx, client, remote, doc, cmd.ErrOrStderr())
+		}
 	}
 	return nil
 }
@@ -394,8 +406,14 @@ func newIRODSGetCmd() *cobra.Command {
 	var force, verify bool
 	cmd := &cobra.Command{
 		Use:   "get SIDECAR [SIDECAR...]",
-		Short: "download the file each *.mus sidecar refers to",
-		Args:  cobra.MinimumNArgs(1),
+		Short: "download the file/folder each *.mus (or legacy *.mango) sidecar refers to",
+		Long: "Accepts:\n" +
+			"  - *.mus sidecar — file or folder (Kind=folder); downloads to the location\n" +
+			"    next to the sidecar. For archived folder uploads, the archive object is\n" +
+			"    downloaded (its filename comes from archive_filename).\n" +
+			"  - *.mango legacy file (deprecated) — either JSON with a `url` field or a\n" +
+			"    bare iRODS URL. The remote path is derived from the URL.\n",
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := iron.New()
 			if err != nil {
@@ -403,31 +421,127 @@ func newIRODSGetCmd() *cobra.Command {
 			}
 			ctx := cmd.Context()
 			for _, a := range args {
-				if !sidecar.IsSidecar(a) {
-					return fmt.Errorf("%s is not a *.mus sidecar", a)
-				}
-				doc, err := sidecar.Read(a)
-				if err != nil {
-					return err
-				}
-				if doc.IRODS == nil || doc.IRODS.Path == "" {
-					return fmt.Errorf("%s has no irods path", a)
-				}
-				localPath := sidecar.DataPath(a)
-				if _, err := os.Stat(localPath); err == nil && !force {
-					return fmt.Errorf("%s already exists — use --force", localPath)
-				}
-				if err := client.Download(ctx, doc.IRODS.Path, localPath, iron.DownloadOpts{
-					Exclusive:      !force,
-					VerifyChecksum: verify,
-				}); err != nil {
+				if err := downloadOne(ctx, client, a, force, verify, cmd.ErrOrStderr()); err != nil {
 					return err
 				}
 			}
 			return nil
 		},
 	}
-	cmd.Flags().BoolVarP(&force, "force", "f", false, "overwrite local file if present")
+	cmd.Flags().BoolVarP(&force, "force", "f", false, "overwrite local file/folder if present")
 	cmd.Flags().BoolVar(&verify, "verify-checksum", true, "re-hash both sides after download")
 	return cmd
+}
+
+// downloadOne resolves a single argument to (remote path, local destination)
+// and invokes iron download. Handles three cases:
+//
+//   - *.mus file sidecar  → download remote object to <sidecar>[:-4]
+//   - *.mus folder sidecar → download remote collection or archive into the
+//     sidecar's parent directory. If archived, the archive's filename comes
+//     from the sidecar; otherwise it's the basename of irods_path.
+//   - *.mango legacy file → deprecation warning; parse URL → iRODS path;
+//     download next to the .mango file.
+func downloadOne(ctx context.Context, client *iron.Client,
+	arg string, force, verify bool, stderr io.Writer) error {
+
+	if strings.HasSuffix(arg, ".mango") {
+		fmt.Fprintf(stderr, "note: %s is a legacy .mango file (deprecated); "+
+			"prefer regenerating sidecars with `mus irods upload` to get *.mus instead\n", arg)
+		return downloadFromMango(ctx, client, arg, force, verify)
+	}
+
+	if !sidecar.IsSidecar(arg) {
+		return fmt.Errorf("%s is not a *.mus sidecar or *.mango file", arg)
+	}
+	doc, err := sidecar.Read(arg)
+	if err != nil {
+		return err
+	}
+	if doc.IRODS == nil || doc.IRODS.Path == "" {
+		return fmt.Errorf("%s has no irods_path", arg)
+	}
+
+	// Determine LOCAL destination:
+	//   folder sidecar + archived: <parent>/<archive_filename>
+	//   folder sidecar + as-is:    <parent>/ (iron places the collection here as a subdir)
+	//   file sidecar:              <parent>/<basename of data path>
+	parent := filepath.Dir(arg)
+	var local string
+	if doc.Kind == "folder" {
+		if doc.Archive != nil && doc.Archive.Filename != "" {
+			local = filepath.Join(parent, doc.Archive.Filename)
+		} else {
+			// As-is folder upload — IRON places the subcollection under
+			// parent/ automatically.
+			local = parent + string(os.PathSeparator)
+		}
+	} else {
+		local = sidecar.DataPath(arg)
+	}
+
+	if !strings.HasSuffix(local, string(os.PathSeparator)) {
+		if _, err := os.Stat(local); err == nil && !force {
+			return fmt.Errorf("%s already exists — use --force to overwrite", local)
+		}
+	}
+	return client.Download(ctx, doc.IRODS.Path, local, iron.DownloadOpts{
+		Exclusive:      !force,
+		VerifyChecksum: verify,
+	})
+}
+
+// downloadFromMango handles the legacy *.mango sidecar files emitted by the
+// Python mus. The file is EITHER:
+//
+//   - JSON like `{"url": "https://mango.kuleuven.be/data-object/view/<irods-path>", ...}`
+//   - a bare iRODS URL on one line (newer-style mango files)
+//
+// In both cases the iRODS path is the part after "data-object/view".
+func downloadFromMango(ctx context.Context, client *iron.Client,
+	mangoPath string, force, verify bool) error {
+
+	raw, err := os.ReadFile(mangoPath)
+	if err != nil {
+		return err
+	}
+	content := strings.TrimSpace(string(raw))
+
+	var remoteURL string
+	// Try JSON first.
+	if strings.HasPrefix(content, "{") {
+		var obj struct {
+			URL string `json:"url"`
+		}
+		if jerr := json.Unmarshal([]byte(content), &obj); jerr == nil && obj.URL != "" {
+			remoteURL = obj.URL
+		}
+	}
+	if remoteURL == "" {
+		// Plain URL form.
+		remoteURL = content
+	}
+
+	const marker = "data-object/view"
+	idx := strings.Index(remoteURL, marker)
+	if idx < 0 {
+		return fmt.Errorf(
+			"%s: cannot extract iRODS path from %q (expected URL containing %q)",
+			mangoPath, remoteURL, marker)
+	}
+	remotePath := remoteURL[idx+len(marker):]
+	if remotePath == "" || remotePath == "/" {
+		return fmt.Errorf("%s: extracted iRODS path is empty", mangoPath)
+	}
+
+	// Local destination: drop the trailing ".mango" off the sidecar name.
+	// e.g. /tmp/raw.h5ad.mango → /tmp/raw.h5ad
+	local := strings.TrimSuffix(mangoPath, ".mango")
+	if _, err := os.Stat(local); err == nil && !force {
+		return fmt.Errorf("%s already exists — use --force to overwrite", local)
+	}
+	return client.Download(ctx, remotePath, local, iron.DownloadOpts{
+		Exclusive:      !force,
+		VerifyChecksum: verify,
+	})
 }
