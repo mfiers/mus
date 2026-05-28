@@ -98,6 +98,30 @@ func TestCreateCommentSection(t *testing.T) {
 	}
 }
 
+// TestCreateCommentSectionEmptyPUTResponse pins the fix for the "set section
+// content: EOF" bug — eLabJournal returns 2xx with an empty body for the PUT
+// .../sections/<id>/content endpoint, which used to make the JSON decoder
+// fail. Empty 2xx must be treated as success.
+func TestCreateCommentSectionEmptyPUTResponse(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/experiments/1234/sections", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(int64(555))
+	})
+	mux.HandleFunc("/experiments/sections/555/content", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK) // body intentionally left empty — mirrors real ELN
+	})
+	srv := httptest.NewServer(authMiddleware(t, "k", mux))
+	defer srv.Close()
+	c := New(srv.URL, "k")
+	jid, err := c.CreateCommentSection(1234, "hello", "<p>world</p>")
+	if err != nil {
+		t.Fatalf("empty 2xx body should be treated as success, got: %v", err)
+	}
+	if jid != 555 {
+		t.Errorf("journal id = %d, want 555", jid)
+	}
+}
+
 func TestCurrentUser(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/users/getCurrentUserInfo", func(w http.ResponseWriter, r *http.Request) {

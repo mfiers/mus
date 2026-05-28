@@ -306,14 +306,22 @@ func (c *Client) do(req *http.Request, out any) error {
 		return err
 	}
 	defer resp.Body.Close()
+	raw, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return readErr
+	}
 	if resp.StatusCode/100 != 2 {
-		raw, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 	if out == nil {
-		_, _ = io.Copy(io.Discard, resp.Body)
 		return nil
 	}
-	dec := json.NewDecoder(resp.Body)
-	return dec.Decode(out)
+	// eLabJournal returns 2xx with an empty body for some state-mutating
+	// endpoints (PUT /experiments/sections/<id>/content is one). Treat that
+	// as success and leave `out` zero-valued — the caller would only have
+	// gotten a discardable response anyway.
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil
+	}
+	return json.Unmarshal(raw, out)
 }
