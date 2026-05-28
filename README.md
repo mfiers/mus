@@ -75,7 +75,7 @@ mus eln login
 
 # Link the current folder to an ELN experiment. Fetches project/study/
 # experiment names from the API and writes them into the local .env.
-mus eln tag-folder -x 12345
+mus eln tag 12345
 
 # Tag data files with sha256 + metadata:
 mus tag data1.csv data2.csv -m "raw sequencing data" -t qc-pass
@@ -105,12 +105,12 @@ Once stored:
 
 ```bash
 mus eln whoami                 # who does the stored token authenticate as?
-mus eln tag-folder -x 12345    # link folder to experiment; fetches names from API
+mus eln tag 12345    # link folder to experiment; fetches names from API
 mus eln update                 # refresh names if renamed on the server
 ```
 
-`tag-folder` refuses to overwrite an existing linkage in the same folder —
-use `mus eln update` to refresh, or `tag-folder -x ID --force` to relink.
+`tag` refuses to overwrite an existing linkage in the same folder —
+use `mus eln update` to refresh, or `tag ID --force` to relink.
 
 ## How it works
 
@@ -128,7 +128,7 @@ tag=lab,shared
 
 # /lab/projects/project_alpha/exp_42/.env  — per-experiment override
 tag=exp42,-lab                  # drops the inherited "lab" tag
-eln_experiment_id=12345         # `mus eln tag-folder -x 12345` writes this
+eln_experiment_id=12345         # `mus eln tag 12345` writes this
 # irods_path=alpha/raw/exp_42   # optional; defaults to exp_<eln_experiment_id>
 ```
 
@@ -194,7 +194,7 @@ mus tag FILE...                write/refresh sidecars
 mus check [FILE_OR_DIR...]     verify sidecar sha256 against current files
                                -r recursive  -q quiet
 mus eln login                  interactive: obtain + verify + store API token
-mus eln tag-folder -x EXPID    link current dir to an ELN experiment (calls API)
+mus eln tag EXPID    link current dir to an ELN experiment (calls API)
 mus eln update                 refresh ELN metadata from the server
 mus eln whoami                 verify the stored token still works
 mus irods upload FILE...       upload via IRON; writes/refreshes sidecars

@@ -42,8 +42,9 @@ tag=lab
 ```sh
 tag=exp1,-lab               # adds exp1; drops the inherited "lab"
 
-# Recommended: record the ELN experiment ID for traceability. Use
-# `mus eln tag-folder -x 1234` to write this for you (no API call).
+# Recommended: link this folder to an ELN experiment. `mus eln tag 1234`
+# fetches project/study/experiment names from the API and writes them all
+# here for you.
 eln_experiment_id=1234
 
 # Optional: explicit iRODS subpath under irods_home. Default is
@@ -106,12 +107,12 @@ your OS keyring (or the age-encrypted fallback on headless hosts).
 Then per project folder:
 
 ```bash
-mus eln tag-folder -x 1234   # fetches project/study/experiment names from API
+mus eln tag 1234   # fetches project/study/experiment names from API
 mus eln update               # refresh if anything was renamed server-side
 mus eln whoami               # confirm the stored token still authenticates
 ```
 
-`tag-folder` writes six keys to the local `.env`: `eln_experiment_id`,
+`tag` writes six keys to the local `.env`: `eln_experiment_id`,
 `eln_experiment_name`, `eln_study_id`, `eln_study_name`, `eln_project_id`,
 `eln_project_name`. Subsequent `mus tag` / `mus irods upload` invocations
 stamp those into each sidecar.

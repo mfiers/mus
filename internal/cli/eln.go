@@ -39,7 +39,8 @@ func newELNCmd() *cobra.Command {
 	}
 	cmd.AddCommand(
 		newELNLoginCmd(),
-		newELNTagFolderCmd(),
+		newELNTagCmd(),
+		newELNTagFolderCmd(), // legacy spelling — emits a deprecation notice
 		newELNUpdateCmd(),
 		newELNWhoamiCmd(),
 	)
@@ -202,68 +203,96 @@ func readSecretLine(stdin io.Reader, stdout io.Writer, prompt string) (string, e
 	return strings.TrimRight(line, "\r\n"), nil
 }
 
-// --- tag-folder + update ----------------------------------------------------
+// --- tag + tag-folder (deprecated) ------------------------------------------
 
-func newELNTagFolderCmd() *cobra.Command {
-	// Flag is a string, not Int64, because cobra's Int64Var parses with
-	// strconv.ParseInt(s, 0, 64) — base-0 means a leading "0" is interpreted
-	// as octal, which breaks on eLabJournal's long-form IDs that copy-paste
-	// in with leading zeros (e.g. "001000000001303549" contains a "9", which
-	// is not a valid octal digit). We parse with base 10 explicitly.
-	var expIDStr string
+// newELNTagCmd is the current command: `mus eln tag <expid>`. Positional arg,
+// no -x flag — shorter to type, no flag-base-10 footgun.
+func newELNTagCmd() *cobra.Command {
 	var force bool
 	cmd := &cobra.Command{
-		Use:   "tag-folder",
+		Use:   "tag EXPERIMENT_ID",
 		Short: "link the current folder to an ELN experiment (writes .env)",
-		Long: "Fetches project/study/experiment names from the ELN API and writes\n" +
+		Long: "Fetches project / study / experiment names from the ELN API and writes\n" +
 			"eln_experiment_id / eln_experiment_name / eln_study_id / eln_study_name /\n" +
 			"eln_project_id / eln_project_name into the current folder's .env.\n\n" +
 			"Refuses to overwrite an existing linkage; use `mus eln update` to refresh\n" +
 			"after a server-side rename, or --force to relink to a different experiment.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			expID, err := parseELNExperimentID(expIDStr)
-			if err != nil {
-				return err
-			}
-			dir, err := workingDir(cmd)
-			if err != nil {
-				return err
-			}
-			// Idempotency guard: refuse if a different experiment is already linked.
-			localEnv, _ := config.LoadLocal(dir)
-			if existing := localEnv.String("eln_experiment_id"); existing != "" && !force {
-				if existing == strconv.FormatInt(expID, 10) {
-					fmt.Fprintf(cmd.OutOrStdout(),
-						"folder is already linked to experiment %s — running `mus eln update` to refresh\n", existing)
-					return runELNUpdate(cmd.OutOrStdout())
-				}
-				return fmt.Errorf("folder already linked to experiment %s.\n"+
-					"  Use `mus eln update` to refresh the existing link, or\n"+
-					"  `mus eln tag-folder -x %d --force` to relink",
-					existing, expID)
-			}
+			return runELNTag(cmd, args[0], force)
+		},
+	}
+	cmd.Flags().BoolVar(&force, "force", false,
+		"overwrite an existing linkage in this folder")
+	return cmd
+}
 
-			client, err := openELN()
-			if err != nil {
-				return err
-			}
-			info, err := client.ExpInfo(expID)
-			if err != nil {
-				return fmt.Errorf("fetch experiment %d: %w", expID, err)
-			}
-			kv := experimentToKV(info)
-			for k, v := range kv {
-				fmt.Fprintf(cmd.OutOrStdout(), "%-25s : %s\n", k, v)
-			}
-			return config.Save(dir, kv)
+// newELNTagFolderCmd is the LEGACY spelling: `mus eln tag-folder -x EXPID`.
+// Still works; prints a one-line deprecation reminder pointing at `mus eln
+// tag EXPID`. Remove once nobody is using it.
+func newELNTagFolderCmd() *cobra.Command {
+	// The -x flag accepts a string (not Int64) because cobra's Int64Var
+	// parses with strconv.ParseInt(s, 0, 64) — base-0 means a leading "0"
+	// is interpreted as octal, which breaks on eLabJournal long-form IDs
+	// that copy-paste with leading zeros. parseELNExperimentID handles it.
+	var expIDStr string
+	var force bool
+	cmd := &cobra.Command{
+		Use:        "tag-folder",
+		Short:      "(deprecated) use `mus eln tag EXPERIMENT_ID` instead",
+		Deprecated: "use `mus eln tag EXPERIMENT_ID` (positional arg, no -x flag).",
+		Hidden:     false, // still listed so users see the deprecation note in --help
+		RunE: func(cmd *cobra.Command, args []string) error {
+			fmt.Fprintln(cmd.ErrOrStderr(),
+				"note: `mus eln tag-folder -x ID` is deprecated; use `mus eln tag ID` instead")
+			return runELNTag(cmd, expIDStr, force)
 		},
 	}
 	cmd.Flags().StringVarP(&expIDStr, "experiment-id", "x", "",
-		"ELN experiment ID (digits; leading zeros tolerated; accepts long-form 16-digit IDs)")
+		"ELN experiment ID (digits; leading zeros tolerated)")
 	cmd.Flags().BoolVar(&force, "force", false,
 		"overwrite an existing linkage in this folder")
 	_ = cmd.MarkFlagRequired("experiment-id")
 	return cmd
+}
+
+// runELNTag is the shared body of `eln tag` and `eln tag-folder`.
+func runELNTag(cmd *cobra.Command, expIDRaw string, force bool) error {
+	expID, err := parseELNExperimentID(expIDRaw)
+	if err != nil {
+		return err
+	}
+	dir, err := workingDir(cmd)
+	if err != nil {
+		return err
+	}
+	// Idempotency guard: refuse if a different experiment is already linked.
+	localEnv, _ := config.LoadLocal(dir)
+	if existing := localEnv.String("eln_experiment_id"); existing != "" && !force {
+		if existing == strconv.FormatInt(expID, 10) {
+			fmt.Fprintf(cmd.OutOrStdout(),
+				"folder is already linked to experiment %s — running `mus eln update` to refresh\n", existing)
+			return runELNUpdate(cmd.OutOrStdout())
+		}
+		return fmt.Errorf("folder already linked to experiment %s.\n"+
+			"  Use `mus eln update` to refresh the existing link, or\n"+
+			"  `mus eln tag %d --force` to relink",
+			existing, expID)
+	}
+
+	client, err := openELN()
+	if err != nil {
+		return err
+	}
+	info, err := client.ExpInfo(expID)
+	if err != nil {
+		return fmt.Errorf("fetch experiment %d: %w", expID, err)
+	}
+	kv := experimentToKV(info)
+	for k, v := range kv {
+		fmt.Fprintf(cmd.OutOrStdout(), "%-25s : %s\n", k, v)
+	}
+	return config.Save(dir, kv)
 }
 
 func newELNUpdateCmd() *cobra.Command {
