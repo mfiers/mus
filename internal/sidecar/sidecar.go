@@ -76,6 +76,41 @@ type S3 struct {
 	UploadedAt time.Time
 }
 
+// H5ad captures a digest of the sanity-check pass for an .h5ad file:
+// selected metadata-yaml fields plus inspector-derived shape info.
+// Persisted at `mus s3 inspect` / `mus s3 upload` time so a later
+// `mus check` can detect drift without re-running anndata.
+//
+// All fields are optional; an empty H5ad block means no inspection
+// has been recorded yet.
+type H5ad struct {
+	// --- From the sibling metadata.yaml (mirrored for offline reading)
+	Organism    string
+	Celltype    []string
+	Technology  string
+	Preparation string
+	Tissue      []string
+	Region      []string
+	Disease     []string
+	Sex         string
+	Internal    string // "yes" / "no"
+	Accession   string
+	DOI         string
+	Year        int
+	Contributor string
+	GeneIDType  string
+
+	// --- Inspector-derived shape info
+	NObs           int64
+	NVars          int64
+	Layers         []string
+	Embedding      string // "X_umap" preferred, else "X_tsne"
+	AnnDataVersion string
+
+	// --- Stamp
+	InspectedAt time.Time
+}
+
 // Doc is the full sidecar document.
 type Doc struct {
 	Version     int
@@ -91,6 +126,7 @@ type Doc struct {
 	IRODS       *IRODS
 	ELN         *ELN
 	S3          *S3
+	H5ad        *H5ad
 }
 
 // FolderInfo is populated on folder-level sidecars (Kind=="folder").
@@ -135,7 +171,14 @@ func IsSidecar(path string) bool {
 }
 
 // sidecarListKeys lists the sidecar fields that are comma-separated lists.
-var sidecarListKeys = map[string]bool{"tags": true}
+var sidecarListKeys = map[string]bool{
+	"tags":          true,
+	"h5ad_celltype": true,
+	"h5ad_tissue":   true,
+	"h5ad_region":   true,
+	"h5ad_disease":  true,
+	"h5ad_layers":   true,
+}
 
 func parseOpts() envformat.Options {
 	return envformat.Options{ListKeys: sidecarListKeys}
@@ -291,6 +334,34 @@ func docToMap(d *Doc) map[string]any {
 		putStr(out, "s3_etag", d.S3.Etag)
 		putTime(out, "s3_uploaded_at", d.S3.UploadedAt)
 	}
+	if d.H5ad != nil {
+		putStr(out, "h5ad_organism", d.H5ad.Organism)
+		putList(out, "h5ad_celltype", d.H5ad.Celltype)
+		putStr(out, "h5ad_technology", d.H5ad.Technology)
+		putStr(out, "h5ad_preparation", d.H5ad.Preparation)
+		putList(out, "h5ad_tissue", d.H5ad.Tissue)
+		putList(out, "h5ad_region", d.H5ad.Region)
+		putList(out, "h5ad_disease", d.H5ad.Disease)
+		putStr(out, "h5ad_sex", d.H5ad.Sex)
+		putStr(out, "h5ad_internal", d.H5ad.Internal)
+		putStr(out, "h5ad_accession", d.H5ad.Accession)
+		putStr(out, "h5ad_doi", d.H5ad.DOI)
+		if d.H5ad.Year > 0 {
+			out["h5ad_year"] = strconv.Itoa(d.H5ad.Year)
+		}
+		putStr(out, "h5ad_contributor", d.H5ad.Contributor)
+		putStr(out, "h5ad_gene_id_type", d.H5ad.GeneIDType)
+		if d.H5ad.NObs > 0 {
+			out["h5ad_n_obs"] = strconv.FormatInt(d.H5ad.NObs, 10)
+		}
+		if d.H5ad.NVars > 0 {
+			out["h5ad_n_vars"] = strconv.FormatInt(d.H5ad.NVars, 10)
+		}
+		putList(out, "h5ad_layers", d.H5ad.Layers)
+		putStr(out, "h5ad_embedding", d.H5ad.Embedding)
+		putStr(out, "h5ad_anndata_version", d.H5ad.AnnDataVersion)
+		putTime(out, "h5ad_inspected_at", d.H5ad.InspectedAt)
+	}
 	return out
 }
 
@@ -363,6 +434,30 @@ func docFromMap(in map[string]any) (*Doc, error) {
 			UploadedAt: parseTime(getStr(in, "s3_uploaded_at")),
 		}
 	}
+	if hasPrefix(in, "h5ad_") {
+		d.H5ad = &H5ad{
+			Organism:       getStr(in, "h5ad_organism"),
+			Celltype:       getList(in, "h5ad_celltype"),
+			Technology:     getStr(in, "h5ad_technology"),
+			Preparation:    getStr(in, "h5ad_preparation"),
+			Tissue:         getList(in, "h5ad_tissue"),
+			Region:         getList(in, "h5ad_region"),
+			Disease:        getList(in, "h5ad_disease"),
+			Sex:            getStr(in, "h5ad_sex"),
+			Internal:       getStr(in, "h5ad_internal"),
+			Accession:      getStr(in, "h5ad_accession"),
+			DOI:            getStr(in, "h5ad_doi"),
+			Year:           parseInt(getStr(in, "h5ad_year"), 0),
+			Contributor:    getStr(in, "h5ad_contributor"),
+			GeneIDType:     getStr(in, "h5ad_gene_id_type"),
+			NObs:           parseInt64(getStr(in, "h5ad_n_obs"), 0),
+			NVars:          parseInt64(getStr(in, "h5ad_n_vars"), 0),
+			Layers:         getList(in, "h5ad_layers"),
+			Embedding:      getStr(in, "h5ad_embedding"),
+			AnnDataVersion: getStr(in, "h5ad_anndata_version"),
+			InspectedAt:    parseTime(getStr(in, "h5ad_inspected_at")),
+		}
+	}
 	return d, nil
 }
 
@@ -372,6 +467,19 @@ func putStr(m map[string]any, k, v string) {
 	if v != "" {
 		m[k] = v
 	}
+}
+
+func putList(m map[string]any, k string, v []string) {
+	if len(v) > 0 {
+		m[k] = append([]string(nil), v...)
+	}
+}
+
+func getList(m map[string]any, k string) []string {
+	if v, ok := m[k].([]string); ok {
+		return append([]string(nil), v...)
+	}
+	return nil
 }
 
 func putTime(m map[string]any, k string, t time.Time) {

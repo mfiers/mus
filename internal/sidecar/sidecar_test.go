@@ -62,6 +62,94 @@ func TestRoundtrip(t *testing.T) {
 	}
 }
 
+func TestH5adInfoRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	scPath := filepath.Join(dir, "mydata.h5ad.mus")
+
+	now := time.Now().UTC().Truncate(time.Second)
+	in := &Doc{
+		File: FileInfo{Sha256: "abc"},
+		H5ad: &H5ad{
+			Organism:       "human",
+			Celltype:       []string{"microglia", "macrophage"},
+			Technology:     "10x_chromium_3p_v3",
+			Preparation:    "single_nucleus",
+			Tissue:         []string{"brain"},
+			Region:         []string{"prefrontal_cortex", "hippocampus"},
+			Disease:        []string{"alzheimer"},
+			Sex:            "mixed",
+			Internal:       "no",
+			Accession:      "GSE123456",
+			DOI:            "10.1038/foo",
+			Year:           2026,
+			Contributor:    "Jane",
+			GeneIDType:     "hgnc_symbol",
+			NObs:           73888,
+			NVars:          24940,
+			Layers:         []string{"counts"},
+			Embedding:      "X_umap",
+			AnnDataVersion: "0.10.7",
+			InspectedAt:    now,
+		},
+	}
+	if err := Write(scPath, in); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(scPath)
+	// Spot-check key serialisation forms.
+	for _, want := range []string{
+		"h5ad_organism=human",
+		"h5ad_celltype=microglia,macrophage",
+		"h5ad_n_obs=73888",
+		"h5ad_n_vars=24940",
+		"h5ad_layers=counts",
+		"h5ad_embedding=X_umap",
+		"h5ad_anndata_version=0.10.7",
+	} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("missing %q in:\n%s", want, raw)
+		}
+	}
+
+	out, err := Read(scPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.H5ad == nil {
+		t.Fatalf("H5ad block lost on read: %+v", out)
+	}
+	h := out.H5ad
+	if h.Organism != "human" {
+		t.Errorf("Organism = %q", h.Organism)
+	}
+	if len(h.Celltype) != 2 || h.Celltype[0] != "microglia" || h.Celltype[1] != "macrophage" {
+		t.Errorf("Celltype = %v", h.Celltype)
+	}
+	if h.NObs != 73888 || h.NVars != 24940 {
+		t.Errorf("dims = %d/%d", h.NObs, h.NVars)
+	}
+	if h.Year != 2026 {
+		t.Errorf("Year = %d", h.Year)
+	}
+	if !h.InspectedAt.Equal(now) {
+		t.Errorf("InspectedAt = %v, want %v", h.InspectedAt, now)
+	}
+}
+
+func TestH5adAbsentWhenNoFields(t *testing.T) {
+	// Doc with no H5ad set should NOT serialise any h5ad_* keys.
+	dir := t.TempDir()
+	scPath := filepath.Join(dir, "x.mus")
+	in := &Doc{File: FileInfo{Sha256: "abc"}}
+	if err := Write(scPath, in); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(scPath)
+	if strings.Contains(string(raw), "h5ad_") {
+		t.Errorf("h5ad_* keys present despite empty H5ad block:\n%s", raw)
+	}
+}
+
 func TestFolderInfoRoundtrip(t *testing.T) {
 	dir := t.TempDir()
 	scPath := filepath.Join(dir, "scripts.mus")
