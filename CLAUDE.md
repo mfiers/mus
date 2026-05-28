@@ -29,6 +29,7 @@ Bootstrap: 2026-05-22. See task list / `report/` for current state.
 | Hash cache | SQLite via `modernc.org/sqlite` at `~/.local/share/mus/hashcache.db` |
 | Secrets | `zalando/go-keyring` with `filippo.io/age` encrypted-file fallback for HPC nodes |
 | ELN | eLabJournal REST API |
+| ELN enforcement | every folder declares status: `mus eln link <id>` OR `mus eln disable [--global]`. `mus irods upload` refuses while undecided. Global state at `$XDG_CONFIG_HOME/mus/.env` (default `~/.config/mus/.env`), injected as root-most cascade entry. |
 | Activity log | **removed** — not part of the new tool |
 
 ## Layout

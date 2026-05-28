@@ -21,6 +21,24 @@ import (
 // FileName is the cascading folder-config file mus looks for.
 const FileName = ".env"
 
+// GlobalPath returns the user-level mus config file path:
+// $XDG_CONFIG_HOME/mus/.env, defaulting to ~/.config/mus/.env. Returns "" if
+// no home directory can be determined.
+//
+// This file is injected as the root-most entry of the cascade by Load() so a
+// `mus eln disable --global` decision survives no matter where you run mus
+// from (working dirs outside $HOME are common on HPC).
+func GlobalPath() string {
+	if x := os.Getenv("XDG_CONFIG_HOME"); x != "" {
+		return filepath.Join(x, "mus", FileName)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".config", "mus", FileName)
+}
+
 // listKeys are the keys treated as merged string lists across the cascade.
 // A value prefixed with `-` removes a previously added entry. Matches the
 // legacy Python `mus` LIST_KEYS.
@@ -204,7 +222,87 @@ func Save(dir string, kv map[string]string) error {
 	return atomicWrite(path, local.values)
 }
 
+// SaveToFile is like Save but writes to an explicit absolute path. Useful for
+// the global config (which lives at GlobalPath(), not necessarily inside
+// any `dir`). Creates the parent directory if missing.
+func SaveToFile(path string, kv map[string]string) error {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		return err
+	}
+	// Load existing values from this exact file (LoadLocal expects a dir).
+	values := map[string]any{}
+	if _, err := os.Stat(abs); err == nil {
+		parsed, err := loadSingle(abs)
+		if err != nil {
+			return err
+		}
+		envformat.Resolve(parsed, parseOpts())
+		values = parsed
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	for k, v := range kv {
+		if listKeys[k] {
+			cur, _ := values[k].([]string)
+			tmp := map[string]any{k: append(cur, v)}
+			envformat.Resolve(tmp, parseOpts())
+			values[k] = tmp[k]
+		} else {
+			values[k] = v
+		}
+	}
+	return atomicWrite(abs, values)
+}
+
+// Unset removes `key` from `dir`/.env and rewrites the file. No-op if the
+// file or the key does not exist. Removes the file entirely once empty.
+func Unset(dir string, key string) error {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(abs, FileName)
+	return unsetAtPath(path, key)
+}
+
+// UnsetFromFile is the explicit-path variant of Unset, for the global config.
+func UnsetFromFile(path string, key string) error {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	return unsetAtPath(abs, key)
+}
+
+func unsetAtPath(absPath, key string) error {
+	if _, err := os.Stat(absPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil // nothing to unset
+		}
+		return err
+	}
+	parsed, err := loadSingle(absPath)
+	if err != nil {
+		return err
+	}
+	envformat.Resolve(parsed, parseOpts())
+	if _, present := parsed[key]; !present {
+		return nil
+	}
+	delete(parsed, key)
+	if len(parsed) == 0 {
+		return os.Remove(absPath)
+	}
+	return atomicWrite(absPath, parsed)
+}
+
 // discover walks from `/` down to `dir`, returning every `.env` in load order.
+// Prepends the user-level GlobalPath() entry (if it exists) so global config
+// is the most-overridable entry of the cascade.
 func discover(dir string) ([]string, error) {
 	var paths []string
 	cur := dir
@@ -222,6 +320,22 @@ func discover(dir string) ([]string, error) {
 	// reverse to get root-most first (so deeper files MergeInto on top)
 	for i, j := 0, len(paths)-1; i < j; i, j = i+1, j-1 {
 		paths[i], paths[j] = paths[j], paths[i]
+	}
+	// Prepend the global config if present. Skip if its path is already in
+	// the walk (i.e. ~/.config/mus/.env happens to be on the walked-up path).
+	if gp := GlobalPath(); gp != "" {
+		if st, err := os.Stat(gp); err == nil && !st.IsDir() {
+			already := false
+			for _, p := range paths {
+				if p == gp {
+					already = true
+					break
+				}
+			}
+			if !already {
+				paths = append([]string{gp}, paths...)
+			}
+		}
 	}
 	return paths, nil
 }

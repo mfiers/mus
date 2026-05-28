@@ -212,6 +212,9 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 	if err != nil {
 		return err
 	}
+	if err := requireELNDecision(env); err != nil {
+		return err
+	}
 	remoteCollection, err := resolveIRODSCollection(env, overrideDataProject, overrideRemoteName)
 	if err != nil {
 		return err

@@ -109,6 +109,88 @@ func TestLoadLocalMissingFile(t *testing.T) {
 	}
 }
 
+func TestUnsetRemovesKey(t *testing.T) {
+	dir := t.TempDir()
+	if err := Save(dir, map[string]string{
+		"eln_disabled": "true",
+		"irods_home":   "/zone/home/x",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Unset(dir, "eln_disabled"); err != nil {
+		t.Fatal(err)
+	}
+	env, err := LoadLocal(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env.Has("eln_disabled") {
+		t.Errorf("expected eln_disabled removed, got: %v", env.All())
+	}
+	if env.String("irods_home") != "/zone/home/x" {
+		t.Errorf("other keys disturbed: %v", env.All())
+	}
+}
+
+func TestUnsetMissingFileIsNoOp(t *testing.T) {
+	dir := t.TempDir()
+	if err := Unset(dir, "eln_disabled"); err != nil {
+		t.Errorf("Unset on missing .env should be no-op, got: %v", err)
+	}
+}
+
+func TestUnsetEmptiesAndRemovesFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := Save(dir, map[string]string{"eln_disabled": "true"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Unset(dir, "eln_disabled"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, FileName)); !os.IsNotExist(err) {
+		t.Errorf("expected .env removed once empty, stat err = %v", err)
+	}
+}
+
+func TestGlobalCascadeInjection(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	xdg := filepath.Join(tmp, "xdg")
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+
+	gp := GlobalPath()
+	want := filepath.Join(xdg, "mus", ".env")
+	if gp != want {
+		t.Fatalf("GlobalPath = %q, want %q", gp, want)
+	}
+	if err := SaveToFile(gp, map[string]string{"eln_disabled": "true"}); err != nil {
+		t.Fatal(err)
+	}
+
+	work := filepath.Join(tmp, "isolated", "work")
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env, err := Load(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env.String("eln_disabled") != "true" {
+		t.Errorf("global eln_disabled not surfaced; values=%v", env.All())
+	}
+}
+
+func TestSaveToFileCreatesParent(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "deep", "deeper", ".env")
+	if err := SaveToFile(path, map[string]string{"a": "b"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected file at %s: %v", path, err)
+	}
+}
+
 func TestCommentsIgnored(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ".env"),

@@ -53,9 +53,9 @@ mus irods login
 
 You typically run this once per machine. The credential is cached in `~/.irods/` (TTL is whatever iron is configured for, often a week).
 
-### 2b. ELN auth (optional)
+### 2b. ELN auth
 
-If you don't have ELN access — skip this section. Everything in mus still works. See [§ 6](#6-eln-linkage) for the ELN-free workflow.
+Skip this only if you don't have eLabJournal API access. In that case, run `mus eln disable --global` once and jump to [§ 6](#6-eln-linkage) for the offline workflow.
 
 ```bash
 mus eln login
@@ -119,7 +119,7 @@ tag=lab,shared
 # /lab/projects/project_alpha/exp_42/.env  — per-experiment override
 tag=exp42,-lab                  # adds exp42; drops the inherited "lab"
 data_project=Fiers2025          # mandatory for iRODS upload (NameYear)
-eln_experiment_id=12345         # `mus eln tag 12345` writes this
+eln_experiment_id=12345         # `mus eln link 12345` writes this
 # irods_path=alpha/raw/exp_42   # optional; default is <home>/project/<data_project>/<exp_name>
 ```
 
@@ -162,9 +162,30 @@ mus check -r .           # recurse
 
 ## 6. ELN linkage
 
+Every folder mus operates on must be in one of three ELN states:
+
+| State | Recorded by | What it means |
+|---|---|---|
+| **linked** | `eln_experiment_id` in cascade | folder ↔ ELN experiment; post-upload comments enabled |
+| **disabled** | `eln_disabled=true` in cascade | upload proceeds without ELN; never asked again |
+| **undecided** | neither | `mus irods upload` refuses with a 3-option message |
+
+The undecided state exists so the choice is conscious. There is no "implicit non-ELN" — users without ELN access run `mus eln disable --global` once.
+
+### Finding your eLab experiment ID
+
+In the eLabJournal web UI, open the experiment. The numeric ID is at the end of the URL:
+
+```
+https://vib.elabjournal.com/members/experiments/show/exp/12345
+                                                         ^^^^^
+```
+
+Pass that number to `mus eln link`.
+
 ### With ELN
 
-`mus eln tag 12345` connects the current folder to ELN experiment 12345:
+`mus eln link 12345` connects the current folder to ELN experiment 12345:
 
 1. Fetches the experiment's name, study, project, and collaborators via the API.
 2. Asks you for a `data_project` name (a `NameYear` label, e.g. `Fiers2025`). The suggestion comes from:
@@ -174,7 +195,7 @@ mus check -r .           # recurse
 3. Persists your choice locally + pushes it back to the shared iRODS file for your teammates.
 4. Writes all six `eln_*` keys + `data_project` into the folder's `.env`.
 
-Refuses to overwrite an existing linkage; use `mus eln update` to refresh, or `mus eln tag NEW_ID --force` to relink.
+Refuses to overwrite an existing linkage; use `mus eln update` to refresh, or `mus eln link NEW_ID --force` to relink.
 
 ### Auto-comment on upload
 
@@ -186,7 +207,9 @@ Opt out per-invocation with `--no-eln-comment`. There is no global toggle yet (t
 
 ### Without ELN
 
-Skip `mus eln login` entirely. The only thing `mus eln tag` does that you still need for iRODS upload is:
+Skip `mus eln login` entirely, then run `mus eln disable --global` once so upload commands stop demanding a link.
+
+The only thing `mus eln link` would otherwise have done that you still need for iRODS upload is:
 
 - a `data_project` value (`NameYear` format, e.g. `Fiers2025`)
 - an `eln_experiment_name` value (any path-safe label — sanitised to `[A-Za-z0-9_]+`, max 60 chars)

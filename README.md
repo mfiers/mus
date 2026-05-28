@@ -37,29 +37,45 @@ Three commands. Each is interactive and tells you exactly what to do.
 ```bash
 mus irods login        # checks iron, points at the Mango portal if missing, runs `iron auth`
 mus completion install # tab-completion in bash/zsh/fish
-mus eln login          # OPTIONAL: only if you have ELN API access — skip otherwise
+mus eln login          # only if you have eLabJournal API access — see below if you don't
 ```
 
 After this, every command is keyring-backed and shell-aware. You'll likely never run these again on this machine.
 
-**No ELN access?** Skip `mus eln login` entirely. Everything in mus still works — you just set `data_project` and the remote-path label manually instead of having them pulled from an experiment:
+### Every folder must declare its ELN status
 
-```bash
-mus config set data_project Fiers2025                # in your project folder
-mus config set eln_experiment_name MyExperiment      # any path-safe label; sanitised
-# now `mus tag` / `mus irods upload` work without touching ELN.
+`mus irods upload` refuses to run until the folder is in one of two states:
+
+| State | How to set | Effect |
+|---|---|---|
+| **linked** | `mus eln link <EXPERIMENT_ID>` | folder ↔ ELN experiment; uploads stamp ELN metadata and post a comment |
+| **disabled** | `mus eln disable` (folder) or `mus eln disable --global` (user-wide) | upload proceeds without ELN; choose this once and never be asked again |
+
+If you simply don't have ELN access, run **`mus eln disable --global`** once after installing — that writes `eln_disabled=true` to `~/.config/mus/.env` and mus stops nagging from any working directory.
+
+### Finding your eLab experiment ID
+
+Open the experiment in the eLabJournal web UI. The numeric ID is in the URL:
+
+```
+https://vib.elabjournal.com/.../experiments/show/exp/12345
+                                                     ^^^^^
 ```
 
-Per-upload override on the command line: `mus irods upload data.csv --data-project Fiers2025 --remote-name MyExperiment`.
+That trailing number is what you pass to `mus eln link`.
 
 ---
 
 ## Daily use
 
 ```bash
-# 1. In a project folder: link to ELN (preferred) — OR set data_project + experiment label manually.
-mus eln tag 12345               # if you have ELN; prompts for a NameYear data_project (e.g. Fiers2025)
-# without ELN, equivalently:
+# 1. In a project folder: declare ELN status (link or disable).
+mus eln link 12345              # the digits are the eLab experiment ID — see "Finding your eLab experiment ID" above
+# or, if this folder isn't ELN-tracked:
+mus eln disable                 # local: only this folder
+mus eln disable --global        # user-wide: never ask again on this machine
+
+# In an ELN-disabled folder, set the upload path components manually:
 #   mus config set data_project Fiers2025
 #   mus config set eln_experiment_name MyExperiment
 
@@ -105,7 +121,9 @@ If the folder is linked to an ELN experiment (`eln_experiment_id` in the cascade
 | `mus tag FILE [-m NOTE] [-t TAG]` | Write/refresh a sidecar with sha256, size, mtime, ELN context |
 | `mus check [FILE / DIR] [-r]` | Verify sidecars against current file/folder contents |
 | `mus eln login` | Interactive: get + verify + store an ELN API token |
-| `mus eln tag EXPERIMENT_ID` | Link the folder to an ELN experiment + pick `data_project` |
+| `mus eln link EXPERIMENT_ID` | Link the folder to an ELN experiment + pick `data_project` (formerly `mus eln tag` — still works as an alias) |
+| `mus eln disable [--global]` | Mark this folder (or your user) as non-ELN; uploads stop demanding a linkage |
+| `mus eln enable [--global]` | Undo a previous `mus eln disable` |
 | `mus eln update` | Re-fetch ELN names from the server (after a rename) |
 | `mus eln whoami` | Print the user the stored token authenticates as |
 | `mus irods login` | Interactive: walk through iron auth |

@@ -43,10 +43,12 @@ func newELNCmd() *cobra.Command {
 	}
 	cmd.AddCommand(
 		newELNLoginCmd(),
-		newELNTagCmd(),
+		newELNLinkCmd(),
 		newELNTagFolderCmd(), // legacy spelling — emits a deprecation notice
 		newELNUpdateCmd(),
 		newELNWhoamiCmd(),
+		newELNDisableCmd(),
+		newELNEnableCmd(),
 	)
 	return cmd
 }
@@ -149,7 +151,7 @@ func runELNLogin(stdin io.Reader, stdout io.Writer, noPrompt bool) error {
 	fmt.Fprintf(stdout, "✓ authenticated as %s (user ID %d)\n", user.FullName(), user.UserID)
 	fmt.Fprintf(stdout, "  eln_url     stored in %s\n", store.Backend())
 	fmt.Fprintf(stdout, "  eln_apikey  stored in %s\n", store.Backend())
-	fmt.Fprintln(stdout, "\nNext: mus eln tag-folder -x <experiment_id>  (in a project directory)")
+	fmt.Fprintln(stdout, "\nNext: mus eln link <experiment_id>  (in a project directory)")
 	return nil
 }
 
@@ -207,27 +209,37 @@ func readSecretLine(stdin io.Reader, stdout io.Writer, prompt string) (string, e
 	return strings.TrimRight(line, "\r\n"), nil
 }
 
-// --- tag + tag-folder (deprecated) ------------------------------------------
+// --- link + tag-folder (deprecated) -----------------------------------------
 
-// newELNTagCmd is the current command: `mus eln tag <expid>`. Positional arg,
-// no -x flag — shorter to type, no flag-base-10 footgun.
-func newELNTagCmd() *cobra.Command {
+// newELNLinkCmd is the current command: `mus eln link <expid>`. Renamed from
+// `mus eln tag` (which is kept as a hidden alias) so as not to collide with
+// `mus tag FILE` for per-file sidecars. Positional arg, no -x flag — shorter
+// to type, no flag-base-10 footgun.
+func newELNLinkCmd() *cobra.Command {
 	var force bool
 	var dataProject string
 	cmd := &cobra.Command{
-		Use:   "tag EXPERIMENT_ID",
-		Short: "link the current folder to an ELN experiment (writes .env)",
+		Use:     "link EXPERIMENT_ID",
+		Aliases: []string{"tag"}, // muscle-memory alias; same code path
+		Short:   "link the current folder to an ELN experiment (writes .env)",
 		Long: "Fetches project / study / experiment names from the ELN API and writes\n" +
 			"eln_experiment_id / eln_experiment_name / eln_study_id / eln_study_name /\n" +
 			"eln_project_id / eln_project_name into the current folder's .env.\n\n" +
+			"EXPERIMENT_ID is the numeric eLabJournal experiment ID. To find it:\n" +
+			"  - open the experiment in the web UI; the ID is the digits at the\n" +
+			"    end of the URL, e.g. https://vib.elabjournal.com/.../experiment/12345\n" +
+			"  - or hover the experiment in a list view — same digits in the link.\n\n" +
 			"Also prompts for a `data_project` name (format e.g. Fiers2025), needed\n" +
-			"by `mus irods upload`. Previous associations for the same experiment ID\n" +
-			"are remembered across folders so you only confirm once.\n\n" +
+			"by `mus irods upload`. If `data_project` is already in the .env cascade\n" +
+			"it's reused silently (override with --data-project). Previous mappings for\n" +
+			"the same experiment ID are remembered across folders so you only\n" +
+			"confirm once.\n\n" +
+			"Clears any `eln_disabled` flag in this folder (link implies enable).\n\n" +
 			"Refuses to overwrite an existing linkage; use `mus eln update` to refresh\n" +
 			"after a server-side rename, or --force to relink to a different experiment.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runELNTag(cmd, args[0], force, dataProject)
+			return runELNLink(cmd, args[0], force, dataProject)
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false,
@@ -250,13 +262,13 @@ func newELNTagFolderCmd() *cobra.Command {
 	var dataProject string
 	cmd := &cobra.Command{
 		Use:        "tag-folder",
-		Short:      "(deprecated) use `mus eln tag EXPERIMENT_ID` instead",
-		Deprecated: "use `mus eln tag EXPERIMENT_ID` (positional arg, no -x flag).",
+		Short:      "(deprecated) use `mus eln link EXPERIMENT_ID` instead",
+		Deprecated: "use `mus eln link EXPERIMENT_ID` (positional arg, no -x flag).",
 		Hidden:     false, // still listed so users see the deprecation note in --help
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fmt.Fprintln(cmd.ErrOrStderr(),
-				"note: `mus eln tag-folder -x ID` is deprecated; use `mus eln tag ID` instead")
-			return runELNTag(cmd, expIDStr, force, dataProject)
+				"note: `mus eln tag-folder -x ID` is deprecated; use `mus eln link ID` instead")
+			return runELNLink(cmd, expIDStr, force, dataProject)
 		},
 	}
 	cmd.Flags().StringVarP(&expIDStr, "experiment-id", "x", "",
@@ -269,8 +281,9 @@ func newELNTagFolderCmd() *cobra.Command {
 	return cmd
 }
 
-// runELNTag is the shared body of `eln tag` and `eln tag-folder`.
-func runELNTag(cmd *cobra.Command, expIDRaw string, force bool, explicitDataProject string) error {
+// runELNLink is the shared body of `eln link` (canonical) and the legacy
+// `eln tag` alias and `eln tag-folder` deprecated form.
+func runELNLink(cmd *cobra.Command, expIDRaw string, force bool, explicitDataProject string) error {
 	expID, err := parseELNExperimentID(expIDRaw)
 	if err != nil {
 		return err
@@ -291,7 +304,7 @@ func runELNTag(cmd *cobra.Command, expIDRaw string, force bool, explicitDataProj
 		}
 		return fmt.Errorf("folder already linked to experiment %s.\n"+
 			"  Use `mus eln update` to refresh the existing link, or\n"+
-			"  `mus eln tag %d --force` to relink",
+			"  `mus eln link %d --force` to relink",
 			existing, expID)
 	}
 
@@ -305,21 +318,39 @@ func runELNTag(cmd *cobra.Command, expIDRaw string, force bool, explicitDataProj
 	}
 
 	// Full cascade for Stage-2 sync (needs irods_home from the cascade,
-	// not just the local .env).
+	// not just the local .env). Also lets us notice when data_project is
+	// already set somewhere in the parent .env cascade.
 	fullEnv, _ := config.Load(dir)
 
 	// Resolve data_project (cache → ELN-derived suggestion → confirm).
-	dp, err := resolveDataProject(cmd, expIDStr, info, explicitDataProject, localEnv.String("data_project"), fullEnv)
+	dp, err := resolveDataProject(cmd, expIDStr, info, explicitDataProject, fullEnv.String("data_project"), fullEnv)
 	if err != nil {
 		return err
 	}
 
 	kv := experimentToKV(info)
-	kv["data_project"] = dp
+	// Only stamp data_project into the LOCAL .env if it differs from what
+	// the cascade already provides — avoid pointless duplication.
+	if existing := fullEnv.String("data_project"); existing != dp {
+		kv["data_project"] = dp
+	}
 	for k, v := range kv {
 		fmt.Fprintf(cmd.OutOrStdout(), "%-25s : %s\n", k, v)
 	}
-	return config.Save(dir, kv)
+	if err := config.Save(dir, kv); err != nil {
+		return err
+	}
+	// Link implies enable — clear any eln_disabled marker in this folder.
+	if localEnv.Has("eln_disabled") {
+		if err := config.Unset(dir, "eln_disabled"); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(),
+				"WARNING: could not clear eln_disabled in local .env: %v\n", err)
+		} else {
+			fmt.Fprintln(cmd.OutOrStdout(),
+				"cleared eln_disabled in local .env (link implies enable)")
+		}
+	}
+	return nil
 }
 
 // resolveDataProject picks the data_project for an experiment, in priority:
@@ -369,11 +400,12 @@ func resolveDataProject(cmd *cobra.Command, expIDStr string, info *eln.Experimen
 		return explicit, nil
 	}
 
-	// 2. Already in this folder's .env → keep silently.
+	// 2. Already in the .env cascade — acknowledge and reuse.
 	if existing != "" {
 		if err := dataproject.ValidateName(existing); err != nil {
-			return "", fmt.Errorf("existing data_project in .env: %w", err)
+			return "", fmt.Errorf("existing data_project in .env cascade: %w", err)
 		}
+		fmt.Fprintf(stdout, "using existing data_project=%s (from .env cascade)\n", existing)
 		_ = store.Remember(expIDStr, existing, info.ExperimentName)
 		pushStage2(ctx, ironClient, store, remotePath, stderr)
 		return existing, nil
@@ -495,7 +527,7 @@ func runELNUpdate(stdout io.Writer) error {
 	}
 	idStr := env.String("eln_experiment_id")
 	if idStr == "" {
-		return errors.New("no eln_experiment_id in .env cascade — run `mus eln tag-folder -x ID` first")
+		return errors.New("no eln_experiment_id in .env cascade — run `mus eln link <ID>` first")
 	}
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
