@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -79,8 +80,14 @@ type Inspector interface {
 // PythonInspector runs the embedded inspect.py via `uv run --script`.
 // First call lazily extracts the script to a temp file kept for the
 // process lifetime.
+//
+// Progress: when ProgressOut is set, stderr from the Python helper is
+// streamed there line-by-line in real time (the script emits
+// "[mus h5ad] …" lines as it works). Capturing the same stream into a
+// buffer for failure diagnostics is automatic.
 type PythonInspector struct {
-	UVBinary string // "" → resolved via PATH lookup ("uv")
+	UVBinary    string    // "" → resolved via PATH lookup ("uv")
+	ProgressOut io.Writer // nil → progress lines discarded; set to os.Stderr to show them
 
 	mu         sync.Mutex
 	scriptPath string
@@ -133,7 +140,14 @@ func (p *PythonInspector) Inspect(ctx context.Context, h5adPath string) (*Inspec
 	cmd := exec.CommandContext(ctx, uv, "run", "--quiet", "--script", script, h5adPath)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	// Tee stderr: capture for failure diagnostics AND stream live to
+	// the user's progress sink (typically os.Stderr) so they see the
+	// "[mus h5ad] …" lines as they happen.
+	if p.ProgressOut != nil {
+		cmd.Stderr = io.MultiWriter(&stderr, p.ProgressOut)
+	} else {
+		cmd.Stderr = &stderr
+	}
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {

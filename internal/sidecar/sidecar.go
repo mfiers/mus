@@ -109,6 +109,12 @@ type H5ad struct {
 
 	// --- Stamp
 	InspectedAt time.Time
+
+	// InspectedSha256 is the sha256 of the .h5ad file at the moment
+	// `mus s3 inspect` ran. `mus check` compares the file's current
+	// sha against this: equal → the previous PASS is still valid and
+	// anndata doesn't need to re-run; differ → re-inspect.
+	InspectedSha256 string
 }
 
 // Doc is the full sidecar document.
@@ -361,6 +367,7 @@ func docToMap(d *Doc) map[string]any {
 		putStr(out, "h5ad_embedding", d.H5ad.Embedding)
 		putStr(out, "h5ad_anndata_version", d.H5ad.AnnDataVersion)
 		putTime(out, "h5ad_inspected_at", d.H5ad.InspectedAt)
+		putStr(out, "h5ad_inspected_sha256", d.H5ad.InspectedSha256)
 	}
 	return out
 }
@@ -454,8 +461,9 @@ func docFromMap(in map[string]any) (*Doc, error) {
 			NVars:          parseInt64(getStr(in, "h5ad_n_vars"), 0),
 			Layers:         getList(in, "h5ad_layers"),
 			Embedding:      getStr(in, "h5ad_embedding"),
-			AnnDataVersion: getStr(in, "h5ad_anndata_version"),
-			InspectedAt:    parseTime(getStr(in, "h5ad_inspected_at")),
+			AnnDataVersion:  getStr(in, "h5ad_anndata_version"),
+			InspectedAt:     parseTime(getStr(in, "h5ad_inspected_at")),
+			InspectedSha256: getStr(in, "h5ad_inspected_sha256"),
 		}
 	}
 	return d, nil

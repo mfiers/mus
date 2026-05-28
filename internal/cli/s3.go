@@ -12,6 +12,7 @@ import (
 	"codeberg.org/mfiers/mus/internal/config"
 	"codeberg.org/mfiers/mus/internal/defaults"
 	"codeberg.org/mfiers/mus/internal/h5ad"
+	"codeberg.org/mfiers/mus/internal/hashcache"
 	"codeberg.org/mfiers/mus/internal/sidecar"
 	"github.com/spf13/cobra"
 )
@@ -64,40 +65,17 @@ func newS3InspectCmd() *cobra.Command {
 }
 
 func runS3Inspect(cmd *cobra.Command, pathHint string, writeSidecar bool) error {
-	dir, err := workingDir(cmd)
-	if err != nil {
-		return err
-	}
-	env, err := config.Load(dir)
-	if err != nil {
-		return err
-	}
-
-	// 1. Resolve the active vocabulary (iRODS → cache → embedded).
-	vocabRes, err := h5ad.Load(cmd.Context(), h5ad.LoadOptions{
-		IRODSHome: irodsHomeFromEnv(env),
-	})
-	if err != nil {
-		return fmt.Errorf("load vocabulary: %w", err)
-	}
 	stderr := cmd.ErrOrStderr()
-	fmt.Fprintf(stderr, "vocabulary source: %s", vocabRes.Source)
-	if vocabRes.Path != "" {
-		fmt.Fprintf(stderr, " (%s)", vocabRes.Path)
-	}
-	fmt.Fprintln(stderr)
-	for _, w := range vocabRes.Warnings {
-		fmt.Fprintf(stderr, "  ! %s\n", w)
-	}
 
-	// 2. Run the checks.
-	report, err := h5ad.RunChecks(cmd.Context(), pathHint, h5ad.CheckOptions{
-		Inspector:  h5ad.NewPythonInspector(),
-		Vocabulary: vocabRes.Vocabulary,
-		// ComputeSha256 is left nil for now — phase 2 will wire the
-		// hashcache so metadata.sha256 cross-check kicks in for the
-		// upload path. The inspect command stays cheap.
-	})
+	// Open hashcache once — we need it both for the inspection
+	// cross-check and for stamping the sidecar's InspectedSha256.
+	cache, err := hashcache.Open("")
+	if err != nil {
+		return err
+	}
+	defer cache.Close()
+
+	report, err := runH5adInspection(cmd, cache, pathHint)
 	if err != nil {
 		return err
 	}
@@ -106,12 +84,19 @@ func runS3Inspect(cmd *cobra.Command, pathHint string, writeSidecar bool) error 
 	stdout := cmd.OutOrStdout()
 	printReport(stdout, report)
 
-	// 4. Sidecar stamp on PASS (no HARD findings).
+	// 4. Sidecar stamp on PASS (no HARD findings). Also pin the
+	//    file's current sha256 into H5ad.InspectedSha256 so a future
+	//    `mus check` knows whether the recorded pass is still valid.
 	if writeSidecar && !report.HasHard() && report.Inspection != nil {
-		if err := stampSidecar(report); err != nil {
+		sha, sumErr := cache.Sum(report.H5adPath)
+		if sumErr != nil {
+			fmt.Fprintf(stderr, "  ! could not hash %s for sidecar stamp: %v\n",
+				report.H5adPath, sumErr)
+		} else if err := stampSidecar(report, sha); err != nil {
 			fmt.Fprintf(stderr, "  ! could not write sidecar: %v\n", err)
 		} else {
-			fmt.Fprintf(stderr, "wrote sidecar %s\n", sidecar.SidecarPath(report.H5adPath))
+			fmt.Fprintf(stderr, "wrote sidecar %s (inspected_sha256=%s)\n",
+				sidecar.SidecarPath(report.H5adPath), shortSha(sha))
 		}
 	}
 
@@ -180,9 +165,52 @@ func or(a, b string) string {
 	return b
 }
 
+// shortSha returns the first 12 chars of s for log lines.
+func shortSha(s string) string {
+	if len(s) <= 12 {
+		return s
+	}
+	return s[:12]
+}
+
+// runH5adInspection is the shared inspection entry point used by both
+// `mus s3 inspect` and the `mus check` h5ad-freshness post-pass.
+// Streams the Python inspector's progress to cmd's stderr live.
+// Caller decides what to do with the returned Report — print it,
+// stamp the sidecar, both, or just inspect the HasHard() flag.
+func runH5adInspection(cmd *cobra.Command, cache *hashcache.Cache,
+	pathHint string) (*h5ad.Report, error) {
+
+	dir, err := workingDir(cmd)
+	if err != nil {
+		return nil, err
+	}
+	env, err := config.Load(dir)
+	if err != nil {
+		return nil, err
+	}
+	vocabRes, err := h5ad.Load(cmd.Context(), h5ad.LoadOptions{
+		IRODSHome: irodsHomeFromEnv(env),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("load vocabulary: %w", err)
+	}
+	insp := h5ad.NewPythonInspector()
+	insp.ProgressOut = cmd.ErrOrStderr()
+	return h5ad.RunChecks(cmd.Context(), pathHint, h5ad.CheckOptions{
+		Inspector:  insp,
+		Vocabulary: vocabRes.Vocabulary,
+		ComputeSha256: func(p string) (string, error) {
+			return cache.Sum(p)
+		},
+	})
+}
+
 // stampSidecar writes the h5ad_* block into <h5ad>.mus, preserving
-// other sidecar sections if they exist.
-func stampSidecar(r *h5ad.Report) error {
+// other sidecar sections. `sha` is the sha256 of the .h5ad file at
+// inspection time — recorded so a later `mus check` can decide
+// whether the recorded PASS is still valid without re-running anndata.
+func stampSidecar(r *h5ad.Report, sha string) error {
 	scPath := sidecar.SidecarPath(r.H5adPath)
 	doc, err := readMaybe(scPath)
 	if err != nil {
@@ -191,13 +219,20 @@ func stampSidecar(r *h5ad.Report) error {
 	if doc == nil {
 		doc = &sidecar.Doc{}
 	}
+	// Stamp the file's sha256 if not already there (typical for users
+	// who go straight to `mus s3 inspect` without first running
+	// `mus tag`). This is what `mus check` later compares against.
+	if doc.File.Sha256 == "" && sha != "" {
+		doc.File.Sha256 = sha
+	}
 	h := &sidecar.H5ad{
-		NObs:           r.Inspection.NObs,
-		NVars:          r.Inspection.NVars,
-		Layers:         append([]string(nil), r.Inspection.Layers...),
-		Embedding:      embeddingLabel(r.Inspection),
-		AnnDataVersion: r.Inspection.AnnDataVersion,
-		InspectedAt:    time.Now().UTC().Truncate(time.Second),
+		NObs:            r.Inspection.NObs,
+		NVars:           r.Inspection.NVars,
+		Layers:          append([]string(nil), r.Inspection.Layers...),
+		Embedding:       embeddingLabel(r.Inspection),
+		AnnDataVersion:  r.Inspection.AnnDataVersion,
+		InspectedAt:     time.Now().UTC().Truncate(time.Second),
+		InspectedSha256: sha,
 	}
 	if r.Metadata != nil {
 		m := r.Metadata

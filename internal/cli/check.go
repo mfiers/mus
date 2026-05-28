@@ -34,6 +34,10 @@ type checkResult struct {
 	path   string
 	status string
 	detail string
+	// doc is populated when the sidecar parsed cleanly. Used by the
+	// post-pass h5ad freshness check on `.h5ad` data files to avoid
+	// re-reading the file.
+	doc *sidecar.Doc
 }
 
 func runCheck(cmd *cobra.Command, args []string, recursive, quiet bool) error {
@@ -85,6 +89,21 @@ func runCheck(cmd *cobra.Command, args []string, recursive, quiet bool) error {
 			ok++
 			if !quiet {
 				fmt.Printf("OK       %s\n", res.path)
+			}
+			// .h5ad files get a follow-up freshness check against the
+			// last recorded `mus s3 inspect` pass. Verbose by design:
+			// re-inspection can take tens of seconds and the user
+			// needs to see why mus suddenly slowed down.
+			if isH5adData(res.path) && res.doc != nil {
+				if hres := checkH5adFreshness(cmd, cache, scPath, res.path, res.doc); hres.status == "mismatch" {
+					ok--
+					mismatch++
+					fmt.Fprintf(os.Stderr, "MISMATCH %s  h5ad: %s\n", res.path, hres.detail)
+				} else if hres.status == "error" {
+					ok--
+					errored++
+					fmt.Fprintf(os.Stderr, "ERROR    %s  h5ad: %s\n", res.path, hres.detail)
+				}
 			}
 		case "mismatch":
 			mismatch++
@@ -141,10 +160,10 @@ func checkOne(cache *hashcache.Cache, scPath string) checkResult {
 		return checkResult{path: data, status: "error", detail: err.Error()}
 	}
 	if !strings.EqualFold(sum, doc.File.Sha256) {
-		return checkResult{path: data, status: "mismatch",
+		return checkResult{path: data, status: "mismatch", doc: doc,
 			detail: fmt.Sprintf("file=%s sidecar=%s", short(sum), short(doc.File.Sha256))}
 	}
-	return checkResult{path: data, status: "ok"}
+	return checkResult{path: data, status: "ok", doc: doc}
 }
 
 // checkFolder verifies a folder sidecar in priority:
@@ -188,6 +207,73 @@ func checkFolder(cache *hashcache.Cache, scPath, data string, doc *sidecar.Doc) 
 		}
 	}
 	return checkResult{path: data, status: "missing"}
+}
+
+// isH5adData reports whether `path` looks like an .h5ad data file.
+// Lowercase extension only — matches the spec §1.4 rule.
+func isH5adData(path string) bool {
+	return strings.HasSuffix(path, ".h5ad")
+}
+
+// checkH5adFreshness runs after a standard sha check passes on a
+// .h5ad file. Verbose by design — the re-inspection step takes tens
+// of seconds on a real h5ad and users would otherwise wonder why mus
+// stalled.
+//
+// Returns:
+//
+//	status "ok"       — sidecar's recorded inspection is still valid
+//	                    (or no inspection has ever been recorded; that's
+//	                    a notice, not a failure)
+//	status "mismatch" — re-inspection found HARD issues
+//	status "error"    — couldn't run the inspector at all
+//
+// On a successful re-inspection the sidecar is rewritten in place
+// with the new InspectedSha256.
+func checkH5adFreshness(cmd *cobra.Command, cache *hashcache.Cache,
+	scPath, dataPath string, doc *sidecar.Doc) checkResult {
+
+	stderr := cmd.ErrOrStderr()
+	currentSha := doc.File.Sha256 // checkOne already verified this matches the file
+
+	// 1. Inspection recorded AND sha unchanged → cached pass.
+	if doc.H5ad != nil && doc.H5ad.InspectedSha256 != "" &&
+		strings.EqualFold(doc.H5ad.InspectedSha256, currentSha) {
+		fmt.Fprintf(stderr, "         h5ad: cached pass (inspected %s, sha unchanged)\n",
+			doc.H5ad.InspectedAt.UTC().Format("2006-01-02"))
+		return checkResult{path: dataPath, status: "ok"}
+	}
+
+	// 2. No recorded inspection at all → not a failure, but flag it.
+	if doc.H5ad == nil || doc.H5ad.InspectedSha256 == "" {
+		fmt.Fprintf(stderr,
+			"         h5ad: no inspection recorded — run `mus s3 inspect %s` to validate\n",
+			filepath.Base(dataPath))
+		return checkResult{path: dataPath, status: "ok"}
+	}
+
+	// 3. Recorded inspection but sha changed → re-run.
+	fmt.Fprintf(stderr,
+		"         h5ad: sha changed since inspection on %s — re-running anndata (this can take 10-60s)\n",
+		doc.H5ad.InspectedAt.UTC().Format("2006-01-02"))
+
+	report, err := runH5adInspection(cmd, cache, dataPath)
+	if err != nil {
+		return checkResult{path: dataPath, status: "error", detail: err.Error()}
+	}
+	if report.HasHard() {
+		return checkResult{path: dataPath, status: "mismatch",
+			detail: fmt.Sprintf("%d HARD finding(s) — run `mus s3 inspect` to see details",
+				len(report.Hard()))}
+	}
+
+	// 4. Pass — refresh the sidecar with the new InspectedSha256.
+	if err := stampSidecar(report, currentSha); err != nil {
+		fmt.Fprintf(stderr, "         h5ad: WARN — could not refresh sidecar: %v\n", err)
+	} else {
+		fmt.Fprintf(stderr, "         h5ad: ✓ re-inspected, sidecar refreshed\n")
+	}
+	return checkResult{path: dataPath, status: "ok"}
 }
 
 func walkForSidecars(root string, recursive bool) ([]string, error) {

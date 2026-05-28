@@ -136,6 +136,34 @@ func TestH5adInfoRoundtrip(t *testing.T) {
 	}
 }
 
+func TestH5adInspectedSha256Roundtrip(t *testing.T) {
+	dir := t.TempDir()
+	scPath := filepath.Join(dir, "x.h5ad.mus")
+	sha := "deadbeefcafebabe1234567890abcdef1234567890abcdef1234567890abcdef"
+	in := &Doc{
+		File: FileInfo{Sha256: sha},
+		H5ad: &H5ad{
+			Organism:        "human",
+			InspectedAt:     time.Now().UTC().Truncate(time.Second),
+			InspectedSha256: sha,
+		},
+	}
+	if err := Write(scPath, in); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(scPath)
+	if !strings.Contains(string(raw), "h5ad_inspected_sha256="+sha) {
+		t.Errorf("inspected_sha256 not serialised, got:\n%s", raw)
+	}
+	out, err := Read(scPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.H5ad == nil || out.H5ad.InspectedSha256 != sha {
+		t.Errorf("InspectedSha256 roundtrip failed: %+v", out.H5ad)
+	}
+}
+
 func TestH5adAbsentWhenNoFields(t *testing.T) {
 	// Doc with no H5ad set should NOT serialise any h5ad_* keys.
 	dir := t.TempDir()
