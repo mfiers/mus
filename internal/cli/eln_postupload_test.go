@@ -64,10 +64,10 @@ func TestBuildELNCommentHTML_PURLLinkedPath(t *testing.T) {
 	}}
 	out := buildELNCommentHTML(emptyEnv(t), items)
 
-	// The iRODS path is the link text, PURL is the href.
-	wantAnchor := `<a href="https://example/PID/zone/12345/"><code>/zone/home/lab/project/Fiers2025/exp/sample.csv</code></a>`
+	// Basename is the link text; PURL is the href; full path lives in title=.
+	wantAnchor := `<a href="https://example/PID/zone/12345/" title="/zone/home/lab/project/Fiers2025/exp/sample.csv"><code>sample.csv</code></a>`
 	if !strings.Contains(out, wantAnchor) {
-		t.Errorf("missing PURL-linked path anchor.\nwant substring:\n  %s\nfull HTML:\n%s",
+		t.Errorf("missing PURL-linked basename anchor.\nwant substring:\n  %s\nfull HTML:\n%s",
 			wantAnchor, out)
 	}
 	// Sha column shows the short form (first 12), with full hash in title=.
@@ -93,8 +93,8 @@ func TestBuildELNCommentHTML_PathFallbackMarker(t *testing.T) {
 		PURL:       "",
 	}}
 	out := buildELNCommentHTML(emptyEnv(t), items)
-	if !strings.Contains(out, `<a href="https://example/browse"><code>/zone/home/lab/folder</code></a> *`) {
-		t.Errorf("expected URL-fallback anchor with ` *` marker, got:\n%s", out)
+	if !strings.Contains(out, `<a href="https://example/browse" title="/zone/home/lab/folder"><code>folder</code></a> *`) {
+		t.Errorf("expected URL-fallback basename anchor with ` *` marker, got:\n%s", out)
 	}
 	if !strings.Contains(out, "path-based link only") {
 		t.Errorf("expected footnote explaining fallback, got:\n%s", out)
@@ -135,9 +135,16 @@ func TestBuildELNCommentHTML_SummaryIncludesContextWhenSet(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := buildELNCommentHTML(env, []uploadedItem{{Kind: "file", RemotePath: "/r", PURL: "https://example/PID/x/1/"}})
-	for _, want := range []string{"data_project=", "Fiers2025", "experiment=", "MyPilot"} {
+	// data_project must appear; experiment must NOT (it's obvious from the
+	// experiment page the comment lives on).
+	for _, want := range []string{"data_project=", "Fiers2025"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("summary missing %q in:\n%s", want, out)
+		}
+	}
+	for _, banned := range []string{"experiment=", "MyPilot"} {
+		if strings.Contains(out, banned) {
+			t.Errorf("summary should not mention experiment name (it's obvious from context); found %q in:\n%s", banned, out)
 		}
 	}
 }

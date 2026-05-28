@@ -16,6 +16,7 @@ import (
 	"io"
 	"os"
 	"os/user"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -164,19 +165,12 @@ func buildELNCommentHTML(env *config.Env, items []uploadedItem) string {
 		len(items),
 		html.EscapeString(folder.FormatHumanBytes(total)))
 
-	// data_project / experiment_name pulled from the cascade so the
-	// experiment record has redundant context (the experiment is also where
-	// this comment lives, but the reader of an exported PDF might not see
-	// that).
-	var ctxBits []string
+	// data_project pulled from the cascade so the iRODS membership is
+	// recorded even if the comment is later exported away from the
+	// experiment record. The experiment itself is obvious from context
+	// (the comment lives on the experiment page) — don't duplicate it.
 	if dp := env.String("data_project"); dp != "" {
-		ctxBits = append(ctxBits, "data_project=<code>"+html.EscapeString(dp)+"</code>")
-	}
-	if en := env.String("eln_experiment_name"); en != "" {
-		ctxBits = append(ctxBits, "experiment=<code>"+html.EscapeString(en)+"</code>")
-	}
-	if len(ctxBits) > 0 {
-		fmt.Fprintf(&b, "<p>%s</p>", strings.Join(ctxBits, " &nbsp;·&nbsp; "))
+		fmt.Fprintf(&b, "<p>data_project=<code>%s</code></p>", html.EscapeString(dp))
 	}
 	if cwd != "" {
 		fmt.Fprintf(&b, "<p>Source: <code>%s:%s</code></p>",
@@ -187,7 +181,7 @@ func buildELNCommentHTML(env *config.Env, items []uploadedItem) string {
 	// --- per-item table ---
 	anyFallback := false
 	b.WriteString(`<table border="1" cellpadding="4" cellspacing="0">`)
-	b.WriteString(`<thead><tr><th>Kind</th><th>iRODS path</th><th>Size</th><th>sha256</th></tr></thead><tbody>`)
+	b.WriteString(`<thead><tr><th>Kind</th><th>Name</th><th>Size</th><th>sha256</th></tr></thead><tbody>`)
 	for _, it := range items {
 		// Always prefer PURL. Fall back to URL with a visible marker; the
 		// stderr message above already nagged the operator.
@@ -198,14 +192,26 @@ func buildELNCommentHTML(env *config.Env, items []uploadedItem) string {
 			marker = " *"
 			anyFallback = true
 		}
+		// Display the basename only — the comment lives on a known
+		// experiment record and the full path is always
+		// <irods_home>/project/<data_project>/<exp>/<basename>. The full
+		// path is in title= so it shows on hover; the anchor still uses
+		// the PURL as href.
+		display := path.Base(it.RemotePath)
+		if display == "" || display == "." || display == "/" {
+			display = it.RemotePath
+		}
 		var pathCell string
 		if href != "" {
-			pathCell = fmt.Sprintf(`<a href="%s"><code>%s</code></a>%s`,
+			pathCell = fmt.Sprintf(`<a href="%s" title="%s"><code>%s</code></a>%s`,
 				html.EscapeString(href),
 				html.EscapeString(it.RemotePath),
+				html.EscapeString(display),
 				marker)
 		} else {
-			pathCell = fmt.Sprintf(`<code>%s</code>`, html.EscapeString(it.RemotePath))
+			pathCell = fmt.Sprintf(`<code title="%s">%s</code>`,
+				html.EscapeString(it.RemotePath),
+				html.EscapeString(display))
 		}
 		shaCell := "—"
 		if it.Sha256 != "" {
