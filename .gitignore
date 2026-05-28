@@ -33,6 +33,11 @@ Thumbs.db
 # can still be checked in.
 /*.mus
 
+# Archives produced by `mus irods upload <folder> --pack tar.gz`
+# inside the repo. Same anchored treatment: ignore at root, allow in
+# subdirs (e.g. fixtures) if a test ever needs one.
+/*.tar.gz
+
 # user-side data dumps that should never be tracked
 *.ndjson
 all_gbiomed_mango_data.json

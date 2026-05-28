@@ -480,11 +480,40 @@ func downloadOne(ctx context.Context, client *iron.Client,
 		local = sidecar.DataPath(arg)
 	}
 
-	if !strings.HasSuffix(local, string(os.PathSeparator)) {
-		if _, err := os.Stat(local); err == nil && !force {
-			return fmt.Errorf("%s already exists — use --force to overwrite", local)
-		}
+	// Decide whether to download at all by comparing what's already on disk
+	// against what the sidecar says SHOULD be there:
+	//
+	//   absent         → download (always)
+	//   present, match → skip silently unless --force forces a re-download
+	//   present, diff  → refuse without --force; with --force overwrite
+	//
+	// This makes `mus irods get` idempotent / incrementally re-runnable —
+	// the common case (you already pulled the data, just want to confirm)
+	// is now zero-cost.
+	state, stateErr := localStateVsSidecar(arg, doc)
+	if stateErr != nil {
+		return fmt.Errorf("checking local state of %s: %w", local, stateErr)
 	}
+	switch state {
+	case localMatch:
+		if !force {
+			fmt.Fprintf(stderr, "  ✓ %s already matches sidecar; skipping download\n", local)
+			return nil
+		}
+		fmt.Fprintf(stderr, "  ↻ %s already matches but --force is set; re-downloading\n", local)
+	case localMismatch:
+		if !force {
+			return fmt.Errorf(
+				"%s exists but does NOT match the sidecar — refusing to overwrite.\n"+
+					"  Re-run with --force to overwrite, or remove the local copy first.\n"+
+					"  (Run `mus check %s` to see exactly how it differs.)",
+				local, arg)
+		}
+		fmt.Fprintf(stderr, "  ↻ %s exists and differs from sidecar; overwriting (--force)\n", local)
+	case localAbsent:
+		// fall through — normal download
+	}
+
 	if err := client.Download(ctx, doc.IRODS.Path, local, iron.DownloadOpts{
 		Exclusive:      !force,
 		VerifyChecksum: verify,
@@ -492,16 +521,43 @@ func downloadOne(ctx context.Context, client *iron.Client,
 		return err
 	}
 
-	// After download, re-verify what landed against what the sidecar says
-	// SHOULD be there. iron --verify-checksum confirms transport integrity
-	// (bytes match the current iRODS object); this confirms PROVENANCE
-	// integrity (the iRODS object hasn't drifted from what mus uploaded).
-	// On mismatch we keep the file but return a non-zero status — the
-	// caller knows scripts get a clean exit only when both checks pass.
+	// After download, re-verify what landed against what the sidecar says.
+	// iron --verify-checksum confirms transport integrity (bytes match the
+	// current iRODS object); this confirms PROVENANCE integrity (the iRODS
+	// object hasn't drifted from what mus uploaded).
 	if err := verifyDownloadedSidecar(arg, doc, stderr); err != nil {
 		return err
 	}
 	return nil
+}
+
+// localState describes how a local file/folder compares to its sidecar.
+type localState int
+
+const (
+	localAbsent   localState = iota // nothing on disk yet
+	localMatch                      // present and sha256/Merkle matches
+	localMismatch                   // present but differs from sidecar
+)
+
+// localStateVsSidecar runs the same logic as `mus check` against an
+// existing local path and maps the result to a localState.
+func localStateVsSidecar(sidecarPath string, _ *sidecar.Doc) (localState, error) {
+	cache, err := hashcache.Open("")
+	if err != nil {
+		return 0, err
+	}
+	defer cache.Close()
+	res := checkOne(cache, sidecarPath)
+	switch res.status {
+	case "missing":
+		return localAbsent, nil
+	case "ok":
+		return localMatch, nil
+	case "mismatch", "stale":
+		return localMismatch, nil
+	}
+	return 0, fmt.Errorf("checkOne: %s (%s)", res.status, res.detail)
 }
 
 // verifyDownloadedSidecar runs the same logic as `mus check` against a
