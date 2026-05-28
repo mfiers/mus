@@ -55,10 +55,10 @@ If you simply don't have ELN access, run **`mus eln disable --global`** once aft
 
 ### Finding your eLab experiment ID
 
-Open the experiment in the eLabJournal web UI. The numeric ID is in the URL:
+Open the experiment in the eLabJournal web UI. The numeric ID is in the experiment page (under ExperimentID) or in the URL:
 
 ```
-https://vib.elabjournal.com/.../experiments/show/exp/12345
+https://vib.elabjournal.com/.../experiments/show/exp/1234567
                                                      ^^^^^
 ```
 
