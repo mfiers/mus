@@ -411,8 +411,10 @@ func finalizeFolderSidecar(
 
 	if uploads != nil {
 		size := prof.TotalBytes
+		sha := recursive
 		if archive != nil {
 			size = archive.Size
+			sha = archive.Sha256
 		}
 		*uploads = append(*uploads, uploadedItem{
 			Kind:       itemKind,
@@ -420,6 +422,7 @@ func finalizeFolderSidecar(
 			RemotePath: remotePath,
 			URL:        doc.IRODS.URL,
 			PURL:       doc.IRODS.PURL,
+			Sha256:     sha,
 			Size:       size,
 		})
 	}

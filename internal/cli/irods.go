@@ -373,6 +373,7 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 			RemotePath: remote,
 			URL:        doc.IRODS.URL,
 			PURL:       doc.IRODS.PURL,
+			Sha256:     sum,
 			Size:       st.Size(),
 		})
 	}
