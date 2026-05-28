@@ -36,21 +36,32 @@ Bootstrap: 2026-05-22. See task list / `report/` for current state.
 ```
 mus/
   CLAUDE.md            (this file)
-  Makefile             cross-compile targets
+  Makefile             cross-compile + ship + publish targets
+  VERSION              single source of truth; `X.Y.Z-dev` form
   go.mod / go.sum
+  install.sh           one-liner installer (signature-verifies before placing on PATH)
   cmd/mus/             main.go entrypoint (cobra root)
   internal/
     envformat/         KEY=VALUE parser used by both config and sidecar
     config/            .env cascade reader (folder-level)
     secret/            keyring + age fallback
-    hashcache/         SQLite-backed sha256 cache
-    sidecar/           *.mus reader / writer
+    hashcache/         SQLite-backed sha256 cache (file-level)
+    sidecar/           *.mus reader / writer (file + folder variants)
     iron/              shellout wrapper around the iron CLI
     eln/               eLabJournal REST client
+    elnmap/            JSON-backed experiment_id → data_project mapping store
+                       (local cache + Stage 2 iRODS-shared file)
+    dataproject/       data_project regex validator + path sanitiser
+    defaults/          ldflags-overridable site defaults (irods_home / web / pid_base)
+    folder/            folder profile, density check, tar.gz packer, Merkle hash
+    irodscache/        SQLite-backed iron-tree snapshots (mus irods scan)
+    signing/           ed25519 verifier with embedded pubkey (mus upgrade / install)
     cli/               cobra subcommand definitions
+  scripts/             release helper scripts (publish-release.sh, next-version.sh)
+  doc/                 user-facing documentation (quickstart, this README target)
   data/                test fixtures (gitignored beyond manifest)
-  doc/                 design notes
   report/              status reports
+  .forgejo/workflows/  Codeberg CI (test + cross-build matrix)
 ```
 
 ## Build / test / release

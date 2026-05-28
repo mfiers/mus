@@ -1,287 +1,162 @@
 # mus
 
-> Research data management CLI — tag files with checksums, sync to iRODS via IRON, push metadata to eLabJournal.
+> Tag, verify, and ship research data. From your terminal, in under a minute.
 
-`mus` walks a directory tree, reads `.env` files cascading up the tree (project / study / experiment context), and writes one `*.mus` sidecar per data file holding its sha256, size, mtime, and remote-storage status. Both file types use the same flat `KEY=VALUE` format. The CLI then uses those sidecars to sync to the KU Leuven Mango iRODS service via the `iron` CLI and to stamp metadata for eLabJournal.
+`mus` is a fast little CLI that records SHA-256 checksums + provenance in sidecar files next to your data, syncs to KU Leuven Mango iRODS via the [iron](https://rdm-docs.icts.kuleuven.be/mango/clients/iron.html) tool, and stamps every upload with metadata pulled from your eLabJournal experiments.
 
-Ground-up Go rewrite of the previous Python `mus`. Statically-linked, no CGO, ~10 MB per platform.
+Single static binary, no Python, no dependencies. Linux x86_64 / Linux ARM64 / macOS Apple Silicon.
 
-## Quick Start
+---
 
-**Install** (Linux x86_64 / Linux ARM64 / macOS Apple Silicon):
+## Install
 
 ```bash
 curl -sSL https://codeberg.org/mfiers/mus/raw/branch/main/install.sh | bash
 ```
 
-The installer auto-detects your platform, downloads the latest release binary, **verifies its ed25519 signature** against the embedded pubkey, and places it in the first writable directory it finds in your `$PATH` — preferring `~/bin`, then `~/.local/bin`, then `/usr/local/bin`. If `mus` is already installed somewhere writable it'll upgrade in place.
+The installer:
+- detects your platform,
+- downloads the latest release binary,
+- **verifies its ed25519 signature** against the embedded maintainer pubkey,
+- drops it in the first writable directory in `$PATH` (prefers `~/bin`, then `~/.local/bin`, then `/usr/local/bin`).
 
-Pin a specific version or override the location:
+Re-run any time to upgrade. Or from inside mus:
 
 ```bash
-MUS_VERSION=v0.1.0 MUS_INSTALL_DIR=/opt/mus \
-  curl -sSL https://codeberg.org/mfiers/mus/raw/branch/main/install.sh | bash
+mus upgrade
 ```
 
-**Upgrade** an already-installed mus:
+`mus upgrade` refuses unsigned releases by design — if the signature can't be verified, the install is aborted.
+
+---
+
+## First-run setup (≈ 2 minutes)
+
+Three commands. Each is interactive and tells you exactly what to do.
 
 ```bash
-mus upgrade           # update to the latest release
-mus upgrade --check   # only report if an update is available
-mus upgrade --tag v0.2.0   # install a specific tag
-mus version           # print the installed version
+mus irods login        # checks iron, points at the Mango portal if missing, runs `iron auth`
+mus eln login          # prints the steps to generate a VIB ELN token, then stores it
+mus completion install # tab-completion in bash/zsh/fish
 ```
 
-The `upgrade` command refuses unsigned releases — if a release has no `.sig` asset, the upgrade aborts.
+After this, every command is keyring-backed and shell-aware. You'll likely never run these again on this machine.
 
-**Manual install** (or for unsupported platforms — build from source):
+---
 
-Download from the [latest release](https://codeberg.org/mfiers/mus/releases/latest) and put the binary somewhere on `$PATH`:
-
-| Platform | File |
-|---|---|
-| Linux x86_64 | `mus-linux-amd64` |
-| Linux ARM64 | `mus-linux-arm64` |
-| macOS Apple Silicon (M1–M4) | `mus-darwin-arm64` |
-
-Each binary ships with a matching `.sig` file. Verify before running:
+## Daily use
 
 ```bash
-# Using mus itself (if you already have a trusted copy):
-mus _verify mus-linux-amd64 mus-linux-amd64.sig
-
-# Or using sha256sum + the ssh-signed SHA256SUMS:
-ssh-keygen -Y verify -f .gitsigners -I mark.fiers@kuleuven.be \
-  -n file -s SHA256SUMS.sig < SHA256SUMS
-sha256sum -c SHA256SUMS
-```
-
-See [Signature verification](#signature-verification) below.
-
-**Configure credentials** (one-time):
-
-```bash
-mus secret set eln_url    https://your-eln-server/api/v1
-mus secret set eln_apikey <your-api-key>
-mus secret backend         # prints "keyring" or "age" — see Secrets below
-```
-
-**Use:**
-
-```bash
-# One-time setup: store an ELN API key (interactive wizard with on-screen
-# instructions for generating the token in the eLabJournal web UI).
-mus eln login
-
-# Link the current folder to an ELN experiment. Fetches project/study/
-# experiment names from the API and writes them into the local .env.
+# 1. In a project folder, link it to an ELN experiment.
+#    mus prompts for a `data_project` name (NameYear, e.g. Fiers2025).
 mus eln tag 12345
 
-# Tag data files with sha256 + metadata:
-mus tag data1.csv data2.csv -m "raw sequencing data" -t qc-pass
+# 2. Tag individual data files with sha256 + metadata.
+mus tag data.csv -m "raw sequencing reads" -t qc-pass
 
-# Verify integrity later:
-mus check               # checks every *.mus in the current dir
-mus check -r .          # recurse
-mus check data1.csv     # one file
+# 3. Sanity-check what's tagged at any later point.
+mus check                  # verifies every *.mus in cwd
+mus check -r .             # recursive
+mus check data.csv         # single file
 
-# Upload to iRODS via IRON (requires the iron CLI on PATH):
-mus irods upload data1.csv data2.csv --verify
-mus irods check         # verify local sha256 against remote
-mus irods get data1.csv.mus   # download from the sidecar's recorded path
+# 4. Push to iRODS. Each file gets a sidecar with sha256 + persistent
+#    URL (PURL — survives renames + moves).
+mus irods upload data.csv data2.csv
+
+# 5. Push a whole folder. mus profiles it and offers to pack into
+#    `<folder>.tar.gz` if there are many small files (configurable).
+mus irods upload scripts/
+
+# 6. Download later — skips the network round-trip if the local copy
+#    already matches the sidecar's checksum; refuses to overwrite
+#    a divergent local copy without --force.
+mus irods get data.csv.mus
+mus irods get scripts.mus
 ```
 
-### ELN integration
+`mus irods upload` writes/updates two artifacts per upload:
+- a `*.mus` sidecar next to the data (or next to the folder, for folder uploads),
+- a set of `mus_*` AVU metadata triplets on the iRODS object itself, so the object stays self-describing even if the local sidecar is lost.
 
-`mus eln login` is the interactive entry point. It walks you through
-generating an API token in your ELN instance (default tenant
-`vib.elabjournal.com`; other VIB / KU Leuven hosts also work), accepts the
-full `host;key` form the web UI emits, **verifies the token** with a
-`GET /users/getCurrentUserInfo` round-trip before storing it, then writes
-`eln_url` + `eln_apikey` to the OS keyring (or the age-encrypted fallback
-file on hosts without a keyring).
-
-Once stored:
-
-```bash
-mus eln whoami                 # who does the stored token authenticate as?
-mus eln tag 12345    # link folder to experiment; fetches names from API
-mus eln update                 # refresh names if renamed on the server
-```
-
-`tag` refuses to overwrite an existing linkage in the same folder —
-use `mus eln update` to refresh, or `tag ID --force` to relink.
-
-## How it works
-
-### Folder config: cascading `.env`
-
-`mus` walks the directory tree upward looking for `.env` files and merges them, root-most first. Closer (deeper) files override or extend ones higher up. The grammar is a flat `KEY=VALUE` format — one pair per line, `#` for comments, blank lines ignored. Two keys (`tag`, `collaborator`) are list-valued: comma-separated, and a value prefixed with `-` removes a previously-added entry.
-
-Typical lab layout:
-
-```sh
-# /lab/projects/.env  — lab-wide defaults (only needed to override the
-# baked-in defaults; for BADS users these three already match)
-# irods_home=/gbiomed/home/BADS
-# irods_web=https://mango.kuleuven.be/data-object/view
-# irods_pid_base=https://mango.kuleuven.be/PID
-tag=lab,shared
-
-# /lab/projects/project_alpha/exp_42/.env  — per-experiment override
-tag=exp42,-lab                  # drops the inherited "lab" tag
-data_project=Fiers2025          # mandatory for iRODS upload (NameYear format)
-eln_experiment_id=12345         # `mus eln tag 12345` writes this
-```
-
-Three values are baked into the binary as defaults (see `internal/defaults/`):
-
-| Key | Default |
-|---|---|
-| `irods_home` | `/gbiomed/home/BADS` |
-| `irods_web` | `https://mango.kuleuven.be/data-object/view` (path-based, browse-only) |
-| `irods_pid_base` | `https://mango.kuleuven.be/PID` (PURL prefix — survives moves) |
-
-Defaults are the lowest priority — any `.env` value overrides them. Other labs can ship their own binary by passing `-ldflags="-X codeberg.org/mfiers/mus/internal/defaults.IRODSHome=/your/zone/..."` at `go build` time.
-
-Inspect:
-
-```bash
-mus config show          # effective (cascaded) config
-mus config show --local  # only the .env in the current folder
-mus config files         # paths of every .env contributing to the cascade
-mus config set tag exp42 # writes to the local .env
-```
-
-### Per-file sidecars: `<datafile>.mus`
-
-`mus tag data.csv -m "raw"` writes `data.csv.mus` next to the data file. Same flat `KEY=VALUE` format as `.env`. Fields recorded:
-
-- File: `sha256`, `size`, `mtime`, `hashed`, `host`, `abspath`
-- iRODS (after `mus irods upload`): `irods_url` (path-based browse URL), `irods_purl` (persistent URL keyed on the iRODS catalog id — survives renames/moves), `irods_path`, `irods_status`, `irods_uploaded_at`
-- ELN (from the `.env` cascade): `eln_experiment_id` (and `eln_*_name` / `eln_*_id` if available)
-- S3 (planned): `s3_url`, `s3_bucket`, `s3_key`, `s3_etag`, `s3_uploaded_at`
-- Free-form: `note`, `tags` (comma-separated)
-- Bookkeeping: `version`, `created`, `updated`
-
-A local SQLite cache at `~/.local/share/mus/hashcache.db` (override with `MUS_HASHCACHE_DB`) makes repeat sha256 lookups stat-fast: entries are reused only when both size and mtime match. Modify a file and the next `mus check` rehashes it.
-
-### Secrets
-
-`mus secret` uses the OS keyring (Linux Secret Service, macOS Keychain, Windows Credential Manager) when available. On HPC compute nodes and headless containers that have no Secret Service running, it falls back to an age-encrypted file at `~/.config/mus/secrets.age` with the identity key at `~/.config/mus/secrets.key` (mode 0600). The first call to a secret command decides which backend the process uses; force a backend with `MUS_SECRET_BACKEND=keyring|age`.
-
-```bash
-mus secret list
-mus secret get eln_apikey
-mus secret delete eln_apikey
-```
-
-### Signature verification
-
-Releases carry **two complementary signatures**:
-
-1. **Per-binary ed25519 `.sig`** (`<binary>.sig` next to each release binary) — for the programmatic upgrade path. Signed by the shared maintainer key (same key signs all of `mfiers`'s Go projects); pubkey embedded in `internal/signing.PubkeyB64`. `mus upgrade` and `mus _verify` verify against this.
-2. **SSH-signed `SHA256SUMS`** (`SHA256SUMS` + `SHA256SUMS.sig`) — for the manual verification path. Signed with the maintainer's `~/.ssh/id_ed25519`. Trust root is `.gitsigners` in this repo (cross-check against `https://codeberg.org/mfiers.keys` before treating signatures as authoritative).
-
-Tags and commits in this repo are also SSH-signed; verify any tag with:
-
-```bash
-git -c gpg.ssh.allowedSignersFile=.gitsigners verify-tag v0.1.0
-```
+---
 
 ## Subcommand reference
 
-```
-mus version                    print version + build info
-mus config show [--json|--local]
-mus config set KEY VALUE       write a key to the local .env
-mus config files               list .env files in the cascade
-mus secret set NAME [VALUE]    set a secret (reads stdin if VALUE omitted)
-mus secret get NAME
-mus secret list
-mus secret delete NAME
-mus secret backend             print active backend (keyring|age)
-mus tag FILE...                write/refresh sidecars
-                               -m note  -t tag  -f force-rehash
-mus check [FILE_OR_DIR...]     verify sidecar sha256 against current files
-                               -r recursive  -q quiet
-mus eln login                  interactive: obtain + verify + store API token
-mus eln tag EXPID    link current dir to an ELN experiment (calls API)
-mus eln update                 refresh ELN metadata from the server
-mus eln whoami                 verify the stored token still works
-mus irods upload FILE...       upload via IRON; writes/refreshes sidecars
-                               -f force  -r recursive  --verify
-mus irods check                verify local sha256 against IRON checksum
-mus irods get SIDECAR...       download files referred to by sidecars
-mus irods scan run PATH        snapshot a remote collection (with checksums) to local cache
-mus irods scan show PATH       print every cached entry (--data-only, --prefix, etc.)
-mus irods scan list            list cached scans
-mus irods scan find CHECKSUM   locate iRODS objects by server-side checksum
-mus irods scan rm PATH         drop a cached scan
-mus s3 upload FILE...          stub — coming later
-mus upgrade [--tag] [--check]  self-update from Codeberg
-mus -C DIR ...                 run as if from DIR (like git -C)
-```
+| Command | What it does |
+|---|---|
+| `mus version` | Print version + commit + build date |
+| `mus upgrade [--check] [--tag vX.Y.Z]` | Self-update from the latest signed Codeberg release |
+| `mus config show/set/files` | Inspect or write `.env` (cascading folder config) |
+| `mus secret set/get/list/delete/backend` | Manage credentials (OS keyring or age-encrypted file) |
+| `mus tag FILE [-m NOTE] [-t TAG]` | Write/refresh a sidecar with sha256, size, mtime, ELN context |
+| `mus check [FILE / DIR] [-r]` | Verify sidecars against current file/folder contents |
+| `mus eln login` | Interactive: get + verify + store an ELN API token |
+| `mus eln tag EXPERIMENT_ID` | Link the folder to an ELN experiment + pick `data_project` |
+| `mus eln update` | Re-fetch ELN names from the server (after a rename) |
+| `mus eln whoami` | Print the user the stored token authenticates as |
+| `mus irods login` | Interactive: walk through iron auth |
+| `mus irods upload FILE/FOLDER` | Upload, stamp sidecar + AVU metadata, write PURL |
+| `mus irods get SIDECAR` | Download a file/folder/archive referenced by a sidecar |
+| `mus irods check` | Compare local sha256 to iron-reported remote checksum |
+| `mus irods scan run / list / show / find` | Cache an iRODS folder inventory for offline browsing |
+| `mus completion install` | Drop a shell completion script in the conventional location |
+| `mus s3 …` | (placeholder — coming) |
 
-## Building from source
+`mus -C DIR ...` runs as if invoked from `DIR` (like `git -C`).
 
-Go 1.24+ required.
+---
+
+## How it works (1-minute tour)
+
+**`.env` files cascade.** Walk up from your working directory; every `.env` is merged top-down so deeper files override shallower ones. List-valued keys (`tag`, `collaborator`) accept comma-separated values; a `-foo` entry removes a previously-added `foo`. Grammar matches the legacy Python `mus` — one `KEY=VALUE` per line, `#` for comments, blank lines ignored.
+
+**Per-file sidecars.** `mus tag data.csv` writes `data.csv.mus` next to the data. Same flat `KEY=VALUE` format. Fields include sha256, size, mtime, host, data_project, eln_*, and (after `mus irods upload`) irods_path / irods_url / irods_purl / irods_status.
+
+**Folder sidecars.** `mus irods upload scripts/` writes one `scripts.mus` next to the folder (not per-file). Carries a Merkle-style `recursive_sha256` so `mus check scripts.mus` can detect drift later. If the folder has too many small files (`median / N² < 10`), `mus` offers to pack it into `scripts.tar.gz` and upload the archive instead.
+
+**iRODS layout.** Uploads land at `<irods_home>/project/<data_project>/<safe_experiment_name>/`. Three baked-in defaults make BADS uploads zero-config: `irods_home=/gbiomed/home/BADS`, `irods_web=https://mango.kuleuven.be/data-object/view`, `irods_pid_base=https://mango.kuleuven.be/PID`. Override any of them via `.env` or build with custom `-ldflags`.
+
+**Persistent URLs.** Every successful upload calls `iron stat -j` to grab the iRODS catalog ID, then builds `irods_purl=https://mango.kuleuven.be/PID/<zone>/<id>/` — keyed on the stable ID, so the URL survives renames + moves.
+
+**Signatures everywhere.** Release binaries are signed with a shared ed25519 key (same key signs `mfiers`'s other Go projects). Commits and tags in this repo are SSH-signed with the same key. Both `mus upgrade` and `install.sh` refuse unsigned releases.
+
+**Secrets.** Stored in the OS keyring when available (Linux Secret Service, macOS Keychain, Windows Credential Manager), with an [age](https://age-encryption.org)-encrypted file fallback for HPC compute nodes / headless containers.
+
+---
+
+## Build from source
+
+Requires Go 1.24+. Pure Go, no CGO.
 
 ```bash
-git clone ssh://git@codeberg.org/mfiers/mus.git
+git clone https://codeberg.org/mfiers/mus.git
 cd mus
-make build              # ./bin/mus for your host
-make build-all          # cross-compile darwin/arm64 + linux/{amd64,arm64} → ./dist/
-make test               # go test ./...
+make install            # build and place bin/mus on your PATH
 ```
 
-Maintainer-only:
+Or just `make build` to get `./bin/mus` without installing.
+
+Other targets: `make test` (no network), `make build-all` (cross-compile darwin/arm64 + linux/{amd64,arm64}), `make show-version`, `make bump LEVEL=minor`, `make ship` (maintainer-only — interactive, signs + tags + publishes).
+
+Site defaults (`irods_home`, `irods_web`, `irods_pid_base`) live in `internal/defaults/`. To ship a binary for a different lab, override at build time:
 
 ```bash
-make show-version               # show what's in VERSION + what `ship` would do
-make bump                       # bump patch in VERSION (no release)
-make bump LEVEL=minor           # or minor / major
-make ship                       # release + push + publish — one command
-make ship LEVEL=minor           # ship as a minor bump (overrides patch default)
-make ship SIGN=0                # skip ed25519 binary signing (fast debug;
-                                # mus upgrade will REFUSE the resulting release)
+go build -trimpath \
+  -ldflags="-X codeberg.org/mfiers/mus/internal/defaults.IRODSHome=/your/zone/home/lab \
+            -X codeberg.org/mfiers/mus/internal/defaults.IRODSWeb=https://your-mango/data-object/view \
+            -X codeberg.org/mfiers/mus/internal/defaults.IRODSPIDBase=https://your-mango/PID" \
+  ./cmd/mus
 ```
 
-`make ship` is the maintainer's full publishing pipeline. It reads VERSION
-(e.g. `0.1.1-dev`), strips `-dev`, and ships that. It then auto-bumps VERSION
-to the next `-dev` so the next dev cycle has a clean version. The only
-interactive step is pika's passphrase prompt during signing. Requires
-`CODEBERG_TOKEN` (or `CODEBERG_GENERIC_TOKEN`) in the environment.
+---
 
-Lower-level targets (each piece of `ship`) are still available if you need
-to debug a stuck release:
+## More documentation
 
-```bash
-make release VERSION=0.2.0      # cross-build, sign binaries via pika, ssh-sign
-                                # SHA256SUMS, create signed git tag
-git push origin main v0.2.0
-make publish VERSION=0.2.0      # uses CODEBERG_TOKEN to upload assets
-make sign                       # re-sign existing dist/ binaries (no rebuild)
-make release-verify             # verify dist/SHA256SUMS.sig
-```
+- [Quickstart](doc/quickstart.md) — longer walkthrough with concrete examples.
+- [CLAUDE.md](CLAUDE.md) — architecture, design decisions, where things live in the tree.
 
-See [doc/quickstart.md](doc/quickstart.md) for a longer worked example, and [CLAUDE.md](CLAUDE.md) for the architecture, signing scheme, and design decisions.
-
-## Requirements
-
-**Client:** None — single static binary.
-
-**Optional integrations:**
-- [`iron`](https://rdm-docs.icts.kuleuven.be/mango/clients/iron.html) on `$PATH` for `mus irods *` commands.
-- A reachable eLabJournal instance for `mus eln *` commands.
-- A working OS keyring (or `age` fallback) for `mus secret`.
+---
 
 ## License
 
-MIT
-
-## Links
-
-- Source: https://codeberg.org/mfiers/mus
-- Issues: https://codeberg.org/mfiers/mus/issues
-- Releases: https://codeberg.org/mfiers/mus/releases
+MIT. See [LICENSE](LICENSE).
