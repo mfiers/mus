@@ -10,10 +10,21 @@ import (
 	"time"
 
 	"codeberg.org/mfiers/mus/internal/config"
+	"codeberg.org/mfiers/mus/internal/defaults"
 	"codeberg.org/mfiers/mus/internal/h5ad"
 	"codeberg.org/mfiers/mus/internal/sidecar"
 	"github.com/spf13/cobra"
 )
+
+// irodsHomeFromEnv returns the cascade's irods_home if set, otherwise
+// the baked-in default (so `mus s3 vocab` works from any directory
+// without explicit configuration).
+func irodsHomeFromEnv(env *config.Env) string {
+	if v := env.String("irods_home"); v != "" {
+		return v
+	}
+	return defaults.IRODSHome
+}
 
 func newS3Cmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -64,7 +75,7 @@ func runS3Inspect(cmd *cobra.Command, pathHint string, writeSidecar bool) error 
 
 	// 1. Resolve the active vocabulary (iRODS → cache → embedded).
 	vocabRes, err := h5ad.Load(cmd.Context(), h5ad.LoadOptions{
-		IRODSHome: env.String("irods_home"),
+		IRODSHome: irodsHomeFromEnv(env),
 	})
 	if err != nil {
 		return fmt.Errorf("load vocabulary: %w", err)
@@ -238,7 +249,7 @@ func runS3Vocab(cmd *cobra.Command, refresh bool) error {
 		return err
 	}
 	res, err := h5ad.Load(cmd.Context(), h5ad.LoadOptions{
-		IRODSHome:   env.String("irods_home"),
+		IRODSHome:   irodsHomeFromEnv(env),
 		IgnoreCache: refresh,
 	})
 	if err != nil {
