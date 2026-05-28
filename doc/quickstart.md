@@ -53,7 +53,9 @@ mus irods login
 
 You typically run this once per machine. The credential is cached in `~/.irods/` (TTL is whatever iron is configured for, often a week).
 
-### 2b. ELN auth
+### 2b. ELN auth (optional)
+
+If you don't have ELN access — skip this section. Everything in mus still works. See [§ 6](#6-eln-linkage) for the ELN-free workflow.
 
 ```bash
 mus eln login
@@ -160,6 +162,8 @@ mus check -r .           # recurse
 
 ## 6. ELN linkage
 
+### With ELN
+
 `mus eln tag 12345` connects the current folder to ELN experiment 12345:
 
 1. Fetches the experiment's name, study, project, and collaborators via the API.
@@ -171,6 +175,32 @@ mus check -r .           # recurse
 4. Writes all six `eln_*` keys + `data_project` into the folder's `.env`.
 
 Refuses to overwrite an existing linkage; use `mus eln update` to refresh, or `mus eln tag NEW_ID --force` to relink.
+
+### Without ELN
+
+Skip `mus eln login` entirely. The only thing `mus eln tag` does that you still need for iRODS upload is:
+
+- a `data_project` value (`NameYear` format, e.g. `Fiers2025`)
+- an `eln_experiment_name` value (any path-safe label — sanitised to `[A-Za-z0-9_]+`, max 60 chars)
+
+Both can be set manually:
+
+```bash
+mus config set data_project Fiers2025          # validated against ^[A-Z][A-Za-z0-9_]*\d{4}$
+mus config set eln_experiment_name MyPilot     # used as the last path component on iRODS
+```
+
+The key is called `eln_experiment_name` for historical reasons; for non-ELN users it's just a folder label. Nothing in mus expects you to have come by it through ELN.
+
+Equivalent on the command line, per upload:
+
+```bash
+mus irods upload data.csv \
+    --data-project Fiers2025 \
+    --remote-name MyPilot
+```
+
+The `mus tag` / `mus check` / `mus irods upload` / `mus irods get` / `mus irods scan` paths all behave identically whether ELN was involved or not. Sidecars without `eln_*` fields are perfectly valid — those fields are stamped only when present in the cascade.
 
 ---
 

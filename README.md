@@ -36,20 +36,32 @@ Three commands. Each is interactive and tells you exactly what to do.
 
 ```bash
 mus irods login        # checks iron, points at the Mango portal if missing, runs `iron auth`
-mus eln login          # prints the steps to generate a VIB ELN token, then stores it
 mus completion install # tab-completion in bash/zsh/fish
+mus eln login          # OPTIONAL: only if you have ELN API access — skip otherwise
 ```
 
 After this, every command is keyring-backed and shell-aware. You'll likely never run these again on this machine.
+
+**No ELN access?** Skip `mus eln login` entirely. Everything in mus still works — you just set `data_project` and the remote-path label manually instead of having them pulled from an experiment:
+
+```bash
+mus config set data_project Fiers2025                # in your project folder
+mus config set eln_experiment_name MyExperiment      # any path-safe label; sanitised
+# now `mus tag` / `mus irods upload` work without touching ELN.
+```
+
+Per-upload override on the command line: `mus irods upload data.csv --data-project Fiers2025 --remote-name MyExperiment`.
 
 ---
 
 ## Daily use
 
 ```bash
-# 1. In a project folder, link it to an ELN experiment.
-#    mus prompts for a `data_project` name (NameYear, e.g. Fiers2025).
-mus eln tag 12345
+# 1. In a project folder: link to ELN (preferred) — OR set data_project + experiment label manually.
+mus eln tag 12345               # if you have ELN; prompts for a NameYear data_project (e.g. Fiers2025)
+# without ELN, equivalently:
+#   mus config set data_project Fiers2025
+#   mus config set eln_experiment_name MyExperiment
 
 # 2. Tag individual data files with sha256 + metadata.
 mus tag data.csv -m "raw sequencing reads" -t qc-pass

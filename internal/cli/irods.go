@@ -126,8 +126,8 @@ func resolveIRODSCollection(env *config.Env, overrideDataProject, overrideRemote
 	if dp == "" {
 		return "", fmt.Errorf("data_project not set.\n" +
 			"  - `mus config set data_project Fiers2025` (or pick your own NameYear), OR\n" +
-			"  - `mus eln tag <experiment_id>` (prompts for a data_project), OR\n" +
-			"  - pass --data-project NAME on the command line.")
+			"  - pass --data-project NAME on the command line, OR\n" +
+			"  - if you use ELN: `mus eln tag <experiment_id>` (prompts for it).")
 	}
 	if err := dataproject.ValidateName(dp); err != nil {
 		return "", err
@@ -139,8 +139,9 @@ func resolveIRODSCollection(env *config.Env, overrideDataProject, overrideRemote
 	}
 	if expName == "" {
 		return "", fmt.Errorf("no experiment-name component for remote path.\n" +
-			"  - `mus eln tag <experiment_id>` populates eln_experiment_name in .env, OR\n" +
-			"  - pass --remote-name NAME on the command line.")
+			"  - `mus config set eln_experiment_name MyPilot` (any path-safe label), OR\n" +
+			"  - pass --remote-name NAME on the command line, OR\n" +
+			"  - if you use ELN: `mus eln tag <experiment_id>` (auto-fills it).")
 	}
 
 	return home + "/project/" + dp + "/" + expName, nil
