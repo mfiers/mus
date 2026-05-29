@@ -1,285 +1,27 @@
 package cli
 
-// `mus s3` subtree. Phase 1: vocabulary inspection + h5ad sanity
-// checks. Phase 2 (login / check / upload) is not yet wired.
+// `mus s3` subtree. Phase 1 shipped the validator under `mus h5ad
+// check`; the actual S3 transport (`login` / `check` / `upload`) is
+// Phase 2 and isn't wired yet. This file currently only exposes a
+// helpful stub.
 
 import (
 	"fmt"
-	"io"
-	"path/filepath"
-	"strings"
-	"time"
 
-	"codeberg.org/mfiers/mus/internal/config"
-	"codeberg.org/mfiers/mus/internal/h5ad"
-	"codeberg.org/mfiers/mus/internal/hashcache"
-	"codeberg.org/mfiers/mus/internal/sidecar"
-	"codeberg.org/mfiers/mus/internal/vocab"
 	"github.com/spf13/cobra"
 )
-
 
 func newS3Cmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "s3",
-		Short: "S3 deposit pipeline for .h5ad files (sanity checks + upload)",
-		Long: "First-class commands today:\n" +
-			"  mus s3 inspect FILE  — run the anthive ingestion-spec sanity checks\n\n" +
-			"`mus s3 login` / `check` / `upload` are not wired yet — Phase 2.\n" +
-			"The controlled vocabulary previously at `mus s3 vocab` has been\n" +
-			"promoted to a top-level `mus vocab` command.",
+		Short: "(planned) S3 deposit pipeline — Phase 2",
+		Long: "S3 transport (`login` / `check` / `upload`) is Phase 2 and not\n" +
+			"wired yet. Run `mus h5ad check FILE` for the standalone validator\n" +
+			"(the sanity-check pipeline that S3 upload will gate on).",
 	}
-	cmd.AddCommand(newS3InspectCmd(), newS3UploadStubCmd())
+	cmd.AddCommand(newS3UploadStubCmd())
 	return cmd
 }
-
-// --- mus s3 inspect FILE ---------------------------------------------------
-
-func newS3InspectCmd() *cobra.Command {
-	var writeSidecar bool
-	cmd := &cobra.Command{
-		Use:   "inspect FILE",
-		Short: "validate an .h5ad + its sibling .metadata.yaml against the ingestion spec",
-		Long: "FILE can be either the .h5ad or its .metadata.yaml — mus finds the pair.\n\n" +
-			"Returns exit code 0 if no HARD findings, 1 otherwise. SOFT findings are\n" +
-			"printed but never fail the command.\n\n" +
-			"Requires `uv` on PATH (resolves anndata + numpy + scipy lazily).\n" +
-			"See https://docs.astral.sh/uv/ for the installer.\n\n" +
-			"The first invocation of inspect on a fresh machine downloads ~150 MB of\n" +
-			"Python packages into uv's cache (~/.cache/uv/). Subsequent runs are ~1s.",
-		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runS3Inspect(cmd, args[0], writeSidecar)
-		},
-	}
-	cmd.Flags().BoolVar(&writeSidecar, "write-sidecar", true,
-		"on success, stamp the h5ad_* block into <file>.h5ad.mus")
-	return cmd
-}
-
-func runS3Inspect(cmd *cobra.Command, pathHint string, writeSidecar bool) error {
-	stderr := cmd.ErrOrStderr()
-
-	// Open hashcache once — we need it both for the inspection
-	// cross-check and for stamping the sidecar's InspectedSha256.
-	cache, err := hashcache.Open("")
-	if err != nil {
-		return err
-	}
-	defer cache.Close()
-
-	report, err := runH5adInspection(cmd, cache, pathHint)
-	if err != nil {
-		return err
-	}
-
-	// 3. Print the tiered report.
-	stdout := cmd.OutOrStdout()
-	printReport(stdout, report)
-
-	// 4. Sidecar stamp on PASS (no HARD findings). Also pin the
-	//    file's current sha256 into H5ad.InspectedSha256 so a future
-	//    `mus check` knows whether the recorded pass is still valid.
-	if writeSidecar && !report.HasHard() && report.Inspection != nil {
-		sha, sumErr := cache.Sum(report.H5adPath)
-		if sumErr != nil {
-			fmt.Fprintf(stderr, "  ! could not hash %s for sidecar stamp: %v\n",
-				report.H5adPath, sumErr)
-		} else if err := stampSidecar(report, sha); err != nil {
-			fmt.Fprintf(stderr, "  ! could not write sidecar: %v\n", err)
-		} else {
-			fmt.Fprintf(stderr, "wrote sidecar %s (inspected_sha256=%s)\n",
-				sidecar.SidecarPath(report.H5adPath), shortSha(sha))
-		}
-	}
-
-	if report.HasHard() {
-		return fmt.Errorf("h5ad inspection failed: %d HARD finding(s) — deposit refused",
-			len(report.Hard()))
-	}
-	return nil
-}
-
-// printReport renders a Report as human-readable output.
-func printReport(w io.Writer, r *h5ad.Report) {
-	if r.Inspection != nil {
-		fmt.Fprintf(w, "\n%s\n", strings.TrimSuffix(r.H5adPath, ""))
-		fmt.Fprintf(w, "  n_obs=%d n_vars=%d layers=%s embedding=%s anndata=%s\n",
-			r.Inspection.NObs, r.Inspection.NVars,
-			joinOrDash(r.Inspection.Layers),
-			embeddingLabel(r.Inspection),
-			or(r.Inspection.AnnDataVersion, "?"))
-	}
-	printIssueGroup(w, "HARD", r.Hard(), "✘")
-	printIssueGroup(w, "SOFT", r.Soft(), "⚠")
-	printIssueGroup(w, "INFO", r.Info(), "·")
-	if !r.HasHard() {
-		fmt.Fprintln(w, "\n✓ no HARD findings — file passes the ingestion spec")
-	}
-	fmt.Fprintln(w)
-}
-
-func printIssueGroup(w io.Writer, label string, issues []h5ad.Issue, marker string) {
-	if len(issues) == 0 {
-		return
-	}
-	fmt.Fprintf(w, "\n%s (%d):\n", label, len(issues))
-	for _, i := range issues {
-		field := i.Field
-		if field != "" {
-			field = " " + field
-		}
-		fmt.Fprintf(w, "  %s%s  %s\n", marker, field, i.Message)
-	}
-}
-
-func embeddingLabel(rep *h5ad.InspectionReport) string {
-	switch {
-	case rep.Obsm.HasUMAP:
-		return "X_umap"
-	case rep.Obsm.HasTSNE:
-		return "X_tsne"
-	default:
-		return "(none)"
-	}
-}
-
-func joinOrDash(v []string) string {
-	if len(v) == 0 {
-		return "—"
-	}
-	return strings.Join(v, ",")
-}
-
-func or(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
-}
-
-// shortSha returns the first 12 chars of s for log lines.
-func shortSha(s string) string {
-	if len(s) <= 12 {
-		return s
-	}
-	return s[:12]
-}
-
-// runH5adInspection is the shared inspection entry point used by both
-// `mus s3 inspect` (legacy) and the `mus check` h5ad-freshness
-// post-pass. `h5adPath` MUST point at the data file (.h5ad), not a
-// sidecar — callers resolve before calling.
-//
-// Streams the Python inspector's progress to cmd's stderr live.
-// Caller decides what to do with the returned Report — print it,
-// stamp the sidecar, both, or just inspect the HasHard() flag.
-func runH5adInspection(cmd *cobra.Command, cache *hashcache.Cache,
-	h5adPath string) (*h5ad.Report, error) {
-
-	// 1. Vocabulary (HTTPS → cache → embedded).
-	vocabRes, err := vocab.Load(cmd.Context(), vocab.LoadOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("load vocabulary: %w", err)
-	}
-
-	// 2. Metadata from cascade (.env walked up from the h5ad's dir)
-	//    + the data file's existing sidecar H5ad block (if any).
-	dir := filepath.Dir(h5adPath)
-	env, err := config.Load(dir)
-	if err != nil {
-		return nil, fmt.Errorf("load cascade for %s: %w", dir, err)
-	}
-	var bio *sidecar.Bio
-	var h5 *sidecar.H5ad
-	if doc, err := readMaybe(sidecar.SidecarPath(h5adPath)); err == nil && doc != nil {
-		bio = doc.Bio
-		h5 = doc.H5ad
-	}
-	meta := h5ad.MetadataFromCascade(env, bio, h5)
-
-	insp := h5ad.NewPythonInspector()
-	insp.ProgressOut = cmd.ErrOrStderr()
-	return h5ad.RunChecks(cmd.Context(), h5adPath, h5ad.CheckOptions{
-		Inspector:  insp,
-		Vocabulary: vocabRes.Vocabulary,
-		Metadata:   meta,
-		ComputeSha256: func(p string) (string, error) {
-			return cache.Sum(p)
-		},
-	})
-}
-
-// stampSidecar writes the h5ad_* block into <h5ad>.mus, preserving
-// other sidecar sections. `sha` is the sha256 of the .h5ad file at
-// inspection time — recorded so a later `mus check` can decide
-// whether the recorded PASS is still valid without re-running anndata.
-func stampSidecar(r *h5ad.Report, sha string) error {
-	scPath := sidecar.SidecarPath(r.H5adPath)
-	doc, err := readMaybe(scPath)
-	if err != nil {
-		return err
-	}
-	if doc == nil {
-		doc = &sidecar.Doc{}
-	}
-	// Stamp the file's sha256 if not already there (typical for users
-	// who go straight to `mus s3 inspect` without first running
-	// `mus tag`). This is what `mus check` later compares against.
-	if doc.File.Sha256 == "" && sha != "" {
-		doc.File.Sha256 = sha
-	}
-	// File-shape block (h5ad-specific).
-	doc.H5ad = &sidecar.H5ad{
-		NObs:            r.Inspection.NObs,
-		NVars:           r.Inspection.NVars,
-		Layers:          append([]string(nil), r.Inspection.Layers...),
-		Embedding:       embeddingLabel(r.Inspection),
-		AnnDataVersion:  r.Inspection.AnnDataVersion,
-		InspectedAt:     time.Now().UTC().Truncate(time.Second),
-		InspectedSha256: sha,
-	}
-	if r.Metadata != nil {
-		doc.H5ad.GeneIDType = r.Metadata.GeneIDType
-	}
-	// Bio block (broadly applicable) — only stamp if the metadata
-	// carries anything; avoids polluting otherwise-empty sidecars.
-	if m := r.Metadata; m != nil && hasAnyBio(m) {
-		doc.Bio = &sidecar.Bio{
-			Organism:    m.Organism,
-			Celltype:    append([]string(nil), m.Celltype...),
-			Technology:  m.Technology,
-			Preparation: m.Preparation,
-			Tissue:      append([]string(nil), m.Tissue...),
-			Region:      append([]string(nil), m.Region...),
-			Disease:     append([]string(nil), m.Disease...),
-			Sex:         m.Sex,
-			Title:       m.Title,
-			Contributor: m.Contributor,
-			Year:        m.Year,
-			DOI:         m.DOI,
-			Source:      m.Source,
-			License:     m.License,
-			Internal:    m.Internal,
-			Accession:   m.Accession,
-		}
-	}
-	return sidecar.Write(scPath, doc)
-}
-
-// hasAnyBio reports whether Metadata carries at least one
-// broadly-applicable field — used to decide whether to emit a Bio
-// block on the sidecar.
-func hasAnyBio(m *h5ad.Metadata) bool {
-	return m.Organism != "" || len(m.Celltype) > 0 || m.Technology != "" ||
-		m.Preparation != "" || len(m.Tissue) > 0 || len(m.Region) > 0 ||
-		len(m.Disease) > 0 || m.Sex != "" || m.Title != "" ||
-		m.Contributor != "" || m.Year != 0 || m.DOI != "" ||
-		m.Source != "" || m.License != "" || m.Internal != "" ||
-		m.Accession != ""
-}
-
-// --- mus s3 upload (stub, Phase 2) ----------------------------------------
 
 func newS3UploadStubCmd() *cobra.Command {
 	return &cobra.Command{
@@ -289,11 +31,8 @@ func newS3UploadStubCmd() *cobra.Command {
 			fmt.Fprintln(cmd.ErrOrStderr(),
 				"mus s3 upload is not implemented yet (Phase 2).")
 			fmt.Fprintln(cmd.ErrOrStderr(),
-				"For now run `mus s3 inspect FILE` to validate; uploads stay manual.")
+				"For now run `mus h5ad check FILE` to validate; uploads stay manual.")
 			return fmt.Errorf("not implemented")
 		},
 	}
 }
-
-// readMaybe is shared with the iRODS upload path; defined in
-// irods.go and used by stampSidecar above.

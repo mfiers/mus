@@ -343,7 +343,7 @@ def _anndata_version(a) -> str | None:
 
 def main() -> int:
     if len(sys.argv) != 2:
-        print(json.dumps({"error": "usage: inspect.py PATH", "type": "UsageError"}),
+        print(json.dumps({"error": "usage: mus_h5ad_inspector.py PATH", "type": "UsageError"}),
               file=sys.stderr)
         return 2
     path = sys.argv[1]

@@ -47,6 +47,7 @@ func NewRootCmd() *cobra.Command {
 		newCheckCmd(),
 		newELNCmd(),
 		newIRODSCmd(),
+		newH5adCmd(),
 		newS3Cmd(),
 		newVocabCmd(),
 		newUpgradeCmd(),

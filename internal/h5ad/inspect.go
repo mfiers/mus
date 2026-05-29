@@ -1,8 +1,8 @@
 package h5ad
 
-// Go wrapper around the embedded `inspect.py` h5ad inspector.
+// Go wrapper around the embedded `mus_h5ad_inspector.py` h5ad inspector.
 //
-// The script (inspect.py) is the only thing in mus that needs Python +
+// The script (mus_h5ad_inspector.py) is the only thing in mus that needs Python +
 // anndata at runtime. We embed it via go:embed, write it to a temp
 // file at first use, run it via `uv run --script`, and parse the JSON
 // report on stdout.
@@ -24,7 +24,7 @@ import (
 	"sync"
 )
 
-//go:embed inspect.py
+//go:embed mus_h5ad_inspector.py
 var inspectScript []byte
 
 // MatrixReport is the per-matrix subreport for X or layers["counts"].
@@ -48,7 +48,7 @@ type ObsmReport struct {
 	HasTSNE  bool     `json:"has_tsne"`
 }
 
-// InspectionReport is the JSON contract between inspect.py and the Go side.
+// InspectionReport is the JSON contract between mus_h5ad_inspector.py and the Go side.
 type InspectionReport struct {
 	SchemaVersion   int              `json:"schema_version"`
 	NObs            int64            `json:"n_obs"`
@@ -77,7 +77,7 @@ type Inspector interface {
 
 // --- Python inspector -------------------------------------------------------
 
-// PythonInspector runs the embedded inspect.py via `uv run --script`.
+// PythonInspector runs the embedded mus_h5ad_inspector.py via `uv run --script`.
 // First call lazily extracts the script to a temp file kept for the
 // process lifetime.
 //
@@ -114,7 +114,7 @@ func (p *PythonInspector) ensureScript() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, "inspect.py")
+	path := filepath.Join(dir, "mus_h5ad_inspector.py")
 	if err := os.WriteFile(path, inspectScript, 0o755); err != nil {
 		return "", err
 	}

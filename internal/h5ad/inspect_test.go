@@ -8,7 +8,7 @@ import (
 )
 
 func TestInspectionReportRoundtrip(t *testing.T) {
-	// Schema lock-in: synthetic JSON matching what inspect.py emits must
+	// Schema lock-in: synthetic JSON matching what mus_h5ad_inspector.py emits must
 	// parse cleanly into InspectionReport, including the optional pointer
 	// fields (Min/Max/IsInteger/IsSparse/TotalEstimate).
 	raw := []byte(`{
@@ -108,12 +108,12 @@ func TestEmbeddedScriptIsValidPython(t *testing.T) {
 	// the canonical `if __name__ == "__main__":` so it's runnable.
 	body := string(inspectScript)
 	if !strings.HasPrefix(body, "#!/usr/bin/env -S uv run --quiet --script") {
-		t.Errorf("inspect.py missing the uv-run-script shebang")
+		t.Errorf("mus_h5ad_inspector.py missing the uv-run-script shebang")
 	}
 	if !strings.Contains(body, `if __name__ == "__main__":`) {
-		t.Errorf("inspect.py missing the standard __main__ guard")
+		t.Errorf("mus_h5ad_inspector.py missing the standard __main__ guard")
 	}
 	if !strings.Contains(body, "anndata>=0.10") {
-		t.Errorf("inspect.py missing anndata dep declaration in the script block")
+		t.Errorf("mus_h5ad_inspector.py missing anndata dep declaration in the script block")
 	}
 }
