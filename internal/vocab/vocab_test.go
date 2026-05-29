@@ -17,12 +17,12 @@ func TestEmbeddedVocabularyParses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("embedded vocabulary failed to parse: %v", err)
 	}
-	if v.SchemaVersion != 1 {
-		t.Errorf("schema_version = %d, want 1", v.SchemaVersion)
+	if v.SchemaVersion != 2 {
+		t.Errorf("schema_version = %d, want 2", v.SchemaVersion)
 	}
-	// Spot-check the required-field list matches §4 of the spec.
-	for _, want := range []string{"organism", "celltype", "technology",
-		"preparation", "tissue", "internal", "accession"} {
+	// Joint-vocabulary required fields (proposal §3.1).
+	for _, want := range []string{"organism", "tissue", "cell_type",
+		"technology", "suspension_type", "access", "source"} {
 		if !v.IsRequired(want) {
 			t.Errorf("required field %q missing; got Required=%v",
 				want, v.Required)
@@ -30,6 +30,15 @@ func TestEmbeddedVocabularyParses(t *testing.T) {
 	}
 	if !v.ValueAllowed("organism", "human") {
 		t.Errorf("organism=human should be allowed")
+	}
+	// CellxGene-style cell type label with a space.
+	if !v.ValueAllowed("cell_type", "microglial cell") {
+		t.Errorf("cell_type=`microglial cell` should be allowed")
+	}
+	// MONDO label with embedded commas, served from the canonical YAML.
+	if !v.ValueAllowed("disease", "leukoencephalopathy, diffuse hereditary, with spheroids 1") {
+		t.Errorf("MONDO comma-label not allowed; values=%v",
+			v.Vocab["disease"])
 	}
 }
 
@@ -51,22 +60,37 @@ func TestEmbeddedAndCanonicalAreIdentical(t *testing.T) {
 
 func TestValueAllowed(t *testing.T) {
 	v := &Vocabulary{
-		SchemaVersion: 1,
+		SchemaVersion: 2,
 		Required:      []string{"organism"},
 		Vocab: map[string][]string{
-			"organism": {"human", "mouse"},
+			"organism":  {"human", "mouse"},
+			"tissue":    {"prefrontal cortex", "white matter of frontal lobe"},
+			"cell_type": {"microglial cell"},
 		},
 	}
 	cases := []struct {
 		field, value string
 		want         bool
 	}{
+		// case-insensitive
 		{"organism", "human", true},
 		{"organism", "HUMAN", true},
 		{"organism", " human ", true},
+		// _ ≡ space ≡ -
+		{"tissue", "prefrontal cortex", true},
+		{"tissue", "prefrontal_cortex", true},
+		{"tissue", "prefrontal-cortex", true},
+		{"tissue", "Prefrontal Cortex", true},
+		{"tissue", "PREFRONTAL_CORTEX", true},
+		// runs of internal whitespace collapse
+		{"tissue", "white  matter   of frontal lobe", true},
+		{"tissue", "white_matter_of_frontal_lobe", true},
+		// not in list → false
+		{"organism", "homo sapiens", false},
 		{"organism", "homo_sapiens", false},
+		{"tissue", "frontal lobe", false},
+		// not under vocab → freeform allowed
 		{"freeform", "anything", true},
-		{"organism", "human_being", false},
 	}
 	for _, tc := range cases {
 		got := v.ValueAllowed(tc.field, tc.value)

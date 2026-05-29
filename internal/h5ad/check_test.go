@@ -32,21 +32,22 @@ func goodReport() *InspectionReport {
 }
 
 // goodMetadata returns a Metadata that satisfies every required-field
-// check. Tests mutate to drive specific failures.
+// check (schema v2). Tests mutate to drive specific failures.
 func goodMetadata() *Metadata {
 	return &Metadata{
-		Organism:    "human",
-		Celltype:    []string{"microglia"},
-		Technology:  "10x_chromium_3p_v3",
-		Preparation: "single_nucleus",
-		Tissue:      []string{"brain"},
-		Internal:    "no",
-		Accession:   "GSE123456",
-		DOI:         "10.1038/foo",
-		Year:        2026,
-		Contributor: "Jane",
-		NCells:      1000,
-		NGenes:      20000,
+		Organism:       "human",
+		Tissue:         []string{"brain"},
+		CellType:       []string{"microglial cell"},
+		Technology:     "10x_chromium_3p_v3",
+		SuspensionType: "nucleus",
+		Access:         "public",
+		Source:         "external",
+		Accession:      "GSE123456",
+		DOI:            []string{"10.1038/foo"},
+		Year:           2026,
+		Contributor:    "Jane",
+		NCells:         1000,
+		NGenes:         20000,
 	}
 }
 

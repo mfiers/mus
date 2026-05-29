@@ -247,22 +247,33 @@ func stampSidecar(r *h5ad.Report, sha string) error {
 	// carries anything; avoids polluting otherwise-empty sidecars.
 	if m := r.Metadata; m != nil && hasAnyBio(m) {
 		doc.Bio = &sidecar.Bio{
-			Organism:    m.Organism,
-			Celltype:    append([]string(nil), m.Celltype...),
-			Technology:  m.Technology,
-			Preparation: m.Preparation,
-			Tissue:      append([]string(nil), m.Tissue...),
-			Region:      append([]string(nil), m.Region...),
-			Disease:     append([]string(nil), m.Disease...),
-			Sex:         m.Sex,
-			Title:       m.Title,
-			Contributor: m.Contributor,
-			Year:        m.Year,
-			DOI:         m.DOI,
-			Source:      m.Source,
-			License:     m.License,
-			Internal:    m.Internal,
-			Accession:   m.Accession,
+			Organism:               m.Organism,
+			Tissue:                 append([]string(nil), m.Tissue...),
+			CellType:               append([]string(nil), m.CellType...),
+			Technology:             m.Technology,
+			SuspensionType:         m.SuspensionType,
+			Disease:                append([]string(nil), m.Disease...),
+			Condition:              append([]string(nil), m.Condition...),
+			Sex:                    m.Sex,
+			Age:                    m.Age,
+			Strain:                 m.Strain,
+			Title:                  m.Title,
+			Contributor:            m.Contributor,
+			Year:                   m.Year,
+			DOI:                    append([]string(nil), m.DOI...),
+			PMID:                   append([]string(nil), m.PMID...),
+			Link:                   append([]string(nil), m.Link...),
+			Source:                 m.Source,
+			License:                m.License,
+			SourceDescription:      m.SourceDescription,
+			Access:                 m.Access,
+			Accession:              m.Accession,
+			OrganismOntologyTermID: m.OrganismOntologyTermID,
+			TissueOntologyTermID:   append([]string(nil), m.TissueOntologyTermID...),
+			CellTypeOntologyTermID: append([]string(nil), m.CellTypeOntologyTermID...),
+			AssayOntologyTermID:    m.AssayOntologyTermID,
+			SexOntologyTermID:      m.SexOntologyTermID,
+			DiseaseOntologyTermID:  append([]string(nil), m.DiseaseOntologyTermID...),
 		}
 	}
 	return sidecar.Write(scPath, doc)
@@ -272,11 +283,26 @@ func stampSidecar(r *h5ad.Report, sha string) error {
 // broadly-applicable field — used to decide whether to emit a Bio
 // block on the sidecar.
 func hasAnyBio(m *h5ad.Metadata) bool {
-	return m.Organism != "" || len(m.Celltype) > 0 || m.Technology != "" ||
-		m.Preparation != "" || len(m.Tissue) > 0 || len(m.Region) > 0 ||
-		len(m.Disease) > 0 || m.Sex != "" || m.Title != "" ||
-		m.Contributor != "" || m.Year != 0 || m.DOI != "" ||
-		m.Source != "" || m.License != "" || m.Internal != "" ||
+	return m.Organism != "" ||
+		len(m.Tissue) > 0 ||
+		len(m.CellType) > 0 ||
+		m.Technology != "" ||
+		m.SuspensionType != "" ||
+		len(m.Disease) > 0 ||
+		len(m.Condition) > 0 ||
+		m.Sex != "" ||
+		m.Age != "" ||
+		m.Strain != "" ||
+		m.Title != "" ||
+		m.Contributor != "" ||
+		m.Year != 0 ||
+		len(m.DOI) > 0 ||
+		len(m.PMID) > 0 ||
+		len(m.Link) > 0 ||
+		m.Source != "" ||
+		m.License != "" ||
+		m.SourceDescription != "" ||
+		m.Access != "" ||
 		m.Accession != ""
 }
 

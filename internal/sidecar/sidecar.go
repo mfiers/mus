@@ -77,32 +77,57 @@ type S3 struct {
 }
 
 // Bio captures broadly-applicable experiment metadata — organism,
-// tissue, technology, etc. — that typically applies to ALL data
-// files in a project, not just h5ad files. These fields are written
-// as bare KEY=VALUE lines (no prefix) so the same `.env` cascade keys
+// tissue, cell_type, etc. — that typically applies to ALL data files
+// in a project, not just h5ad files. These fields are written as
+// bare KEY=VALUE lines (no prefix) so the same `.env` cascade keys
 // also apply when mus grows non-h5ad data tools.
 //
 // Read order at deposit time (lowest → highest precedence): cascade
 // .env (bare keys), then this struct (per-file override in sidecar).
+//
+// Schema v2 (joint vocabulary, doc/joint_vocabulary_proposal.md):
+// CellxGene-aligned naming. Field renames from v1: Celltype →
+// CellType; Preparation → SuspensionType. Removed: Region (collapsed
+// into Tissue per UBERON's flat anatomy). Split: Internal (yes/no)
+// → Access + Source.
 type Bio struct {
-	Organism    string
-	Celltype    []string
-	Technology  string
-	Preparation string
-	Tissue      []string
-	Region      []string
-	Disease     []string
-	Sex         string
+	// CellxGene-aligned biological annotation.
+	Organism       string
+	Tissue         []string // UBERON labels (may include brain regions)
+	CellType       []string // CL labels
+	Technology     string   // protocol/chemistry (mus-curated)
+	SuspensionType string   // cell / nucleus / na
+	Disease        []string // MONDO labels
+	Condition      []string // freeform; experimental condition
+	Sex            string
+	Age            string // freeform with unit: 87y, 18m, P30
+	Strain         string // mouse strain (C57BL/6 etc.)
 
-	Title       string
-	Contributor string
-	Year        int
-	DOI         string
-	Source      string
-	License     string
+	// Provenance.
+	Title             string
+	Contributor       string
+	Year              int
+	DOI               []string // multiple papers allowed
+	PMID              []string
+	Link              []string // generic URLs
+	Source            string   // internal / external
+	License           string
+	SourceDescription string   // "downloaded from CELLxGENE 2026-04-12"
 
-	Internal  string // "yes" / "no"
+	// Deposit status.
+	Access    string // internal / public
 	Accession string
+
+	// Optional ontology-ID companions for unambiguous identification.
+	// mus stores them but does not currently resolve them — labels are
+	// the validation primary; IDs are the depositor's hint for future
+	// downstream tools.
+	OrganismOntologyTermID string
+	TissueOntologyTermID   []string // one per Tissue entry, in order
+	CellTypeOntologyTermID []string // one per CellType entry, in order
+	AssayOntologyTermID    string   // EFO for technology+suspension
+	SexOntologyTermID      string
+	DiseaseOntologyTermID  []string // one per Disease entry, in order
 }
 
 // H5ad captures the genuinely .h5ad-file-specific fields stamped at
@@ -192,10 +217,16 @@ func IsSidecar(path string) bool {
 var sidecarListKeys = map[string]bool{
 	"tags": true,
 	// Bio (bare; broadly applicable across data files):
-	"celltype": true,
-	"tissue":   true,
-	"region":   true,
-	"disease":  true,
+	"tissue":                     true,
+	"cell_type":                  true,
+	"disease":                    true,
+	"condition":                  true,
+	"doi":                        true,
+	"pmid":                       true,
+	"link":                       true,
+	"tissue_ontology_term_id":    true,
+	"cell_type_ontology_term_id": true,
+	"disease_ontology_term_id":   true,
 	// H5ad (file-shape; truly h5ad-specific):
 	"h5ad_layers": true,
 }
@@ -357,23 +388,35 @@ func docToMap(d *Doc) map[string]any {
 	if d.Bio != nil {
 		// Bare keys — same names a project's .env would use.
 		putStr(out, "organism", d.Bio.Organism)
-		putList(out, "celltype", d.Bio.Celltype)
-		putStr(out, "technology", d.Bio.Technology)
-		putStr(out, "preparation", d.Bio.Preparation)
 		putList(out, "tissue", d.Bio.Tissue)
-		putList(out, "region", d.Bio.Region)
+		putList(out, "cell_type", d.Bio.CellType)
+		putStr(out, "technology", d.Bio.Technology)
+		putStr(out, "suspension_type", d.Bio.SuspensionType)
 		putList(out, "disease", d.Bio.Disease)
+		putList(out, "condition", d.Bio.Condition)
 		putStr(out, "sex", d.Bio.Sex)
+		putStr(out, "age", d.Bio.Age)
+		putStr(out, "strain", d.Bio.Strain)
 		putStr(out, "title", d.Bio.Title)
 		putStr(out, "contributor", d.Bio.Contributor)
 		if d.Bio.Year > 0 {
 			out["year"] = strconv.Itoa(d.Bio.Year)
 		}
-		putStr(out, "doi", d.Bio.DOI)
+		putList(out, "doi", d.Bio.DOI)
+		putList(out, "pmid", d.Bio.PMID)
+		putList(out, "link", d.Bio.Link)
 		putStr(out, "source", d.Bio.Source)
 		putStr(out, "license", d.Bio.License)
-		putStr(out, "internal", d.Bio.Internal)
+		putStr(out, "source_description", d.Bio.SourceDescription)
+		putStr(out, "access", d.Bio.Access)
 		putStr(out, "accession", d.Bio.Accession)
+		// Optional ontology-ID companions.
+		putStr(out, "organism_ontology_term_id", d.Bio.OrganismOntologyTermID)
+		putList(out, "tissue_ontology_term_id", d.Bio.TissueOntologyTermID)
+		putList(out, "cell_type_ontology_term_id", d.Bio.CellTypeOntologyTermID)
+		putStr(out, "assay_ontology_term_id", d.Bio.AssayOntologyTermID)
+		putStr(out, "sex_ontology_term_id", d.Bio.SexOntologyTermID)
+		putList(out, "disease_ontology_term_id", d.Bio.DiseaseOntologyTermID)
 	}
 	if d.H5ad != nil {
 		if d.H5ad.NObs > 0 {
@@ -463,22 +506,33 @@ func docFromMap(in map[string]any) (*Doc, error) {
 	}
 	if hasBioFields(in) {
 		d.Bio = &Bio{
-			Organism:    getStr(in, "organism"),
-			Celltype:    getList(in, "celltype"),
-			Technology:  getStr(in, "technology"),
-			Preparation: getStr(in, "preparation"),
-			Tissue:      getList(in, "tissue"),
-			Region:      getList(in, "region"),
-			Disease:     getList(in, "disease"),
-			Sex:         getStr(in, "sex"),
-			Title:       getStr(in, "title"),
-			Contributor: getStr(in, "contributor"),
-			Year:        parseInt(getStr(in, "year"), 0),
-			DOI:         getStr(in, "doi"),
-			Source:      getStr(in, "source"),
-			License:     getStr(in, "license"),
-			Internal:    getStr(in, "internal"),
-			Accession:   getStr(in, "accession"),
+			Organism:               getStr(in, "organism"),
+			Tissue:                 getList(in, "tissue"),
+			CellType:               getList(in, "cell_type"),
+			Technology:             getStr(in, "technology"),
+			SuspensionType:         getStr(in, "suspension_type"),
+			Disease:                getList(in, "disease"),
+			Condition:              getList(in, "condition"),
+			Sex:                    getStr(in, "sex"),
+			Age:                    getStr(in, "age"),
+			Strain:                 getStr(in, "strain"),
+			Title:                  getStr(in, "title"),
+			Contributor:            getStr(in, "contributor"),
+			Year:                   parseInt(getStr(in, "year"), 0),
+			DOI:                    getList(in, "doi"),
+			PMID:                   getList(in, "pmid"),
+			Link:                   getList(in, "link"),
+			Source:                 getStr(in, "source"),
+			License:                getStr(in, "license"),
+			SourceDescription:      getStr(in, "source_description"),
+			Access:                 getStr(in, "access"),
+			Accession:              getStr(in, "accession"),
+			OrganismOntologyTermID: getStr(in, "organism_ontology_term_id"),
+			TissueOntologyTermID:   getList(in, "tissue_ontology_term_id"),
+			CellTypeOntologyTermID: getList(in, "cell_type_ontology_term_id"),
+			AssayOntologyTermID:    getStr(in, "assay_ontology_term_id"),
+			SexOntologyTermID:      getStr(in, "sex_ontology_term_id"),
+			DiseaseOntologyTermID:  getList(in, "disease_ontology_term_id"),
 		}
 	}
 	if hasPrefix(in, "h5ad_") {
@@ -575,12 +629,17 @@ func hasPrefix(m map[string]any, prefix string) bool {
 }
 
 // bioFieldKeys lists the bare-named Bio fields. Used by hasBioFields
-// to detect whether to instantiate the Bio block on read.
+// to detect whether to instantiate the Bio block on read. Matches the
+// schema-v2 vocabulary (joint vocabulary proposal §3.1, §3.2).
 var bioFieldKeys = []string{
-	"organism", "celltype", "technology", "preparation",
-	"tissue", "region", "disease", "sex",
-	"title", "contributor", "year", "doi", "source", "license",
-	"internal", "accession",
+	"organism", "tissue", "cell_type", "technology", "suspension_type",
+	"disease", "condition", "sex", "age", "strain",
+	"title", "contributor", "year",
+	"doi", "pmid", "link", "source", "license", "source_description",
+	"access", "accession",
+	"organism_ontology_term_id", "tissue_ontology_term_id",
+	"cell_type_ontology_term_id", "assay_ontology_term_id",
+	"sex_ontology_term_id", "disease_ontology_term_id",
 }
 
 func hasBioFields(m map[string]any) bool {

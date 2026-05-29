@@ -46,13 +46,20 @@ var listKeys = map[string]bool{
 	"tag":          true,
 	"collaborator": true,
 	// Broadly-applicable experiment metadata that's documented as a
-	// list. Bare keys, not prefixed — set e.g. `celltype=microglia,
-	// macrophage` in .env and it cascades + merges as expected. Same
-	// fields apply for non-h5ad data files when mus grows them.
-	"celltype": true,
-	"tissue":   true,
-	"region":   true,
-	"disease":  true,
+	// list (joint-vocabulary proposal §3.7). Bare keys, not prefixed —
+	// set e.g. `cell_type=microglial cell,astrocyte` in .env and it
+	// cascades + merges as expected. Same fields apply for non-h5ad
+	// data files when mus grows them.
+	"tissue":                     true,
+	"cell_type":                  true,
+	"disease":                    true,
+	"condition":                  true,
+	"doi":                        true,
+	"pmid":                       true,
+	"link":                       true,
+	"tissue_ontology_term_id":    true,
+	"cell_type_ontology_term_id": true,
+	"disease_ontology_term_id":   true,
 }
 
 func parseOpts() envformat.Options {

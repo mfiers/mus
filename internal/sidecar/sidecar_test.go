@@ -70,19 +70,19 @@ func TestH5adInfoRoundtrip(t *testing.T) {
 	in := &Doc{
 		File: FileInfo{Sha256: "abc"},
 		Bio: &Bio{
-			Organism:    "human",
-			Celltype:    []string{"microglia", "macrophage"},
-			Technology:  "10x_chromium_3p_v3",
-			Preparation: "single_nucleus",
-			Tissue:      []string{"brain"},
-			Region:      []string{"prefrontal_cortex", "hippocampus"},
-			Disease:     []string{"alzheimer"},
-			Sex:         "mixed",
-			Internal:    "no",
-			Accession:   "GSE123456",
-			DOI:         "10.1038/foo",
-			Year:        2026,
-			Contributor: "Jane",
+			Organism:       "human",
+			Tissue:         []string{"prefrontal cortex", "hippocampus"},
+			CellType:       []string{"microglial cell", "astrocyte"},
+			Technology:     "10x_chromium_3p_v3",
+			SuspensionType: "nucleus",
+			Disease:        []string{"Alzheimer disease"},
+			Sex:            "mixed",
+			Access:         "public",
+			Source:         "external",
+			Accession:      "GSE123456",
+			DOI:            []string{"10.1038/foo"},
+			Year:           2026,
+			Contributor:    "Jane",
 		},
 		H5ad: &H5ad{
 			GeneIDType:     "hgnc_symbol",
@@ -98,12 +98,15 @@ func TestH5adInfoRoundtrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(scPath)
-	// Spot-check serialisation: Bio fields are bare, H5ad fields are
-	// h5ad_-prefixed.
+	// Spot-check schema-v2 serialisation: Bio fields are bare with
+	// CellxGene-style values; H5ad fields are h5ad_-prefixed.
 	for _, want := range []string{
 		"organism=human",
-		"celltype=microglia,macrophage",
+		"cell_type=microglial cell,astrocyte",
+		"tissue=prefrontal cortex,hippocampus",
 		"technology=10x_chromium_3p_v3",
+		"suspension_type=nucleus",
+		"access=public",
 		"h5ad_n_obs=73888",
 		"h5ad_n_vars=24940",
 		"h5ad_layers=counts",
@@ -114,9 +117,9 @@ func TestH5adInfoRoundtrip(t *testing.T) {
 			t.Errorf("missing %q in:\n%s", want, raw)
 		}
 	}
-	// Confirm we DIDN'T emit the old h5ad_organism style.
-	for _, banned := range []string{"h5ad_organism", "h5ad_celltype", "h5ad_tissue"} {
-		if strings.Contains(string(raw), banned+"=") {
+	// Confirm legacy schema-v1 key shapes are gone.
+	for _, banned := range []string{"celltype=", "preparation=", "internal=", "h5ad_organism", "h5ad_celltype", "h5ad_tissue"} {
+		if strings.Contains(string(raw), banned) {
 			t.Errorf("found legacy %q key in:\n%s", banned, raw)
 		}
 	}
@@ -131,8 +134,14 @@ func TestH5adInfoRoundtrip(t *testing.T) {
 	if out.Bio.Organism != "human" {
 		t.Errorf("Bio.Organism = %q", out.Bio.Organism)
 	}
-	if len(out.Bio.Celltype) != 2 || out.Bio.Celltype[0] != "microglia" {
-		t.Errorf("Bio.Celltype = %v", out.Bio.Celltype)
+	if len(out.Bio.CellType) != 2 || out.Bio.CellType[0] != "microglial cell" {
+		t.Errorf("Bio.CellType = %v", out.Bio.CellType)
+	}
+	if out.Bio.SuspensionType != "nucleus" {
+		t.Errorf("Bio.SuspensionType = %q", out.Bio.SuspensionType)
+	}
+	if out.Bio.Access != "public" || out.Bio.Source != "external" {
+		t.Errorf("access/source roundtrip wrong: %+v", out.Bio)
 	}
 	if out.H5ad == nil {
 		t.Fatalf("H5ad block lost on read: %+v", out)
@@ -142,6 +151,39 @@ func TestH5adInfoRoundtrip(t *testing.T) {
 	}
 	if !out.H5ad.InspectedAt.Equal(now) {
 		t.Errorf("InspectedAt = %v, want %v", out.H5ad.InspectedAt, now)
+	}
+}
+
+// TestBioMONDORoundtrip exercises the quoted-list-item path: a MONDO
+// disease label with embedded commas must survive Write → Read.
+func TestBioMONDORoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	scPath := filepath.Join(dir, "x.h5ad.mus")
+	in := &Doc{
+		File: FileInfo{Sha256: "abc"},
+		Bio: &Bio{
+			Disease: []string{
+				"Alzheimer disease",
+				"leukoencephalopathy, diffuse hereditary, with spheroids 1",
+				"normal",
+			},
+		},
+	}
+	if err := Write(scPath, in); err != nil {
+		t.Fatal(err)
+	}
+	out, err := Read(scPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Bio == nil {
+		t.Fatalf("Bio block missing")
+	}
+	want := []string{"Alzheimer disease",
+		"leukoencephalopathy, diffuse hereditary, with spheroids 1",
+		"normal"}
+	if len(out.Bio.Disease) != 3 || out.Bio.Disease[1] != want[1] {
+		t.Errorf("MONDO comma-label roundtrip failed; got %v", out.Bio.Disease)
 	}
 }
 

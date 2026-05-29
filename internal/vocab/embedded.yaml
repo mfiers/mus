@@ -1,19 +1,31 @@
 # mus controlled vocabulary — canonical copy.
 #
 # This is the single source of truth for every annotation `mus`
-# validates: experiment-level metadata (organism, tissue, technology,
+# validates: experiment-level metadata (organism, tissue, cell_type,
 # …) that applies across all data formats, plus the per-format
-# required/soft field lists (h5ad is the first consumer; others will
-# follow).
+# required/soft field lists (h5ad is the first consumer).
 #
 # mus fetches the `main` version from Codeberg at runtime:
 #   https://codeberg.org/mfiers/mus/raw/branch/main/vocabulary/main.yaml
 # with a 24-hour local cache TTL. A build-time copy lives at
 # internal/vocab/embedded.yaml as the offline fallback.
 #
-# h5ad-specific structural rules (matrix dtype, layers["counts"]
-# semantics, etc.) are hard-coded in internal/h5ad/check.go — they
-# are facts about the file format, not vocabulary.
+# h5ad-format-specific structural rules (matrix dtype,
+# layers["counts"] semantics, etc.) are hard-coded in
+# internal/h5ad/check.go — they are facts about the file format, not
+# vocabulary.
+#
+# Schema v2 changes (vs v1):
+#   - bare cross-experiment keys: organism, tissue, cell_type (was
+#     celltype), technology, suspension_type (was preparation),
+#     access (was internal: yes/no), source, …
+#   - controlled values aligned with CellxGene Discover where
+#     possible: UBERON for tissue, CL for cell_type, MONDO for
+#     disease, PATO for sex
+#   - matching rule relaxed: `_` ≡ ` ` ≡ `-`, case-insensitive
+#     (see internal/vocab/vocab.go)
+#   - list items with commas can be double-quoted in the .env / sidecar
+#     storage (envformat handles this)
 #
 # When the spec changes:
 #   1. Edit this file.
@@ -26,126 +38,193 @@
 # Bump schema_version when removing or renaming keys; additions don't
 # require a bump.
 
-schema_version: 1
+schema_version: 2
 
+# Fields whose presence is mandatory for a deposit (HARD finding if
+# missing). Per the joint-vocabulary proposal §3.1.
 required:
   - organism
-  - celltype
-  - technology
-  - preparation
   - tissue
-  - internal
-  - accession
+  - cell_type
+  - technology
+  - suspension_type
+  - access
+  - source
 
+# Fields strongly recommended (SOFT warning if missing).
 soft:
+  - disease
+  - condition
+  - sex
+  - age
+  - strain
   - doi
+  - pmid
+  - accession
   - year
   - contributor
-  - region
-  - disease
-  - sex
-  - license
-  - source
   - title
+  - link
+  - license
+  - source_description
 
+# Controlled-vocabulary value lists.
+# Matched case-insensitively, AND `_` ≡ ` ` ≡ `-` (so
+# `prefrontal_cortex`, `prefrontal cortex`, `Prefrontal-Cortex` all
+# match a single entry). Any value under vocabulary control that
+# isn't in its list triggers a HARD finding regardless of whether
+# the field is in `required:` above (spec §3: "do not invent").
+#
+# Fields without a list in here are accepted as freeform strings
+# (e.g. accession, doi, age, strain, year, contributor, title, link,
+# license, source_description, condition).
 vocabulary:
 
   organism:
-    - human          # Homo sapiens
-    - mouse          # Mus musculus
-    - rat            # Rattus norvegicus
-    - macaque        # Macaca mulatta
-    - zebrafish      # Danio rerio
+    - human          # NCBITaxon:9606  — Homo sapiens
+    - mouse          # NCBITaxon:10090 — Mus musculus
+    - rat            # NCBITaxon:10116 — Rattus norvegicus
+    - macaque        # NCBITaxon:9544  — Macaca mulatta
+    - zebrafish      # NCBITaxon:7955  — Danio rerio
+    - drosophila     # NCBITaxon:7227  — Drosophila melanogaster
 
-  internal:
-    - "yes"
-    - "no"
+  access:
+    - internal
+    - public
 
-  celltype:
-    - microglia
+  source:
+    - internal
+    - external
+
+  suspension_type:
+    - cell
+    - nucleus
+    - na              # bulk, spatial, non-cellular
+
+  sex:
+    - female
+    - male
+    - unknown
+    - mixed           # per-dataset aggregator, not a per-cell label
+
+  cell_type:
+    # Cell Ontology (CL) labels — human-readable form, with spaces.
+    # CNS-resident cell families.
+    - microglial cell
     - macrophage
-    - dendritic
+    - dendritic cell
     - monocyte
     - astrocyte
     - oligodendrocyte
-    - opc
+    - oligodendrocyte precursor cell
     - neuron
-    - excitatory_neuron
-    - inhibitory_neuron
-    - endothelial
+    - excitatory neuron
+    - inhibitory neuron
+    - endothelial cell
     - pericyte
     - fibroblast
-    - ependymal
-    - vascular
-    - myeloid
-    - glia
-    - mixed
+    - ependymal cell
+    - vascular leptomeningeal cell
+    # Catch-alls — only when no finer breakdown is available.
+    - myeloid cell      # microglia + macrophage + DC + monocyte
+    - glial cell        # astrocyte + oligodendrocyte + microglia
+    - mixed             # truly heterogeneous; not a substitute for honest enumeration
 
   technology:
+    # 10x Genomics — main protocols + chemistries.
     - 10x_chromium_3p_v2
     - 10x_chromium_3p_v3
     - 10x_chromium_5p
-    - 10x_multiome
-    - 10x_chromium
-    - drop_seq
-    - smart_seq2
-    - smart_seq3
-    - cel_seq2
-    - parse_evercode
-    - bd_rhapsody
-    - mars_seq
-    - microwell_seq
-
-  preparation:
-    - whole_cell
-    - single_nucleus
-    - cultured
-    - xenograft
-    - bulk
+    - 10x_chromium             # use only when chemistry/version unknown
+    - 10x_multiome             # joint RNA + ATAC
+    - 10x_visium               # spatial — gene expression
+    - 10x_xenium               # spatial — imaging
+    # Other single-cell protocols.
+    - Smart-seq2
+    - Smart-seq3
+    - Drop-seq
+    - CEL-seq2
+    - Parse_Evercode
+    - BD_Rhapsody
+    - mars-seq
+    - microwell-seq
+    # Spatial / imaging.
+    - Slide-tags
+    - Slide-seq
+    - Slide-seqV2
+    - MERFISH
+    - CosMx
+    - Stereo-seq
+    - NovaST
+    # Non-single-cell.
+    - bulk_RNA-seq
+    - mass-spectrometry
 
   tissue:
+    # UBERON-style labels. Mostly brain-focused for now (lab scope).
+    # Extend as needed when other organs come into the catalog.
     - brain
-    - blood
-    - bone_marrow
-    - lung
-    - liver
-    - spinal_cord
-    - retina
-    - skin
-    - csf
-
-  region:
-    - prefrontal_cortex
-    - motor_cortex
-    - occipital_cortex
-    - temporal_cortex
-    - parietal_cortex
+    - cortex
+    - prefrontal cortex
+    - motor cortex
+    - occipital cortex
+    - temporal cortex
+    - parietal cortex
     - hippocampus
     - striatum
     - thalamus
+    - hypothalamus
     - cerebellum
     - midbrain
-    - substantia_nigra
-    - white_matter
-    - subventricular_zone
+    - substantia nigra
+    - white matter
+    - white matter of frontal lobe
+    - white matter of occipital lobe
+    - white matter of parietal lobe
+    - white matter of temporal lobe
+    - white matter of cerebellum
+    - cervical spinal cord white matter
+    - subventricular zone
+    - spinal cord
+    # Brodmann areas (h5adstore uses these for HBA-style annotation).
+    - Brodmann (1909) area 4
+    - Brodmann (1909) area 7
+    - Brodmann (1909) area 9
+    - Brodmann (1909) area 17
+    # Non-brain organs.
+    - blood
+    - bone marrow
+    - lung
+    - liver
+    - kidney
+    - heart
+    - retina
+    - skin
+    - csf                      # cerebrospinal fluid
 
   disease:
-    - control
-    - alzheimer
-    - parkinson
-    - amyotrophic_lateral_sclerosis
-    - multiple_sclerosis
-    - huntington
-    - frontotemporal_dementia
-    - down_syndrome
-    - autism_spectrum
+    # MONDO-style labels — human-readable, with spaces.
+    # Quoted in YAML when the value contains a literal comma.
+    - normal                   # disease-free / reference (CellxGene's term)
+    - Alzheimer disease
+    - Parkinson disease
+    - amyotrophic lateral sclerosis
+    - multiple sclerosis
+    - Huntington disease
+    - frontotemporal dementia
+    - Down syndrome
+    - autism spectrum disorder
     - schizophrenia
     - glioma
     - glioblastoma
-    - covid
-
-  sex:
-    - male
-    - female
-    - mixed
-    - unknown
+    - COVID-19
+    - viral encephalitis
+    - hippocampal sclerosis
+    - focal cortical dysplasia
+    - "leukoencephalopathy, diffuse hereditary, with spheroids 1"
+    - Aicardi-Goutières syndrome
+    - stroke disorder
+    - graft-versus-host disease
+    - experimental autoimmune encephalomyelitis
+    - epilepsy
+    - temporal lobe epilepsy

@@ -55,18 +55,20 @@ func summary(issues []Issue) []string {
 	return out
 }
 
-// A minimal, valid metadata set declared via .env (bare keys).
+// minimalEnvBody hits every joint-vocabulary required field with
+// schema-v2 names + CellxGene-aligned values.
 const minimalEnvBody = `
 organism=human
-celltype=microglia
+tissue=prefrontal cortex
+cell_type=microglial cell
 technology=10x_chromium_3p_v3
-preparation=single_nucleus
-tissue=brain
-internal=no
-accession=GSE123456
+suspension_type=nucleus
+access=internal
+source=external
 contributor=Jane <jane@example.com>
 year=2026
 doi=10.1038/foo
+accession=lab_internal_2026
 `
 
 func TestValidMetadataFromCascade(t *testing.T) {
@@ -78,8 +80,14 @@ func TestValidMetadataFromCascade(t *testing.T) {
 			t.Errorf("unexpected HARD: %s %s", i.Field, i.Message)
 		}
 	}
-	if m.Organism != "human" || len(m.Celltype) != 1 || m.Celltype[0] != "microglia" {
-		t.Errorf("not loaded cleanly: %+v", m)
+	if m.Organism != "human" {
+		t.Errorf("Organism = %q", m.Organism)
+	}
+	if len(m.CellType) != 1 || m.CellType[0] != "microglial cell" {
+		t.Errorf("CellType = %v", m.CellType)
+	}
+	if m.SuspensionType != "nucleus" {
+		t.Errorf("SuspensionType = %q", m.SuspensionType)
 	}
 }
 
@@ -87,8 +95,8 @@ func TestMissingRequiredFieldsAreHard(t *testing.T) {
 	v := mustParseEmbeddedVocab(t)
 	m := MetadataFromCascade(envFromBody(t, ""), nil, nil)
 	issues := ValidateMetadata(m, v)
-	for _, field := range []string{"organism", "celltype", "technology",
-		"preparation", "tissue", "internal", "accession"} {
+	for _, field := range []string{"organism", "tissue", "cell_type",
+		"technology", "suspension_type", "access", "source"} {
 		if findIssue(issues, SeverityHard, field) == nil {
 			t.Errorf("expected HARD for missing %q; issues=%v",
 				field, summary(issues))
@@ -100,12 +108,12 @@ func TestBadVocabValueIsHard(t *testing.T) {
 	v := mustParseEmbeddedVocab(t)
 	m := MetadataFromCascade(envFromBody(t, `
 organism=martian
-celltype=microglia
-technology=10x_chromium_3p_v3
-preparation=single_nucleus
 tissue=brain
-internal=no
-accession=GSE1
+cell_type=microglial cell
+technology=10x_chromium_3p_v3
+suspension_type=nucleus
+access=internal
+source=external
 `), nil, nil)
 	issues := ValidateMetadata(m, v)
 	if findIssue(issues, SeverityHard, "organism") == nil {
@@ -113,46 +121,63 @@ accession=GSE1
 	}
 }
 
-func TestCaseInsensitiveVocab(t *testing.T) {
+func TestRelaxedMatchingHandlesUnderscoresAndSpaces(t *testing.T) {
 	v := mustParseEmbeddedVocab(t)
+	// h5adstore-style `prefrontal cortex` with a space, and the
+	// underscored form, should both validate against the same
+	// canonical entry.
 	m := MetadataFromCascade(envFromBody(t, `
-organism=Human
-celltype=microglia
-technology=10x_chromium_3p_v3
-preparation=single_nucleus
-tissue=brain
-internal=no
-accession=GSE1
+organism=human
+tissue=prefrontal_cortex
+cell_type=microglial_cell
+technology=10x chromium 3p v3
+suspension_type=nucleus
+access=internal
+source=external
 `), nil, nil)
 	issues := ValidateMetadata(m, v)
-	if findIssue(issues, SeverityHard, "organism") != nil {
-		t.Errorf("organism=Human should pass case-insensitively; got %v", summary(issues))
+	for _, i := range issues {
+		if i.Severity == SeverityHard && (i.Field == "tissue" || i.Field == "cell_type" || i.Field == "technology") {
+			t.Errorf("relaxed-matching value should pass; got HARD on %q: %s", i.Field, i.Message)
+		}
 	}
 }
 
 func TestListKeysParseAsLists(t *testing.T) {
-	env := envFromBody(t, `celltype=microglia,macrophage`)
+	env := envFromBody(t, `cell_type=microglial cell,astrocyte`)
 	m := MetadataFromCascade(env, nil, nil)
-	if len(m.Celltype) != 2 || m.Celltype[0] != "microglia" || m.Celltype[1] != "macrophage" {
-		t.Errorf("expected [microglia macrophage], got %v", m.Celltype)
+	if len(m.CellType) != 2 || m.CellType[0] != "microglial cell" || m.CellType[1] != "astrocyte" {
+		t.Errorf("expected [microglial cell, astrocyte], got %v", m.CellType)
+	}
+}
+
+func TestQuotedListItemSurvivesCascade(t *testing.T) {
+	// MONDO label with literal commas, double-quoted in .env.
+	env := envFromBody(t, `disease="Alzheimer disease","leukoencephalopathy, diffuse hereditary, with spheroids 1",normal`)
+	m := MetadataFromCascade(env, nil, nil)
+	want := []string{"Alzheimer disease",
+		"leukoencephalopathy, diffuse hereditary, with spheroids 1",
+		"normal"}
+	if len(m.Disease) != 3 || m.Disease[1] != want[1] {
+		t.Errorf("MONDO comma-label not preserved; got %v", m.Disease)
 	}
 }
 
 func TestBioSidecarOverridesCascade(t *testing.T) {
 	env := envFromBody(t, `
 organism=mouse
-celltype=neuron
+cell_type=neuron
 `)
 	bio := &sidecar.Bio{
 		Organism: "human",
-		Celltype: []string{"microglia"},
+		CellType: []string{"microglial cell"},
 	}
 	m := MetadataFromCascade(env, bio, nil)
 	if m.Organism != "human" {
 		t.Errorf("Bio override should win; got %q", m.Organism)
 	}
-	if len(m.Celltype) != 1 || m.Celltype[0] != "microglia" {
-		t.Errorf("Bio override list should win; got %v", m.Celltype)
+	if len(m.CellType) != 1 || m.CellType[0] != "microglial cell" {
+		t.Errorf("Bio override list should win; got %v", m.CellType)
 	}
 }
 
@@ -201,38 +226,43 @@ func TestPublicIDPattern(t *testing.T) {
 	}
 }
 
-func TestInternalNoNeedsPublicID(t *testing.T) {
+// TestPublicAccessNeedsPublicID — schema v2 renamed
+// `internal: no` → `access: public`. A public-access deposit should
+// have a recognised public ID; freeform internal labels are SOFT.
+func TestPublicAccessNeedsPublicID(t *testing.T) {
 	v := mustParseEmbeddedVocab(t)
 	m := MetadataFromCascade(envFromBody(t, `
 organism=human
-celltype=microglia
-technology=10x_chromium_3p_v3
-preparation=single_nucleus
 tissue=brain
-internal=no
+cell_type=microglial cell
+technology=10x_chromium_3p_v3
+suspension_type=nucleus
+access=public
+source=external
 accession=my_lab_2026_pilot
 `), nil, nil)
 	issues := ValidateMetadata(m, v)
 	if findIssue(issues, SeveritySoft, "accession") == nil {
-		t.Errorf("internal=no + non-public accession should SOFT-warn; got %v",
+		t.Errorf("access=public + non-public accession should SOFT-warn; got %v",
 			summary(issues))
 	}
 }
 
-func TestInternalYesAllowsFreeformAccession(t *testing.T) {
+func TestInternalAccessAllowsFreeformAccession(t *testing.T) {
 	v := mustParseEmbeddedVocab(t)
 	m := MetadataFromCascade(envFromBody(t, `
 organism=human
-celltype=microglia
-technology=10x_chromium_3p_v3
-preparation=single_nucleus
 tissue=brain
-internal=yes
+cell_type=microglial cell
+technology=10x_chromium_3p_v3
+suspension_type=nucleus
+access=internal
+source=internal
 accession=lab_2026_AD_microglia_v1
 `), nil, nil)
 	issues := ValidateMetadata(m, v)
 	if findIssue(issues, SeveritySoft, "accession") != nil {
-		t.Errorf("internal=yes should allow freeform accession; got %v", summary(issues))
+		t.Errorf("access=internal should allow freeform accession; got %v", summary(issues))
 	}
 }
 

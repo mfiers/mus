@@ -84,21 +84,54 @@ func (v *Vocabulary) AllowedValues(field string) []string {
 }
 
 // ValueAllowed reports whether `value` matches one of the allowed
-// values for `field`. Case-insensitive; underscores in stored values
-// are NOT collapsed with spaces — the spec is explicit on this.
-// Returns true if the field has no controlled vocabulary.
+// values for `field`. Case-insensitive, AND `_` ≡ ` ` ≡ `-` (so
+// `prefrontal_cortex`, `prefrontal cortex`, and `Prefrontal-Cortex`
+// all match a single canonical entry). Returns true if the field
+// has no controlled vocabulary.
+//
+// Rationale: existing depositors used either form; locking to one
+// is friction without payoff. The ontology-ID companion (when set)
+// is the strict-match backstop.
 func (v *Vocabulary) ValueAllowed(field, value string) bool {
 	allowed := v.AllowedValues(field)
 	if allowed == nil {
 		return true
 	}
-	value = strings.ToLower(strings.TrimSpace(value))
+	value = normalizeForMatch(value)
 	for _, a := range allowed {
-		if strings.ToLower(a) == value {
+		if normalizeForMatch(a) == value {
 			return true
 		}
 	}
 	return false
+}
+
+// normalizeForMatch lower-cases s, trims surrounding whitespace, and
+// collapses `_`, `-`, and runs of internal whitespace into a single
+// space. Two values normalise to the same canonical form iff
+// ValueAllowed considers them equivalent.
+func normalizeForMatch(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	// First replace _ and - with a single space, then collapse
+	// runs of whitespace.
+	var b strings.Builder
+	prevSpace := false
+	for _, r := range s {
+		switch r {
+		case '_', '-':
+			r = ' '
+		}
+		if r == ' ' || r == '\t' {
+			if !prevSpace {
+				b.WriteByte(' ')
+			}
+			prevSpace = true
+			continue
+		}
+		b.WriteRune(r)
+		prevSpace = false
+	}
+	return b.String()
 }
 
 // Embedded returns the build-time vocabulary directly, without any
@@ -117,6 +150,9 @@ func Parse(raw []byte) (*Vocabulary, error) {
 	}
 	if v.SchemaVersion < 1 {
 		return nil, fmt.Errorf("vocabulary YAML: schema_version must be ≥ 1 (got %d)", v.SchemaVersion)
+	}
+	if v.SchemaVersion > 2 {
+		return nil, fmt.Errorf("vocabulary YAML: schema_version %d not supported by this mus binary (max: 2)", v.SchemaVersion)
 	}
 	if len(v.Required) == 0 {
 		return nil, fmt.Errorf("vocabulary YAML: required list is empty")

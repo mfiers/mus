@@ -25,45 +25,62 @@ import (
 	"codeberg.org/mfiers/mus/internal/vocab"
 )
 
-// Metadata mirrors the §4 template. Everything in the user-supplied
-// fields layer is what comes from `.env` + sidecar; check.go layers
-// in inspection-derived fields after.
+// Metadata mirrors the joint-vocabulary proposal §3.1 / §3.2. Bare
+// fields come from the .env cascade + sidecar Bio block; check.go
+// layers in inspection-derived fields after.
 type Metadata struct {
-	// Biology
-	Organism    string
-	Celltype    []string
-	Technology  string
-	Preparation string
-	Tissue      []string
-	Region      []string
-	Disease     []string
-	Sex         string
+	// Biology (CellxGene-aligned, schema v2).
+	Organism       string
+	Tissue         []string // UBERON labels
+	CellType       []string // CL labels
+	Technology     string   // protocol/chemistry
+	SuspensionType string   // cell / nucleus / na
+	Disease        []string // MONDO labels
+	Condition      []string // freeform
+	Sex            string
+	Age            string // freeform with unit: 87y, 18m, P30
+	Strain         string
 
-	// Provenance
-	Internal    string // "yes" / "no"
-	Accession   string
-	DOI         string
-	Source      string
-	License     string
-	Year        int
-	Contributor string
-	Title       string
-	Sha256      string // user-declared sha256 (soft cross-check vs the file)
+	// Provenance.
+	Title             string
+	Contributor       string
+	Year              int
+	DOI               []string
+	PMID              []string
+	Link              []string
+	Source            string // internal / external
+	License           string
+	SourceDescription string
 
-	// File contents (some user-declared, some inspector-overwritten)
+	// Deposit status.
+	Access    string // internal / public
+	Accession string
+
+	// User-declared file shape (cross-checked against inspector).
 	NCells     int
 	NGenes     int
 	GeneIDType string
-	Embeddings []string
+	Sha256     string
+
+	// Optional ontology IDs (not validated today; recorded).
+	OrganismOntologyTermID string
+	TissueOntologyTermID   []string
+	CellTypeOntologyTermID []string
+	AssayOntologyTermID    string
+	SexOntologyTermID      string
+	DiseaseOntologyTermID  []string
 
 	Notes string
 }
 
 // MetadataFromCascade builds a Metadata by reading bare experiment
-// keys from the .env cascade (organism, celltype, technology, …)
-// plus the h5ad-specific keys (h5ad_gene_id_type, h5ad_n_cells, …),
-// then applying per-file overrides from the sidecar's Bio + H5ad
-// blocks.
+// keys from the .env cascade (organism, tissue, cell_type, …) plus
+// the h5ad-specific keys (h5ad_gene_id_type, h5ad_n_cells, …), then
+// applying per-file overrides from the sidecar's Bio + H5ad blocks.
+//
+// Sidecar lists always REPLACE the cascade list for that key (the
+// sidecar is per-file authority). To merge, set both at the right
+// cascade depth.
 //
 // Either argument may be nil — that just contributes nothing.
 func MetadataFromCascade(env *config.Env, bio *sidecar.Bio, h5 *sidecar.H5ad) *Metadata {
@@ -71,23 +88,35 @@ func MetadataFromCascade(env *config.Env, bio *sidecar.Bio, h5 *sidecar.H5ad) *M
 	// Layer 1a: cascade — bare keys (broadly applicable).
 	if env != nil {
 		m.Organism = env.String("organism")
-		m.Celltype = env.List("celltype")
-		m.Technology = env.String("technology")
-		m.Preparation = env.String("preparation")
 		m.Tissue = env.List("tissue")
-		m.Region = env.List("region")
+		m.CellType = env.List("cell_type")
+		m.Technology = env.String("technology")
+		m.SuspensionType = env.String("suspension_type")
 		m.Disease = env.List("disease")
+		m.Condition = env.List("condition")
 		m.Sex = env.String("sex")
+		m.Age = env.String("age")
+		m.Strain = env.String("strain")
 
 		m.Title = env.String("title")
 		m.Contributor = env.String("contributor")
 		m.Year = atoiOrZero(env.String("year"))
-		m.DOI = env.String("doi")
+		m.DOI = env.List("doi")
+		m.PMID = env.List("pmid")
+		m.Link = env.List("link")
 		m.Source = env.String("source")
 		m.License = env.String("license")
+		m.SourceDescription = env.String("source_description")
 
-		m.Internal = env.String("internal")
+		m.Access = env.String("access")
 		m.Accession = env.String("accession")
+
+		m.OrganismOntologyTermID = env.String("organism_ontology_term_id")
+		m.TissueOntologyTermID = env.List("tissue_ontology_term_id")
+		m.CellTypeOntologyTermID = env.List("cell_type_ontology_term_id")
+		m.AssayOntologyTermID = env.String("assay_ontology_term_id")
+		m.SexOntologyTermID = env.String("sex_ontology_term_id")
+		m.DiseaseOntologyTermID = env.List("disease_ontology_term_id")
 
 		// Layer 1b: cascade — h5ad-specific keys.
 		m.NCells = atoiOrZero(env.String("h5ad_n_cells"))
@@ -95,31 +124,37 @@ func MetadataFromCascade(env *config.Env, bio *sidecar.Bio, h5 *sidecar.H5ad) *M
 		m.GeneIDType = env.String("h5ad_gene_id_type")
 		m.Sha256 = env.String("h5ad_sha256")
 	}
-	// Layer 2a: sidecar Bio override.
+	// Layer 2a: sidecar Bio override — non-empty wins per field.
 	if bio != nil {
 		if bio.Organism != "" {
 			m.Organism = bio.Organism
 		}
-		if len(bio.Celltype) > 0 {
-			m.Celltype = append([]string(nil), bio.Celltype...)
+		if len(bio.Tissue) > 0 {
+			m.Tissue = append([]string(nil), bio.Tissue...)
+		}
+		if len(bio.CellType) > 0 {
+			m.CellType = append([]string(nil), bio.CellType...)
 		}
 		if bio.Technology != "" {
 			m.Technology = bio.Technology
 		}
-		if bio.Preparation != "" {
-			m.Preparation = bio.Preparation
-		}
-		if len(bio.Tissue) > 0 {
-			m.Tissue = append([]string(nil), bio.Tissue...)
-		}
-		if len(bio.Region) > 0 {
-			m.Region = append([]string(nil), bio.Region...)
+		if bio.SuspensionType != "" {
+			m.SuspensionType = bio.SuspensionType
 		}
 		if len(bio.Disease) > 0 {
 			m.Disease = append([]string(nil), bio.Disease...)
 		}
+		if len(bio.Condition) > 0 {
+			m.Condition = append([]string(nil), bio.Condition...)
+		}
 		if bio.Sex != "" {
 			m.Sex = bio.Sex
+		}
+		if bio.Age != "" {
+			m.Age = bio.Age
+		}
+		if bio.Strain != "" {
+			m.Strain = bio.Strain
 		}
 		if bio.Title != "" {
 			m.Title = bio.Title
@@ -130,8 +165,14 @@ func MetadataFromCascade(env *config.Env, bio *sidecar.Bio, h5 *sidecar.H5ad) *M
 		if bio.Year != 0 {
 			m.Year = bio.Year
 		}
-		if bio.DOI != "" {
-			m.DOI = bio.DOI
+		if len(bio.DOI) > 0 {
+			m.DOI = append([]string(nil), bio.DOI...)
+		}
+		if len(bio.PMID) > 0 {
+			m.PMID = append([]string(nil), bio.PMID...)
+		}
+		if len(bio.Link) > 0 {
+			m.Link = append([]string(nil), bio.Link...)
 		}
 		if bio.Source != "" {
 			m.Source = bio.Source
@@ -139,11 +180,32 @@ func MetadataFromCascade(env *config.Env, bio *sidecar.Bio, h5 *sidecar.H5ad) *M
 		if bio.License != "" {
 			m.License = bio.License
 		}
-		if bio.Internal != "" {
-			m.Internal = bio.Internal
+		if bio.SourceDescription != "" {
+			m.SourceDescription = bio.SourceDescription
+		}
+		if bio.Access != "" {
+			m.Access = bio.Access
 		}
 		if bio.Accession != "" {
 			m.Accession = bio.Accession
+		}
+		if bio.OrganismOntologyTermID != "" {
+			m.OrganismOntologyTermID = bio.OrganismOntologyTermID
+		}
+		if len(bio.TissueOntologyTermID) > 0 {
+			m.TissueOntologyTermID = append([]string(nil), bio.TissueOntologyTermID...)
+		}
+		if len(bio.CellTypeOntologyTermID) > 0 {
+			m.CellTypeOntologyTermID = append([]string(nil), bio.CellTypeOntologyTermID...)
+		}
+		if bio.AssayOntologyTermID != "" {
+			m.AssayOntologyTermID = bio.AssayOntologyTermID
+		}
+		if bio.SexOntologyTermID != "" {
+			m.SexOntologyTermID = bio.SexOntologyTermID
+		}
+		if len(bio.DiseaseOntologyTermID) > 0 {
+			m.DiseaseOntologyTermID = append([]string(nil), bio.DiseaseOntologyTermID...)
 		}
 	}
 	// Layer 2b: sidecar H5ad override (file-shape facts).
@@ -252,14 +314,16 @@ func ValidateMetadata(m *Metadata, v *vocab.Vocabulary) []Issue {
 		}
 	}
 
-	// internal / accession consistency.
-	if m.Internal != "" && strings.EqualFold(m.Internal, "no") {
+	// access / accession consistency: `access: public` means the
+	// dataset is in a public DB; the accession should look like a
+	// known public ID. `access: internal` allows freeform.
+	if m.Access != "" && strings.EqualFold(m.Access, "public") {
 		if m.Accession != "" && !looksPublicID(m.Accession) {
 			issues = append(issues, Issue{
 				Severity: SeveritySoft,
 				Field:    "accession",
 				Message: fmt.Sprintf(
-					"internal=no but accession=%q does not look like a public ID "+
+					"access=public but accession=%q does not look like a public ID "+
 						"(GSE/SRA/PRJ/phs/EGA/Zenodo/DOI)",
 					m.Accession),
 			})
@@ -267,7 +331,7 @@ func ValidateMetadata(m *Metadata, v *vocab.Vocabulary) []Issue {
 	}
 
 	// Soft provenance recommendations.
-	if m.DOI == "" {
+	if len(m.DOI) == 0 {
 		issues = append(issues, Issue{
 			Severity: SeveritySoft,
 			Field:    "doi",
@@ -304,30 +368,40 @@ func fieldPresent(m *Metadata, name string) bool {
 		return m.Year != 0
 	case "organism":
 		return m.Organism != ""
-	case "celltype":
-		return len(m.Celltype) > 0
-	case "technology":
-		return m.Technology != ""
-	case "preparation":
-		return m.Preparation != ""
 	case "tissue":
 		return len(m.Tissue) > 0
-	case "region":
-		return len(m.Region) > 0
+	case "cell_type":
+		return len(m.CellType) > 0
+	case "technology":
+		return m.Technology != ""
+	case "suspension_type":
+		return m.SuspensionType != ""
 	case "disease":
 		return len(m.Disease) > 0
+	case "condition":
+		return len(m.Condition) > 0
 	case "sex":
 		return m.Sex != ""
-	case "internal":
-		return m.Internal != ""
+	case "age":
+		return m.Age != ""
+	case "strain":
+		return m.Strain != ""
+	case "access":
+		return m.Access != ""
+	case "source":
+		return m.Source != ""
 	case "accession":
 		return m.Accession != ""
 	case "doi":
-		return m.DOI != ""
-	case "source":
-		return m.Source != ""
+		return len(m.DOI) > 0
+	case "pmid":
+		return len(m.PMID) > 0
+	case "link":
+		return len(m.Link) > 0
 	case "license":
 		return m.License != ""
+	case "source_description":
+		return m.SourceDescription != ""
 	}
 	return false
 }
@@ -336,15 +410,15 @@ func fieldPresent(m *Metadata, name string) bool {
 // under controlled-vocabulary check.
 func fieldValues(m *Metadata) map[string][]string {
 	return map[string][]string{
-		"organism":    {m.Organism},
-		"celltype":    m.Celltype,
-		"technology":  {m.Technology},
-		"preparation": {m.Preparation},
-		"tissue":      m.Tissue,
-		"region":      m.Region,
-		"disease":     m.Disease,
-		"sex":         {m.Sex},
-		"internal":    {m.Internal},
+		"organism":        {m.Organism},
+		"tissue":          m.Tissue,
+		"cell_type":       m.CellType,
+		"technology":      {m.Technology},
+		"suspension_type": {m.SuspensionType},
+		"disease":         m.Disease,
+		"sex":             {m.Sex},
+		"access":          {m.Access},
+		"source":          {m.Source},
 	}
 }
 
