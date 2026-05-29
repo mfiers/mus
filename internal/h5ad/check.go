@@ -1,12 +1,11 @@
 package h5ad
 
-// Orchestrator: combines the YAML metadata validator (metadata.go),
-// the h5ad structural inspector (inspect.go), and the cross-
-// consistency checks into a single tiered Report.
+// Orchestrator: combines the cascade/sidecar-derived Metadata, the
+// h5ad structural inspector (inspect.go), and the cross-consistency
+// checks into a single tiered Report.
 //
 // Structural §1.1–§1.4 rules are hard-coded here — they are facts
-// about a valid scRNA-seq deposit, not vocabulary. Findings get
-// classified HARD / SOFT / INFO and surfaced together.
+// about a valid scRNA-seq deposit, not vocabulary.
 
 import (
 	"context"
@@ -16,48 +15,13 @@ import (
 	"strings"
 )
 
-// MetadataYAMLSuffix is the convention: a deposit ships
-// `<base>.h5ad` + `<base>.metadata.yaml` side by side.
-const MetadataYAMLSuffix = ".metadata.yaml"
-
-// MetadataPathFor returns the canonical sibling-YAML path given
-// either an h5ad path or a YAML path. Works in both directions so
-// `mus s3 inspect mydata.h5ad` and `mus s3 inspect mydata.metadata.yaml`
-// both find the pair.
-func MetadataPathFor(p string) string {
-	low := strings.ToLower(p)
-	switch {
-	case strings.HasSuffix(low, MetadataYAMLSuffix):
-		return p
-	case strings.HasSuffix(low, ".h5ad"):
-		return p[:len(p)-len(".h5ad")] + MetadataYAMLSuffix
-	default:
-		return p + MetadataYAMLSuffix
-	}
-}
-
-// H5adPathFor is the symmetric helper: given either file in the pair,
-// return the path of the .h5ad partner.
-func H5adPathFor(p string) string {
-	low := strings.ToLower(p)
-	switch {
-	case strings.HasSuffix(low, MetadataYAMLSuffix):
-		return p[:len(p)-len(MetadataYAMLSuffix)] + ".h5ad"
-	case strings.HasSuffix(low, ".h5ad"):
-		return p
-	default:
-		return p + ".h5ad"
-	}
-}
-
 // Report is the combined finding list plus the inputs that produced
 // it (handy for CLI display and sidecar writes).
 type Report struct {
-	Issues       []Issue
-	H5adPath     string
-	MetadataPath string
-	Metadata     *Metadata
-	Inspection   *InspectionReport
+	Issues     []Issue
+	H5adPath   string
+	Metadata   *Metadata
+	Inspection *InspectionReport
 }
 
 // Hard returns the HARD findings.
@@ -83,48 +47,37 @@ func (r *Report) filter(s Severity) []Issue {
 	return out
 }
 
-// CheckOptions are the dependencies RunChecks needs.
+// CheckOptions are the dependencies RunChecks needs. The Metadata is
+// built by the caller from the cascade + sidecar (use
+// MetadataFromCascade) — keeps RunChecks free of I/O concerns.
 type CheckOptions struct {
 	Inspector     Inspector // production: PythonInspector{}; tests: StubInspector{}
 	Vocabulary    *Vocabulary
+	Metadata      *Metadata
 	ComputeSha256 func(path string) (string, error) // optional; nil → skip sha256 cross-check
 }
 
-// RunChecks validates the file pair at `pathHint` (either the .h5ad
-// or the .metadata.yaml). Returns a Report carrying every finding and
-// the inputs that produced them. Always returns a Report — even on
-// inspector failure, the report records what went wrong via a HARD
-// Issue.
-func RunChecks(ctx context.Context, pathHint string, opts CheckOptions) (*Report, error) {
-	h5adPath := H5adPathFor(pathHint)
-	metaPath := MetadataPathFor(pathHint)
-	r := &Report{H5adPath: h5adPath, MetadataPath: metaPath}
+// RunChecks validates the .h5ad at `h5adPath` against the spec.
+// Always returns a Report — inspector failures surface as HARD Issues
+// rather than Go errors so CLI display is uniform.
+func RunChecks(ctx context.Context, h5adPath string, opts CheckOptions) (*Report, error) {
+	r := &Report{H5adPath: h5adPath, Metadata: opts.Metadata}
 
-	// 1. Extension check (cheap; doesn't need the inspector).
+	// 1. Extension check (cheap).
 	if !strings.HasSuffix(filepath.Base(h5adPath), ".h5ad") {
 		r.Issues = append(r.Issues, Issue{
 			Severity: SeverityHard,
 			Field:    "file",
-			Message:  fmt.Sprintf("h5ad path %q must end in lowercase .h5ad (spec §1.4)", h5adPath),
+			Message:  fmt.Sprintf("path %q must end in lowercase .h5ad (spec §1.4)", h5adPath),
 		})
 	}
 
-	// 2. Metadata YAML — must exist + parse + validate.
-	meta, err := LoadMetadata(metaPath)
-	if err != nil {
-		r.Issues = append(r.Issues, Issue{
-			Severity: SeverityHard,
-			Field:    "metadata",
-			Message:  fmt.Sprintf("sibling %s missing or unreadable: %v", MetadataYAMLSuffix, err),
-		})
-	} else {
-		r.Metadata = meta
-		if opts.Vocabulary != nil {
-			r.Issues = append(r.Issues, ValidateMetadata(meta, opts.Vocabulary)...)
-		}
+	// 2. Metadata validation against the vocabulary.
+	if opts.Metadata != nil && opts.Vocabulary != nil {
+		r.Issues = append(r.Issues, ValidateMetadata(opts.Metadata, opts.Vocabulary)...)
 	}
 
-	// 3. Inspector (Python helper or test stub) — the structural side.
+	// 3. Inspector — the structural side.
 	if opts.Inspector == nil {
 		r.Issues = append(r.Issues, Issue{
 			Severity: SeverityHard,
@@ -145,20 +98,25 @@ func RunChecks(ctx context.Context, pathHint string, opts CheckOptions) (*Report
 	r.Inspection = report
 	r.Issues = append(r.Issues, structuralChecks(report)...)
 
-	// 4. Cross-consistency between YAML and inspection.
-	if meta != nil {
-		r.Issues = append(r.Issues, crossChecks(meta, report, h5adPath, opts.ComputeSha256)...)
+	// 4. Cross-consistency between user-declared and inspector findings.
+	if opts.Metadata != nil {
+		r.Issues = append(r.Issues, crossChecks(opts.Metadata, report, h5adPath, opts.ComputeSha256)...)
 	}
 
-	// 5. Soft heuristic: gene-symbol style.
-	if meta != nil {
-		r.Issues = append(r.Issues, geneSymbolHeuristic(meta, report)...)
+	// 5. §2.1 gene-symbol heuristic.
+	r.Issues = append(r.Issues, geneSymbolHeuristic(report)...)
+
+	// 6. §1.2 — embedding present in the FILE (not just declared).
+	if !report.Obsm.HasUMAP && !report.Obsm.HasTSNE {
+		// already covered by structuralChecks; this is the
+		// authoritative source — user-declared embeddings can't
+		// substitute for the actual file contents.
 	}
 
 	return r, nil
 }
 
-// --- Structural §1.1–§1.4 rules ---------------------------------------------
+// --- Structural §1.1–§1.4 rules --------------------------------------------
 
 func structuralChecks(rep *InspectionReport) []Issue {
 	var issues []Issue
@@ -266,7 +224,7 @@ func structuralChecks(rep *InspectionReport) []Issue {
 	return issues
 }
 
-// --- Cross-consistency YAML ⇄ inspection ----------------------------------
+// --- Cross-consistency: user-declared ⇄ inspection -------------------------
 
 func crossChecks(meta *Metadata, rep *InspectionReport,
 	h5adPath string, computeSha func(string) (string, error)) []Issue {
@@ -276,19 +234,19 @@ func crossChecks(meta *Metadata, rep *InspectionReport,
 	if meta.NCells > 0 && int64(meta.NCells) != rep.NObs {
 		issues = append(issues, Issue{
 			Severity: SeverityHard, Field: "n_cells",
-			Message: fmt.Sprintf("metadata.n_cells=%d but actual h5ad has %d cells",
+			Message: fmt.Sprintf("declared n_cells=%d but actual h5ad has %d cells",
 				meta.NCells, rep.NObs),
 		})
 	}
 	if meta.NGenes > 0 && int64(meta.NGenes) != rep.NVars {
 		issues = append(issues, Issue{
 			Severity: SeverityHard, Field: "n_genes",
-			Message: fmt.Sprintf("metadata.n_genes=%d but actual h5ad has %d genes",
+			Message: fmt.Sprintf("declared n_genes=%d but actual h5ad has %d genes",
 				meta.NGenes, rep.NVars),
 		})
 	}
 	// sha256 cross-check is SOFT per spec (§4). Only computed when the
-	// caller wires a computer — keeps the validator cheap by default.
+	// caller wires a computer.
 	if meta.Sha256 != "" && computeSha != nil {
 		actual, err := computeSha(h5adPath)
 		if err != nil {
@@ -300,7 +258,7 @@ func crossChecks(meta *Metadata, rep *InspectionReport,
 		} else if !strings.EqualFold(actual, meta.Sha256) {
 			issues = append(issues, Issue{
 				Severity: SeveritySoft, Field: "sha256",
-				Message: fmt.Sprintf("metadata.sha256=%s but file sha256=%s",
+				Message: fmt.Sprintf("declared sha256=%s but file sha256=%s",
 					meta.Sha256, actual),
 			})
 		}
@@ -310,13 +268,10 @@ func crossChecks(meta *Metadata, rep *InspectionReport,
 
 // --- §2.1 gene-symbol heuristic --------------------------------------------
 
-// Ensembl-ID shapes for the organisms in the vocabulary. If >5% of
-// the var_names sample looks like Ensembl IDs and the declared
-// organism canonicalises to symbols (HGNC/MGI), warn that the user
-// should remap before deposit.
+// Ensembl-ID shapes (ENSG, ENSMUSG, ENSRNOG, etc.).
 var ensemblPattern = regexp.MustCompile(`^ENS[A-Z]{0,4}G\d{6,}(?:\.\d+)?$`)
 
-func geneSymbolHeuristic(meta *Metadata, rep *InspectionReport) []Issue {
+func geneSymbolHeuristic(rep *InspectionReport) []Issue {
 	if len(rep.VarNamesSample) == 0 {
 		return nil
 	}

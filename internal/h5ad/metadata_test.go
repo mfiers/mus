@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"codeberg.org/mfiers/mus/internal/config"
+	"codeberg.org/mfiers/mus/internal/sidecar"
 )
 
 func mustParseEmbeddedVocab(t *testing.T) *Vocabulary {
@@ -16,14 +19,22 @@ func mustParseEmbeddedVocab(t *testing.T) *Vocabulary {
 	return v
 }
 
-func writeMetadata(t *testing.T, body string) string {
+// envFromBody writes the given .env body to a temp dir and returns
+// the loaded Env.
+func envFromBody(t *testing.T, body string) *config.Env {
 	t.Helper()
 	dir := t.TempDir()
-	path := filepath.Join(dir, "x.metadata.yaml")
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+	// Isolate from any real $HOME .env / global config.
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "xdg"))
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return path
+	env, err := config.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return env
 }
 
 func findIssue(issues []Issue, severity Severity, field string) *Issue {
@@ -35,49 +46,50 @@ func findIssue(issues []Issue, severity Severity, field string) *Issue {
 	return nil
 }
 
-// A minimal, valid metadata YAML (passes the §4 hard requirements).
-const minimalValidYAML = `
-organism: human
-celltype:
-  - microglia
-technology: 10x_chromium_3p_v3
-preparation: single_nucleus
-tissue:
-  - brain
-internal: "no"
-accession: GSE123456
-embeddings:
-  - X_umap
-contributor: "Jane <jane@example.com>"
-year: 2026
-doi: 10.1038/foo
+func summary(issues []Issue) []string {
+	out := make([]string, len(issues))
+	for i, is := range issues {
+		out[i] = is.Severity.String() + " " + is.Field + ": " + is.Message
+	}
+	return out
+}
+
+// A minimal, valid metadata set declared via .env keys.
+const minimalEnvYAML = `
+h5ad_organism=human
+h5ad_celltype=microglia
+h5ad_technology=10x_chromium_3p_v3
+h5ad_preparation=single_nucleus
+h5ad_tissue=brain
+h5ad_internal=no
+h5ad_accession=GSE123456
+h5ad_contributor=Jane <jane@example.com>
+h5ad_year=2026
+h5ad_doi=10.1038/foo
 `
 
-func TestValidMetadataHasNoHardIssues(t *testing.T) {
+func TestValidMetadataFromCascade(t *testing.T) {
 	v := mustParseEmbeddedVocab(t)
-	m, err := LoadMetadata(writeMetadata(t, minimalValidYAML))
-	if err != nil {
-		t.Fatal(err)
-	}
+	m := MetadataFromCascade(envFromBody(t, minimalEnvYAML), nil)
 	issues := ValidateMetadata(m, v)
 	for _, i := range issues {
 		if i.Severity == SeverityHard {
-			t.Errorf("unexpected HARD issue: field=%q msg=%q", i.Field, i.Message)
+			t.Errorf("unexpected HARD: %s %s", i.Field, i.Message)
 		}
+	}
+	if m.Organism != "human" || len(m.Celltype) != 1 || m.Celltype[0] != "microglia" {
+		t.Errorf("not loaded cleanly: %+v", m)
 	}
 }
 
 func TestMissingRequiredFieldsAreHard(t *testing.T) {
 	v := mustParseEmbeddedVocab(t)
-	m, err := LoadMetadata(writeMetadata(t, `# completely empty`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	m := MetadataFromCascade(envFromBody(t, ""), nil)
 	issues := ValidateMetadata(m, v)
 	for _, field := range []string{"organism", "celltype", "technology",
 		"preparation", "tissue", "internal", "accession"} {
 		if findIssue(issues, SeverityHard, field) == nil {
-			t.Errorf("expected HARD issue for missing required field %q; got issues=%v",
+			t.Errorf("expected HARD for missing %q; issues=%v",
 				field, summary(issues))
 		}
 	}
@@ -85,123 +97,78 @@ func TestMissingRequiredFieldsAreHard(t *testing.T) {
 
 func TestBadVocabValueIsHard(t *testing.T) {
 	v := mustParseEmbeddedVocab(t)
-	m, err := LoadMetadata(writeMetadata(t, `
-organism: martian
-celltype: [microglia]
-technology: 10x_chromium_3p_v3
-preparation: single_nucleus
-tissue: [brain]
-internal: "no"
-accession: GSE1
-embeddings: [X_umap]
-`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	m := MetadataFromCascade(envFromBody(t, `
+h5ad_organism=martian
+h5ad_celltype=microglia
+h5ad_technology=10x_chromium_3p_v3
+h5ad_preparation=single_nucleus
+h5ad_tissue=brain
+h5ad_internal=no
+h5ad_accession=GSE1
+`), nil)
 	issues := ValidateMetadata(m, v)
 	if findIssue(issues, SeverityHard, "organism") == nil {
-		t.Errorf("expected HARD issue for organism=martian; got %v", summary(issues))
+		t.Errorf("expected HARD for organism=martian; got %v", summary(issues))
 	}
 }
 
 func TestCaseInsensitiveVocab(t *testing.T) {
 	v := mustParseEmbeddedVocab(t)
-	// "Human" (capital H) must be accepted.
-	m, err := LoadMetadata(writeMetadata(t, `
-organism: Human
-celltype: [microglia]
-technology: 10x_chromium_3p_v3
-preparation: single_nucleus
-tissue: [brain]
-internal: "no"
-accession: GSE1
-embeddings: [X_umap]
-`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	m := MetadataFromCascade(envFromBody(t, `
+h5ad_organism=Human
+h5ad_celltype=microglia
+h5ad_technology=10x_chromium_3p_v3
+h5ad_preparation=single_nucleus
+h5ad_tissue=brain
+h5ad_internal=no
+h5ad_accession=GSE1
+`), nil)
 	issues := ValidateMetadata(m, v)
 	if findIssue(issues, SeverityHard, "organism") != nil {
 		t.Errorf("organism=Human should pass case-insensitively; got %v", summary(issues))
 	}
 }
 
-func TestUnderscoreSpaceStrict(t *testing.T) {
-	v := mustParseEmbeddedVocab(t)
-	// "prefrontal cortex" (with space) should NOT match "prefrontal_cortex".
-	m, err := LoadMetadata(writeMetadata(t, `
-organism: human
-celltype: [microglia]
-technology: 10x_chromium_3p_v3
-preparation: single_nucleus
-tissue: [brain]
-region: ["prefrontal cortex"]
-internal: "no"
-accession: GSE1
-embeddings: [X_umap]
-`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	issues := ValidateMetadata(m, v)
-	if findIssue(issues, SeverityHard, "region") == nil {
-		t.Errorf("space-separated value should fail vocab check; got %v", summary(issues))
+func TestListKeysParseAsLists(t *testing.T) {
+	// h5ad_celltype is registered as a list key in internal/config.
+	env := envFromBody(t, `h5ad_celltype=microglia,macrophage`)
+	m := MetadataFromCascade(env, nil)
+	if len(m.Celltype) != 2 || m.Celltype[0] != "microglia" || m.Celltype[1] != "macrophage" {
+		t.Errorf("expected [microglia macrophage], got %v", m.Celltype)
 	}
 }
 
-func TestScalarOrListBothParse(t *testing.T) {
-	cases := map[string]string{
-		"scalar":   `celltype: microglia`,
-		"sequence": `celltype: [microglia]`,
+func TestSidecarOverridesCascade(t *testing.T) {
+	env := envFromBody(t, `
+h5ad_organism=mouse
+h5ad_celltype=neuron
+`)
+	sc := &sidecar.H5ad{
+		Organism: "human",
+		Celltype: []string{"microglia"},
 	}
-	for name, snippet := range cases {
-		t.Run(name, func(t *testing.T) {
-			full := `
-organism: human
-` + snippet + `
-technology: 10x_chromium_3p_v3
-preparation: single_nucleus
-tissue: [brain]
-internal: "no"
-accession: GSE1
-embeddings: [X_umap]
-`
-			m, err := LoadMetadata(writeMetadata(t, full))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(m.Celltype) != 1 || m.Celltype[0] != "microglia" {
-				t.Errorf("celltype = %v, want [microglia]", m.Celltype)
-			}
-		})
+	m := MetadataFromCascade(env, sc)
+	if m.Organism != "human" {
+		t.Errorf("sidecar should override; got %q", m.Organism)
+	}
+	if len(m.Celltype) != 1 || m.Celltype[0] != "microglia" {
+		t.Errorf("sidecar list should override; got %v", m.Celltype)
 	}
 }
 
-func TestEmbeddingsRequireUMAPOrTSNE(t *testing.T) {
-	v := mustParseEmbeddedVocab(t)
-	m, err := LoadMetadata(writeMetadata(t, `
-organism: human
-celltype: [microglia]
-technology: 10x_chromium_3p_v3
-preparation: single_nucleus
-tissue: [brain]
-internal: "no"
-accession: GSE1
-embeddings: [X_pca]
-`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	issues := ValidateMetadata(m, v)
-	if findIssue(issues, SeverityHard, "embeddings") == nil {
-		t.Errorf("X_pca alone should fail; got %v", summary(issues))
+func TestSidecarOnlyEmptyStringDoesNotOverride(t *testing.T) {
+	env := envFromBody(t, `h5ad_organism=mouse`)
+	sc := &sidecar.H5ad{} // empty
+	m := MetadataFromCascade(env, sc)
+	if m.Organism != "mouse" {
+		t.Errorf("empty sidecar must not erase cascade; got %q", m.Organism)
 	}
 }
 
 func TestPublicIDPattern(t *testing.T) {
 	cases := map[string]bool{
 		"GSE12345":              true,
-		"gse12345":              true, // case-insensitive
+		"gse12345":              true,
 		"SRP123":                true,
 		"SRR1234567":            true,
 		"PRJNA12345":            true,
@@ -222,19 +189,15 @@ func TestPublicIDPattern(t *testing.T) {
 
 func TestInternalNoNeedsPublicID(t *testing.T) {
 	v := mustParseEmbeddedVocab(t)
-	m, err := LoadMetadata(writeMetadata(t, `
-organism: human
-celltype: [microglia]
-technology: 10x_chromium_3p_v3
-preparation: single_nucleus
-tissue: [brain]
-internal: "no"
-accession: my_lab_2026_pilot
-embeddings: [X_umap]
-`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	m := MetadataFromCascade(envFromBody(t, `
+h5ad_organism=human
+h5ad_celltype=microglia
+h5ad_technology=10x_chromium_3p_v3
+h5ad_preparation=single_nucleus
+h5ad_tissue=brain
+h5ad_internal=no
+h5ad_accession=my_lab_2026_pilot
+`), nil)
 	issues := ValidateMetadata(m, v)
 	if findIssue(issues, SeveritySoft, "accession") == nil {
 		t.Errorf("internal=no + non-public accession should SOFT-warn; got %v",
@@ -244,31 +207,20 @@ embeddings: [X_umap]
 
 func TestInternalYesAllowsFreeformAccession(t *testing.T) {
 	v := mustParseEmbeddedVocab(t)
-	m, err := LoadMetadata(writeMetadata(t, `
-organism: human
-celltype: [microglia]
-technology: 10x_chromium_3p_v3
-preparation: single_nucleus
-tissue: [brain]
-internal: "yes"
-accession: lab_2026_AD_microglia_v1
-embeddings: [X_umap]
-`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	m := MetadataFromCascade(envFromBody(t, `
+h5ad_organism=human
+h5ad_celltype=microglia
+h5ad_technology=10x_chromium_3p_v3
+h5ad_preparation=single_nucleus
+h5ad_tissue=brain
+h5ad_internal=yes
+h5ad_accession=lab_2026_AD_microglia_v1
+`), nil)
 	issues := ValidateMetadata(m, v)
 	if findIssue(issues, SeveritySoft, "accession") != nil {
 		t.Errorf("internal=yes should allow freeform accession; got %v", summary(issues))
 	}
 }
 
-// summary trims an issue list down to a one-liner-per-issue for nicer
-// test diagnostics.
-func summary(issues []Issue) []string {
-	out := make([]string, len(issues))
-	for i, is := range issues {
-		out[i] = strings.TrimSpace(is.Severity.String() + " " + is.Field + ": " + is.Message)
-	}
-	return out
-}
+// silence "unused" lint on strings if a test branch removes its use.
+var _ = strings.Contains

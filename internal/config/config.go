@@ -45,6 +45,13 @@ func GlobalPath() string {
 var listKeys = map[string]bool{
 	"tag":          true,
 	"collaborator": true,
+	// h5ad ingestion-spec metadata fields that are documented as lists.
+	// Set e.g. `h5ad_celltype=microglia,macrophage` in .env and it
+	// cascades + merges as expected.
+	"h5ad_celltype": true,
+	"h5ad_tissue":   true,
+	"h5ad_region":   true,
+	"h5ad_disease":  true,
 }
 
 func parseOpts() envformat.Options {

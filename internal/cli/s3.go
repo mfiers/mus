@@ -9,6 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"path/filepath"
+
+	"codeberg.org/mfiers/mus/internal/config"
 	"codeberg.org/mfiers/mus/internal/h5ad"
 	"codeberg.org/mfiers/mus/internal/hashcache"
 	"codeberg.org/mfiers/mus/internal/sidecar"
@@ -163,22 +166,41 @@ func shortSha(s string) string {
 }
 
 // runH5adInspection is the shared inspection entry point used by both
-// `mus s3 inspect` and the `mus check` h5ad-freshness post-pass.
+// `mus s3 inspect` (legacy) and the `mus check` h5ad-freshness
+// post-pass. `h5adPath` MUST point at the data file (.h5ad), not a
+// sidecar — callers resolve before calling.
+//
 // Streams the Python inspector's progress to cmd's stderr live.
 // Caller decides what to do with the returned Report — print it,
 // stamp the sidecar, both, or just inspect the HasHard() flag.
 func runH5adInspection(cmd *cobra.Command, cache *hashcache.Cache,
-	pathHint string) (*h5ad.Report, error) {
+	h5adPath string) (*h5ad.Report, error) {
 
+	// 1. Vocabulary (HTTPS → cache → embedded).
 	vocabRes, err := h5ad.Load(cmd.Context(), h5ad.LoadOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("load vocabulary: %w", err)
 	}
+
+	// 2. Metadata from cascade (.env walked up from the h5ad's dir)
+	//    + the data file's existing sidecar H5ad block (if any).
+	dir := filepath.Dir(h5adPath)
+	env, err := config.Load(dir)
+	if err != nil {
+		return nil, fmt.Errorf("load cascade for %s: %w", dir, err)
+	}
+	var sc *sidecar.H5ad
+	if doc, err := readMaybe(sidecar.SidecarPath(h5adPath)); err == nil && doc != nil {
+		sc = doc.H5ad
+	}
+	meta := h5ad.MetadataFromCascade(env, sc)
+
 	insp := h5ad.NewPythonInspector()
 	insp.ProgressOut = cmd.ErrOrStderr()
-	return h5ad.RunChecks(cmd.Context(), pathHint, h5ad.CheckOptions{
+	return h5ad.RunChecks(cmd.Context(), h5adPath, h5ad.CheckOptions{
 		Inspector:  insp,
 		Vocabulary: vocabRes.Vocabulary,
+		Metadata:   meta,
 		ComputeSha256: func(p string) (string, error) {
 			return cache.Sum(p)
 		},

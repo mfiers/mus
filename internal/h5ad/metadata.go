@@ -1,107 +1,162 @@
 package h5ad
 
-// Metadata YAML parser + validator.
+// Metadata source: cascading .env + per-file sidecar overrides.
 //
-// Each .h5ad deposit ships with a sibling <basename>.metadata.yaml
-// (spec §1.5, §4). This file parses it into a Metadata struct, applies
-// the required-field check + controlled-vocabulary check, and surfaces
-// findings as Issues that the orchestrator (check.go) sorts into HARD
-// vs SOFT tiers.
+// The H5AD ingestion spec (§4) lists the metadata an h5ad deposit
+// must carry. mus does NOT use the sibling YAML the spec describes —
+// instead it sources the same fields from the existing mus cascade
+// (project-wide values in .env, file-specific in <file>.h5ad.mus).
+//
+// Resolution order (lowest → highest precedence):
+//
+//   1. .env cascade  (h5ad_organism / h5ad_celltype / …)  → project defaults
+//   2. sidecar H5ad{} block                               → per-file override
+//
+// Inspection-derived fields (n_obs, n_vars, layers, …) come from the
+// Python inspector and are layered in by check.go, not here.
 
 import (
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"codeberg.org/mfiers/mus/internal/config"
+	"codeberg.org/mfiers/mus/internal/sidecar"
 )
 
-// Metadata mirrors the §4 template. Each field is yaml-tagged. List
-// fields use flexList so a scalar (`celltype: microglia`) or a list
-// (`celltype: [microglia, macrophage]`) both parse cleanly — users get
-// the scalar form wrong often enough that silent-tolerate is kinder
-// than refusing to read the file.
+// Metadata mirrors the §4 template. Everything in the user-supplied
+// fields layer is what comes from `.env` + sidecar; check.go layers
+// in inspection-derived fields after.
 type Metadata struct {
-	// Identity
-	Title       string `yaml:"title"`
-	Contributor string `yaml:"contributor"`
-	Year        int    `yaml:"year"`
-	Date        string `yaml:"date"`
-
 	// Biology
-	Organism    string   `yaml:"organism"`
-	Celltype    flexList `yaml:"celltype"`
-	Technology  string   `yaml:"technology"`
-	Preparation string   `yaml:"preparation"`
-	Tissue      flexList `yaml:"tissue"`
-	Region      flexList `yaml:"region"`
-	Disease     flexList `yaml:"disease"`
-	Sex         string   `yaml:"sex"`
+	Organism    string
+	Celltype    []string
+	Technology  string
+	Preparation string
+	Tissue      []string
+	Region      []string
+	Disease     []string
+	Sex         string
 
 	// Provenance
-	Internal  string `yaml:"internal"`
-	Accession string `yaml:"accession"`
-	DOI       string `yaml:"doi"`
-	Source    string `yaml:"source"`
-	License   string `yaml:"license"`
-	Sha256    string `yaml:"sha256"`
+	Internal    string // "yes" / "no"
+	Accession   string
+	DOI         string
+	Source      string
+	License     string
+	Year        int
+	Contributor string
+	Title       string
+	Sha256      string // user-declared sha256 (soft cross-check vs the file)
 
-	// File contents
-	NCells     int    `yaml:"n_cells"`
-	NGenes     int    `yaml:"n_genes"`
-	GeneIDType string `yaml:"gene_id_type"`
-	Expression struct {
-		XLayer      string `yaml:"X_layer"`
-		CountsLayer string `yaml:"counts_layer"`
-	} `yaml:"expression"`
-	Embeddings []string `yaml:"embeddings"`
+	// File contents (some user-declared, some inspector-overwritten)
+	NCells     int
+	NGenes     int
+	GeneIDType string
+	Embeddings []string
 
-	Notes string `yaml:"notes"`
+	Notes string
 }
 
-// flexList accepts either a YAML scalar or a YAML sequence; both
-// surface as a []string on the Go side.
-type flexList []string
+// MetadataFromCascade builds a Metadata by reading the h5ad_* keys
+// from the .env cascade, then applying any per-file overrides from
+// the sidecar's H5ad{} block.
+//
+// Either argument may be nil — that just contributes nothing.
+func MetadataFromCascade(env *config.Env, sc *sidecar.H5ad) *Metadata {
+	m := &Metadata{}
+	// Layer 1: cascade.
+	if env != nil {
+		m.Organism = env.String("h5ad_organism")
+		m.Celltype = env.List("h5ad_celltype")
+		m.Technology = env.String("h5ad_technology")
+		m.Preparation = env.String("h5ad_preparation")
+		m.Tissue = env.List("h5ad_tissue")
+		m.Region = env.List("h5ad_region")
+		m.Disease = env.List("h5ad_disease")
+		m.Sex = env.String("h5ad_sex")
 
-func (l *flexList) UnmarshalYAML(node *yaml.Node) error {
-	if node.Kind == yaml.ScalarNode {
-		// "celltype: microglia" → ["microglia"]
-		if node.Value == "" {
-			*l = nil
-			return nil
-		}
-		*l = []string{node.Value}
-		return nil
+		m.Internal = env.String("h5ad_internal")
+		m.Accession = env.String("h5ad_accession")
+		m.DOI = env.String("h5ad_doi")
+		m.Source = env.String("h5ad_source")
+		m.License = env.String("h5ad_license")
+		m.Year = atoiOrZero(env.String("h5ad_year"))
+		m.Contributor = env.String("h5ad_contributor")
+		m.Title = env.String("h5ad_title")
+		m.Sha256 = env.String("h5ad_sha256")
+
+		m.NCells = atoiOrZero(env.String("h5ad_n_cells"))
+		m.NGenes = atoiOrZero(env.String("h5ad_n_genes"))
+		m.GeneIDType = env.String("h5ad_gene_id_type")
+		m.Notes = env.String("h5ad_notes")
 	}
-	if node.Kind == yaml.SequenceNode {
-		out := make([]string, 0, len(node.Content))
-		for _, item := range node.Content {
-			if item.Kind != yaml.ScalarNode {
-				return fmt.Errorf("expected string list, got non-scalar item")
-			}
-			out = append(out, item.Value)
+	// Layer 2: sidecar overrides — only when set.
+	if sc != nil {
+		if sc.Organism != "" {
+			m.Organism = sc.Organism
 		}
-		*l = out
-		return nil
+		if len(sc.Celltype) > 0 {
+			m.Celltype = append([]string(nil), sc.Celltype...)
+		}
+		if sc.Technology != "" {
+			m.Technology = sc.Technology
+		}
+		if sc.Preparation != "" {
+			m.Preparation = sc.Preparation
+		}
+		if len(sc.Tissue) > 0 {
+			m.Tissue = append([]string(nil), sc.Tissue...)
+		}
+		if len(sc.Region) > 0 {
+			m.Region = append([]string(nil), sc.Region...)
+		}
+		if len(sc.Disease) > 0 {
+			m.Disease = append([]string(nil), sc.Disease...)
+		}
+		if sc.Sex != "" {
+			m.Sex = sc.Sex
+		}
+		if sc.Internal != "" {
+			m.Internal = sc.Internal
+		}
+		if sc.Accession != "" {
+			m.Accession = sc.Accession
+		}
+		if sc.DOI != "" {
+			m.DOI = sc.DOI
+		}
+		if sc.Year != 0 {
+			m.Year = sc.Year
+		}
+		if sc.Contributor != "" {
+			m.Contributor = sc.Contributor
+		}
+		if sc.GeneIDType != "" {
+			m.GeneIDType = sc.GeneIDType
+		}
+		if sc.NObs > 0 {
+			m.NCells = int(sc.NObs)
+		}
+		if sc.NVars > 0 {
+			m.NGenes = int(sc.NVars)
+		}
 	}
-	return fmt.Errorf("expected scalar or sequence, got node kind %d", node.Kind)
+	return m
 }
 
-// LoadMetadata reads, parses, and structurally validates the sibling
-// metadata file at path. Returns the parsed Metadata + a list of
-// PARSE-time issues (malformed YAML, unknown keys, etc.). Semantic
-// validation (required fields, vocab) belongs to ValidateMetadata.
-func LoadMetadata(path string) (*Metadata, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read metadata yaml %s: %w", path, err)
+func atoiOrZero(s string) int {
+	if s == "" {
+		return 0
 	}
-	var m Metadata
-	if err := yaml.Unmarshal(raw, &m); err != nil {
-		return nil, fmt.Errorf("parse metadata yaml %s: %w", path, err)
+	var n int
+	for _, ch := range s {
+		if ch < '0' || ch > '9' {
+			return 0
+		}
+		n = n*10 + int(ch-'0')
 	}
-	return &m, nil
+	return n
 }
 
 // Severity classifies a validation issue.
@@ -131,38 +186,36 @@ type Issue struct {
 	Message  string
 }
 
-// ValidateMetadata runs the YAML-side checks: required fields present,
-// controlled-vocab values match, internal/accession consistent,
-// embeddings list includes X_umap or X_tsne. Cross-consistency with
-// the h5ad inspection report (n_cells / n_genes / sha256 mirroring) is
-// done separately in check.go, since that needs an InspectionReport.
+// ValidateMetadata runs the user-side checks: required fields present
+// (sourced from .env cascade + sidecar), controlled-vocab values
+// match, internal/accession consistent, provenance-soft warnings.
+// Cross-consistency with the h5ad inspection report (n_cells /
+// n_genes / sha256) is in check.go.
 func ValidateMetadata(m *Metadata, v *Vocabulary) []Issue {
 	if m == nil {
 		return []Issue{{
 			Severity: SeverityHard,
-			Message:  "metadata is nil — file not loaded",
+			Message:  "metadata is nil — internal error",
 		}}
 	}
 	var issues []Issue
 
 	// Required-field presence.
-	required := map[string]bool{}
-	for _, f := range v.Required {
-		required[f] = true
-	}
 	for _, f := range v.Required {
 		if !fieldPresent(m, f) {
 			issues = append(issues, Issue{
 				Severity: SeverityHard,
 				Field:    f,
-				Message:  fmt.Sprintf("required field %q is missing or empty", f),
+				Message: fmt.Sprintf(
+					"required field %q is missing — set h5ad_%s=… in .env "+
+						"(project-wide) or in <file>.h5ad.mus (file-specific)",
+					f, f),
 			})
 		}
 	}
 
-	// Controlled-vocabulary value checks. Per spec §3 these are HARD
-	// regardless of whether the FIELD is required: bad values for an
-	// optional field are still a deposit failure ("do not invent").
+	// Controlled-vocabulary value checks. HARD whether the field is
+	// required or not — spec §3: "do not invent".
 	for field, values := range fieldValues(m) {
 		if v.AllowedValues(field) == nil {
 			continue
@@ -193,26 +246,6 @@ func ValidateMetadata(m *Metadata, v *Vocabulary) []Issue {
 					"internal=no but accession=%q does not look like a public ID "+
 						"(GSE/SRA/PRJ/phs/EGA/Zenodo/DOI)",
 					m.Accession),
-			})
-		}
-	}
-
-	// embeddings must include X_umap or X_tsne (spec §1.2 + §4).
-	if required["embeddings"] || len(m.Embeddings) > 0 {
-		hasUMAP, hasTSNE := false, false
-		for _, e := range m.Embeddings {
-			switch e {
-			case "X_umap":
-				hasUMAP = true
-			case "X_tsne":
-				hasTSNE = true
-			}
-		}
-		if !hasUMAP && !hasTSNE {
-			issues = append(issues, Issue{
-				Severity: SeverityHard,
-				Field:    "embeddings",
-				Message:  "embeddings list must include X_umap or X_tsne (spec §1.2)",
 			})
 		}
 	}
@@ -279,24 +312,21 @@ func fieldPresent(m *Metadata, name string) bool {
 		return m.Source != ""
 	case "license":
 		return m.License != ""
-	case "embeddings":
-		return len(m.Embeddings) > 0
 	}
 	return false
 }
 
 // fieldValues returns the set of (field → values) pairs that are
-// under controlled-vocabulary check. List fields surface their full
-// list; scalar fields surface a single-element slice.
+// under controlled-vocabulary check.
 func fieldValues(m *Metadata) map[string][]string {
 	return map[string][]string{
 		"organism":    {m.Organism},
-		"celltype":    []string(m.Celltype),
+		"celltype":    m.Celltype,
 		"technology":  {m.Technology},
 		"preparation": {m.Preparation},
-		"tissue":      []string(m.Tissue),
-		"region":      []string(m.Region),
-		"disease":     []string(m.Disease),
+		"tissue":      m.Tissue,
+		"region":      m.Region,
+		"disease":     m.Disease,
 		"sex":         {m.Sex},
 		"internal":    {m.Internal},
 	}
