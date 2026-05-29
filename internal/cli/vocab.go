@@ -66,7 +66,22 @@ func runVocab(cmd *cobra.Command, refresh bool) error {
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		fmt.Fprintf(stdout, "%-12s %s\n", k+":", strings.Join(res.Vocabulary.Vocab[k], ", "))
+		fmt.Fprintf(stdout, "%-16s %s\n", k+":", joinVocabValues(res.Vocabulary.Vocab[k]))
 	}
 	return nil
+}
+
+// joinVocabValues renders a list of vocabulary values for display.
+// Items containing commas are double-quoted so the user can tell
+// where one label ends and the next begins.
+func joinVocabValues(vals []string) string {
+	parts := make([]string, len(vals))
+	for i, v := range vals {
+		if strings.ContainsRune(v, ',') {
+			parts[i] = `"` + v + `"`
+		} else {
+			parts[i] = v
+		}
+	}
+	return strings.Join(parts, ", ")
 }
