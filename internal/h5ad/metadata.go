@@ -22,6 +22,7 @@ import (
 
 	"codeberg.org/mfiers/mus/internal/config"
 	"codeberg.org/mfiers/mus/internal/sidecar"
+	"codeberg.org/mfiers/mus/internal/vocab"
 )
 
 // Metadata mirrors the §4 template. Everything in the user-supplied
@@ -206,7 +207,7 @@ type Issue struct {
 // match, internal/accession consistent, provenance-soft warnings.
 // Cross-consistency with the h5ad inspection report (n_cells /
 // n_genes / sha256) is in check.go.
-func ValidateMetadata(m *Metadata, v *Vocabulary) []Issue {
+func ValidateMetadata(m *Metadata, v *vocab.Vocabulary) []Issue {
 	if m == nil {
 		return []Issue{{
 			Severity: SeverityHard,

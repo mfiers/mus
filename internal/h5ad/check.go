@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"codeberg.org/mfiers/mus/internal/vocab"
 )
 
 // Report is the combined finding list plus the inputs that produced
@@ -52,7 +54,7 @@ func (r *Report) filter(s Severity) []Issue {
 // MetadataFromCascade) — keeps RunChecks free of I/O concerns.
 type CheckOptions struct {
 	Inspector     Inspector // production: PythonInspector{}; tests: StubInspector{}
-	Vocabulary    *Vocabulary
+	Vocabulary    *vocab.Vocabulary
 	Metadata      *Metadata
 	ComputeSha256 func(path string) (string, error) // optional; nil → skip sha256 cross-check
 }

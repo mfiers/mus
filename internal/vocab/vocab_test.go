@@ -1,4 +1,4 @@
-package h5ad
+package vocab
 
 import (
 	"bytes"
@@ -13,7 +13,7 @@ import (
 )
 
 func TestEmbeddedVocabularyParses(t *testing.T) {
-	v, err := ParseVocabulary(embeddedYAML)
+	v, err := Parse(embeddedYAML)
 	if err != nil {
 		t.Fatalf("embedded vocabulary failed to parse: %v", err)
 	}
@@ -34,18 +34,18 @@ func TestEmbeddedVocabularyParses(t *testing.T) {
 }
 
 // TestEmbeddedAndCanonicalAreIdentical pins the no-drift invariant:
-// vocabulary/h5ad.yaml at the repo root and the build-time
-// vocabulary_embedded.yaml MUST be byte-equal. If you edit the
+// vocabulary/main.yaml at the repo root and the build-time
+// internal/vocab/embedded.yaml MUST be byte-equal. If you edit the
 // canonical, run `make sync-vocab` (or just copy the file).
 func TestEmbeddedAndCanonicalAreIdentical(t *testing.T) {
-	canonical, err := os.ReadFile("../../vocabulary/h5ad.yaml")
+	canonical, err := os.ReadFile("../../vocabulary/main.yaml")
 	if err != nil {
 		t.Fatalf("read canonical: %v", err)
 	}
 	if !bytes.Equal(canonical, embeddedYAML) {
-		t.Fatal("vocabulary/h5ad.yaml and internal/h5ad/vocabulary_embedded.yaml " +
-			"differ — run `make sync-vocab` (or `cp vocabulary/h5ad.yaml " +
-			"internal/h5ad/vocabulary_embedded.yaml`).")
+		t.Fatal("vocabulary/main.yaml and internal/vocab/embedded.yaml " +
+			"differ — run `make sync-vocab` (or `cp vocabulary/main.yaml " +
+			"internal/vocab/embedded.yaml`).")
 	}
 }
 
@@ -76,7 +76,7 @@ func TestValueAllowed(t *testing.T) {
 	}
 }
 
-func TestParseVocabularyRejectsBadSchema(t *testing.T) {
+func TestParseRejectsBadSchema(t *testing.T) {
 	cases := map[string]string{
 		"missing schema_version": "required: [organism]\nvocabulary: {organism: [human]}\n",
 		"empty required":         "schema_version: 1\nrequired: []\nvocabulary: {organism: [human]}\n",
@@ -84,7 +84,7 @@ func TestParseVocabularyRejectsBadSchema(t *testing.T) {
 	}
 	for name, raw := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, err := ParseVocabulary([]byte(raw)); err == nil {
+			if _, err := Parse([]byte(raw)); err == nil {
 				t.Errorf("expected error for %s", name)
 			}
 		})

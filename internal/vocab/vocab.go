@@ -1,17 +1,16 @@
-// Package h5ad implements the sanity checks defined in the anthive
-// H5AD ingestion spec (doc/H5AD_INGESTION_SPEC.md). It validates both
-// the structure of the .h5ad file (via an embedded Python inspector
-// that uses anndata) and metadata declared by the user (via the
-// `.env` cascade + per-file sidecar) against a controlled vocabulary
-// served from this repo on Codeberg.
+// Package vocab loads and validates the lab's controlled vocabulary.
 //
-// This file: the vocabulary itself — controlled-value lists plus the
-// required/soft field partitioning. The canonical source lives at
-// https://codeberg.org/mfiers/mus/raw/branch/main/vocabulary/h5ad.yaml
-// and is mirrored locally at vocabulary_embedded.yaml for the
-// offline / first-run fallback. The two files are kept byte-identical
-// by a sync test.
-package h5ad
+// One canonical file at vocabulary/main.yaml in this repo defines
+// the controlled value lists (organism, celltype, technology, …)
+// and per-format required/soft field profiles. mus fetches the
+// `main` version over HTTPS at runtime (with a 24h-cached local
+// copy at ~/.local/share/mus/h5ad_vocabulary.yaml) and falls back
+// to an embedded build-time mirror when the network is unreachable.
+//
+// The vocabulary is data-format-agnostic: h5ad is the first
+// consumer, but any future mus tool validating annotations reads
+// from the same single source.
+package vocab
 
 import (
 	"context"
@@ -32,9 +31,9 @@ import (
 // design — see CLAUDE.md "Things deliberately NOT done".
 const CacheTTL = 24 * time.Hour
 
-// DefaultVocabURL is the public HTTPS URL serving the on-main copy of
-// vocabulary/h5ad.yaml. Overridable via LoadOptions.URL for tests.
-const DefaultVocabURL = "https://codeberg.org/mfiers/mus/raw/branch/main/vocabulary/h5ad.yaml"
+// DefaultURL is the public HTTPS URL serving the on-main copy of
+// vocabulary/main.yaml. Overridable via LoadOptions.URL for tests.
+const DefaultURL = "https://codeberg.org/mfiers/mus/raw/branch/main/vocabulary/main.yaml"
 
 // LocalCachePath returns the user-level cache file where mus stores
 // the most recently downloaded vocabulary. Same XDG conventions as
@@ -51,9 +50,9 @@ func LocalCachePath() string {
 }
 
 // embeddedYAML is the build-time fallback. Identical to
-// vocabulary/h5ad.yaml at the repo root (sync enforced by test).
+// vocabulary/main.yaml at the repo root (sync enforced by test).
 //
-//go:embed vocabulary_embedded.yaml
+//go:embed embedded.yaml
 var embeddedYAML []byte
 
 // Vocabulary holds the controlled-value lists plus the
@@ -102,10 +101,16 @@ func (v *Vocabulary) ValueAllowed(field, value string) bool {
 	return false
 }
 
-// ParseVocabulary unmarshals YAML bytes into a Vocabulary, applying
-// minimal sanity checks (schema_version positive, at least one field
-// in required).
-func ParseVocabulary(raw []byte) (*Vocabulary, error) {
+// Embedded returns the build-time vocabulary directly, without any
+// network/cache work. Handy for tests and `mus vocab --embedded`.
+func Embedded() (*Vocabulary, error) {
+	return Parse(embeddedYAML)
+}
+
+// Parse unmarshals YAML bytes into a Vocabulary, applying minimal
+// sanity checks (schema_version positive, at least one field in
+// required).
+func Parse(raw []byte) (*Vocabulary, error) {
 	v := &Vocabulary{}
 	if err := yaml.Unmarshal(raw, v); err != nil {
 		return nil, fmt.Errorf("parse vocabulary YAML: %w", err)
@@ -122,7 +127,7 @@ func ParseVocabulary(raw []byte) (*Vocabulary, error) {
 // LoadOptions configures Load. Tests override URL and HTTPClient to
 // point at an httptest.Server.
 type LoadOptions struct {
-	URL         string       // "" → DefaultVocabURL
+	URL         string       // "" → DefaultURL
 	HTTPClient  *http.Client // nil → default with 30s timeout
 	CachePath   string       // "" → LocalCachePath()
 	Now         func() time.Time
@@ -156,7 +161,7 @@ func Load(ctx context.Context, opts LoadOptions) (*LoadResult, error) {
 	}
 	url := opts.URL
 	if url == "" {
-		url = DefaultVocabURL
+		url = DefaultURL
 	}
 
 	// 1. Cache freshness check (skip if --ignore-cache).
@@ -166,7 +171,7 @@ func Load(ctx context.Context, opts LoadOptions) (*LoadResult, error) {
 			if age < CacheTTL {
 				raw, err := os.ReadFile(cachePath)
 				if err == nil {
-					vocab, err := ParseVocabulary(raw)
+					vocab, err := Parse(raw)
 					if err == nil {
 						res.Vocabulary = vocab
 						res.Source = "cache"
@@ -203,7 +208,7 @@ func Load(ctx context.Context, opts LoadOptions) (*LoadResult, error) {
 	//    from a previous run.
 	if cachePath != "" {
 		if raw, err := os.ReadFile(cachePath); err == nil {
-			if vocab, err := ParseVocabulary(raw); err == nil {
+			if vocab, err := Parse(raw); err == nil {
 				res.Vocabulary = vocab
 				res.Source = "cache"
 				res.Path = cachePath
@@ -215,7 +220,7 @@ func Load(ctx context.Context, opts LoadOptions) (*LoadResult, error) {
 	}
 
 	// 4. Embedded fallback.
-	vocab, err := ParseVocabulary(embeddedYAML)
+	vocab, err := Parse(embeddedYAML)
 	if err != nil {
 		return nil, fmt.Errorf("embedded vocabulary corrupt: %w", err)
 	}
@@ -249,7 +254,7 @@ func pullFromURL(ctx context.Context, client *http.Client,
 	if err != nil {
 		return nil, nil, fmt.Errorf("read body: %w", err)
 	}
-	vocab, err := ParseVocabulary(raw)
+	vocab, err := Parse(raw)
 	if err != nil {
 		return nil, nil, err
 	}

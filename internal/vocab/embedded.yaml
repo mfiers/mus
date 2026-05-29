@@ -1,22 +1,27 @@
-# h5ad ingestion vocabulary — canonical copy.
+# mus controlled vocabulary — canonical copy.
 #
-# Source of truth for `mus h5ad check`. mus fetches the `main` version
-# from Codeberg at runtime:
-#   https://codeberg.org/mfiers/mus/raw/branch/main/vocabulary/h5ad.yaml
+# This is the single source of truth for every annotation `mus`
+# validates: experiment-level metadata (organism, tissue, technology,
+# …) that applies across all data formats, plus the per-format
+# required/soft field lists (h5ad is the first consumer; others will
+# follow).
+#
+# mus fetches the `main` version from Codeberg at runtime:
+#   https://codeberg.org/mfiers/mus/raw/branch/main/vocabulary/main.yaml
 # with a 24-hour local cache TTL. A build-time copy lives at
-# internal/h5ad/vocabulary_embedded.yaml as the offline fallback.
+# internal/vocab/embedded.yaml as the offline fallback.
 #
-# Distilled from /data/1/users/mark/anthive4/doc/H5AD_INGESTION_SPEC.md
-# (§3 controlled values + §4 required/soft field partition).
+# h5ad-specific structural rules (matrix dtype, layers["counts"]
+# semantics, etc.) are hard-coded in internal/h5ad/check.go — they
+# are facts about the file format, not vocabulary.
 #
 # When the spec changes:
 #   1. Edit this file.
-#   2. Run `make sync-vocab` (copies into internal/h5ad/) — the
-#      `internal/h5ad` sync test fails otherwise.
+#   2. Run `make sync-vocab` (copies into internal/vocab/) — the
+#      sync test fails otherwise.
 #   3. Commit and push to main on Codeberg.
-#   4. Every mus user picks up the new version on their next
-#      `mus h5ad check` (or `mus h5ad vocab --refresh` to bypass the
-#      24-hour TTL).
+#   4. Every mus user picks up the new version on their next run
+#      (`mus vocab --refresh` to bypass the 24-hour TTL).
 #
 # Bump schema_version when removing or renaming keys; additions don't
 # require a bump.

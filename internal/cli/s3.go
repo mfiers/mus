@@ -6,15 +6,15 @@ package cli
 import (
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
-
-	"path/filepath"
 
 	"codeberg.org/mfiers/mus/internal/config"
 	"codeberg.org/mfiers/mus/internal/h5ad"
 	"codeberg.org/mfiers/mus/internal/hashcache"
 	"codeberg.org/mfiers/mus/internal/sidecar"
+	"codeberg.org/mfiers/mus/internal/vocab"
 	"github.com/spf13/cobra"
 )
 
@@ -24,11 +24,12 @@ func newS3Cmd() *cobra.Command {
 		Use:   "s3",
 		Short: "S3 deposit pipeline for .h5ad files (sanity checks + upload)",
 		Long: "First-class commands today:\n" +
-			"  mus s3 inspect FILE  — run the anthive ingestion-spec sanity checks\n" +
-			"  mus s3 vocab         — inspect the active controlled vocabulary\n\n" +
-			"`mus s3 login` / `check` / `upload` are not wired yet — Phase 2.",
+			"  mus s3 inspect FILE  — run the anthive ingestion-spec sanity checks\n\n" +
+			"`mus s3 login` / `check` / `upload` are not wired yet — Phase 2.\n" +
+			"The controlled vocabulary previously at `mus s3 vocab` has been\n" +
+			"promoted to a top-level `mus vocab` command.",
 	}
-	cmd.AddCommand(newS3InspectCmd(), newS3VocabCmd(), newS3UploadStubCmd())
+	cmd.AddCommand(newS3InspectCmd(), newS3UploadStubCmd())
 	return cmd
 }
 
@@ -177,7 +178,7 @@ func runH5adInspection(cmd *cobra.Command, cache *hashcache.Cache,
 	h5adPath string) (*h5ad.Report, error) {
 
 	// 1. Vocabulary (HTTPS → cache → embedded).
-	vocabRes, err := h5ad.Load(cmd.Context(), h5ad.LoadOptions{})
+	vocabRes, err := vocab.Load(cmd.Context(), vocab.LoadOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("load vocabulary: %w", err)
 	}
@@ -276,68 +277,6 @@ func hasAnyBio(m *h5ad.Metadata) bool {
 		m.Contributor != "" || m.Year != 0 || m.DOI != "" ||
 		m.Source != "" || m.License != "" || m.Internal != "" ||
 		m.Accession != ""
-}
-
-// --- mus s3 vocab ----------------------------------------------------------
-
-func newS3VocabCmd() *cobra.Command {
-	var refresh bool
-	cmd := &cobra.Command{
-		Use:   "vocab",
-		Short: "show the active controlled vocabulary (source + lists)",
-		Long: "Prints which vocabulary mus is using (iRODS / local cache / embedded\n" +
-			"fallback) and the controlled-value lists from §3 of the ingestion spec.\n\n" +
-			"With --refresh, ignores the local cache and forces an iRODS re-pull.",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runS3Vocab(cmd, refresh)
-		},
-	}
-	cmd.Flags().BoolVar(&refresh, "refresh", false,
-		"force re-pull from iRODS (ignore the 24h local cache TTL)")
-	return cmd
-}
-
-func runS3Vocab(cmd *cobra.Command, refresh bool) error {
-	res, err := h5ad.Load(cmd.Context(), h5ad.LoadOptions{
-		IgnoreCache: refresh,
-	})
-	if err != nil {
-		return err
-	}
-	stdout := cmd.OutOrStdout()
-	fmt.Fprintf(stdout, "source: %s\n", res.Source)
-	if res.Path != "" {
-		fmt.Fprintf(stdout, "path:   %s\n", res.Path)
-	}
-	for _, w := range res.Warnings {
-		fmt.Fprintf(stdout, "warn:   %s\n", w)
-	}
-	fmt.Fprintf(stdout, "schema_version: %d\n\n", res.Vocabulary.SchemaVersion)
-	fmt.Fprintf(stdout, "required: %s\n", strings.Join(res.Vocabulary.Required, ", "))
-	if len(res.Vocabulary.Soft) > 0 {
-		fmt.Fprintf(stdout, "soft:     %s\n", strings.Join(res.Vocabulary.Soft, ", "))
-	}
-	fmt.Fprintln(stdout)
-	// Stable ordering for the controlled values.
-	keys := make([]string, 0, len(res.Vocabulary.Vocab))
-	for k := range res.Vocabulary.Vocab {
-		keys = append(keys, k)
-	}
-	sortStrings(keys)
-	for _, k := range keys {
-		fmt.Fprintf(stdout, "%-12s %s\n", k+":", strings.Join(res.Vocabulary.Vocab[k], ", "))
-	}
-	return nil
-}
-
-func sortStrings(xs []string) {
-	for i := range xs {
-		for j := i + 1; j < len(xs); j++ {
-			if xs[j] < xs[i] {
-				xs[i], xs[j] = xs[j], xs[i]
-			}
-		}
-	}
 }
 
 // --- mus s3 upload (stub, Phase 2) ----------------------------------------

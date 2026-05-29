@@ -8,11 +8,12 @@ import (
 
 	"codeberg.org/mfiers/mus/internal/config"
 	"codeberg.org/mfiers/mus/internal/sidecar"
+	"codeberg.org/mfiers/mus/internal/vocab"
 )
 
-func mustParseEmbeddedVocab(t *testing.T) *Vocabulary {
+func mustParseEmbeddedVocab(t *testing.T) *vocab.Vocabulary {
 	t.Helper()
-	v, err := ParseVocabulary(embeddedYAML)
+	v, err := vocab.Embedded()
 	if err != nil {
 		t.Fatalf("parse embedded vocab: %v", err)
 	}
