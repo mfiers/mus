@@ -58,88 +58,103 @@ type Metadata struct {
 	Notes string
 }
 
-// MetadataFromCascade builds a Metadata by reading the h5ad_* keys
-// from the .env cascade, then applying any per-file overrides from
-// the sidecar's H5ad{} block.
+// MetadataFromCascade builds a Metadata by reading bare experiment
+// keys from the .env cascade (organism, celltype, technology, …)
+// plus the h5ad-specific keys (h5ad_gene_id_type, h5ad_n_cells, …),
+// then applying per-file overrides from the sidecar's Bio + H5ad
+// blocks.
 //
 // Either argument may be nil — that just contributes nothing.
-func MetadataFromCascade(env *config.Env, sc *sidecar.H5ad) *Metadata {
+func MetadataFromCascade(env *config.Env, bio *sidecar.Bio, h5 *sidecar.H5ad) *Metadata {
 	m := &Metadata{}
-	// Layer 1: cascade.
+	// Layer 1a: cascade — bare keys (broadly applicable).
 	if env != nil {
-		m.Organism = env.String("h5ad_organism")
-		m.Celltype = env.List("h5ad_celltype")
-		m.Technology = env.String("h5ad_technology")
-		m.Preparation = env.String("h5ad_preparation")
-		m.Tissue = env.List("h5ad_tissue")
-		m.Region = env.List("h5ad_region")
-		m.Disease = env.List("h5ad_disease")
-		m.Sex = env.String("h5ad_sex")
+		m.Organism = env.String("organism")
+		m.Celltype = env.List("celltype")
+		m.Technology = env.String("technology")
+		m.Preparation = env.String("preparation")
+		m.Tissue = env.List("tissue")
+		m.Region = env.List("region")
+		m.Disease = env.List("disease")
+		m.Sex = env.String("sex")
 
-		m.Internal = env.String("h5ad_internal")
-		m.Accession = env.String("h5ad_accession")
-		m.DOI = env.String("h5ad_doi")
-		m.Source = env.String("h5ad_source")
-		m.License = env.String("h5ad_license")
-		m.Year = atoiOrZero(env.String("h5ad_year"))
-		m.Contributor = env.String("h5ad_contributor")
-		m.Title = env.String("h5ad_title")
-		m.Sha256 = env.String("h5ad_sha256")
+		m.Title = env.String("title")
+		m.Contributor = env.String("contributor")
+		m.Year = atoiOrZero(env.String("year"))
+		m.DOI = env.String("doi")
+		m.Source = env.String("source")
+		m.License = env.String("license")
 
+		m.Internal = env.String("internal")
+		m.Accession = env.String("accession")
+
+		// Layer 1b: cascade — h5ad-specific keys.
 		m.NCells = atoiOrZero(env.String("h5ad_n_cells"))
 		m.NGenes = atoiOrZero(env.String("h5ad_n_genes"))
 		m.GeneIDType = env.String("h5ad_gene_id_type")
-		m.Notes = env.String("h5ad_notes")
+		m.Sha256 = env.String("h5ad_sha256")
 	}
-	// Layer 2: sidecar overrides — only when set.
-	if sc != nil {
-		if sc.Organism != "" {
-			m.Organism = sc.Organism
+	// Layer 2a: sidecar Bio override.
+	if bio != nil {
+		if bio.Organism != "" {
+			m.Organism = bio.Organism
 		}
-		if len(sc.Celltype) > 0 {
-			m.Celltype = append([]string(nil), sc.Celltype...)
+		if len(bio.Celltype) > 0 {
+			m.Celltype = append([]string(nil), bio.Celltype...)
 		}
-		if sc.Technology != "" {
-			m.Technology = sc.Technology
+		if bio.Technology != "" {
+			m.Technology = bio.Technology
 		}
-		if sc.Preparation != "" {
-			m.Preparation = sc.Preparation
+		if bio.Preparation != "" {
+			m.Preparation = bio.Preparation
 		}
-		if len(sc.Tissue) > 0 {
-			m.Tissue = append([]string(nil), sc.Tissue...)
+		if len(bio.Tissue) > 0 {
+			m.Tissue = append([]string(nil), bio.Tissue...)
 		}
-		if len(sc.Region) > 0 {
-			m.Region = append([]string(nil), sc.Region...)
+		if len(bio.Region) > 0 {
+			m.Region = append([]string(nil), bio.Region...)
 		}
-		if len(sc.Disease) > 0 {
-			m.Disease = append([]string(nil), sc.Disease...)
+		if len(bio.Disease) > 0 {
+			m.Disease = append([]string(nil), bio.Disease...)
 		}
-		if sc.Sex != "" {
-			m.Sex = sc.Sex
+		if bio.Sex != "" {
+			m.Sex = bio.Sex
 		}
-		if sc.Internal != "" {
-			m.Internal = sc.Internal
+		if bio.Title != "" {
+			m.Title = bio.Title
 		}
-		if sc.Accession != "" {
-			m.Accession = sc.Accession
+		if bio.Contributor != "" {
+			m.Contributor = bio.Contributor
 		}
-		if sc.DOI != "" {
-			m.DOI = sc.DOI
+		if bio.Year != 0 {
+			m.Year = bio.Year
 		}
-		if sc.Year != 0 {
-			m.Year = sc.Year
+		if bio.DOI != "" {
+			m.DOI = bio.DOI
 		}
-		if sc.Contributor != "" {
-			m.Contributor = sc.Contributor
+		if bio.Source != "" {
+			m.Source = bio.Source
 		}
-		if sc.GeneIDType != "" {
-			m.GeneIDType = sc.GeneIDType
+		if bio.License != "" {
+			m.License = bio.License
 		}
-		if sc.NObs > 0 {
-			m.NCells = int(sc.NObs)
+		if bio.Internal != "" {
+			m.Internal = bio.Internal
 		}
-		if sc.NVars > 0 {
-			m.NGenes = int(sc.NVars)
+		if bio.Accession != "" {
+			m.Accession = bio.Accession
+		}
+	}
+	// Layer 2b: sidecar H5ad override (file-shape facts).
+	if h5 != nil {
+		if h5.GeneIDType != "" {
+			m.GeneIDType = h5.GeneIDType
+		}
+		if h5.NObs > 0 {
+			m.NCells = int(h5.NObs)
+		}
+		if h5.NVars > 0 {
+			m.NGenes = int(h5.NVars)
 		}
 	}
 	return m
@@ -207,7 +222,7 @@ func ValidateMetadata(m *Metadata, v *Vocabulary) []Issue {
 				Severity: SeverityHard,
 				Field:    f,
 				Message: fmt.Sprintf(
-					"required field %q is missing — set h5ad_%s=… in .env "+
+					"required field %q is missing — set %s=… in a .env "+
 						"(project-wide) or in <file>.h5ad.mus (file-specific)",
 					f, f),
 			})

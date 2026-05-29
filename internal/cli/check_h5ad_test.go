@@ -64,7 +64,7 @@ func TestH5adFreshnessEmptyInspectedSha(t *testing.T) {
 	// treated same as no recorded inspection.
 	doc := &sidecar.Doc{
 		File: sidecar.FileInfo{Sha256: "abc123"},
-		H5ad: &sidecar.H5ad{Organism: "human"}, // no InspectedSha256
+		H5ad: &sidecar.H5ad{NObs: 100}, // present but no InspectedSha256
 	}
 	cmd, stderr := stubCmd()
 	res := checkH5adFreshness(cmd, nil, "/tmp/fake.h5ad.mus", "/tmp/fake.h5ad", doc)

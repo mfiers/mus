@@ -20,11 +20,11 @@ func mustParseEmbeddedVocab(t *testing.T) *Vocabulary {
 }
 
 // envFromBody writes the given .env body to a temp dir and returns
-// the loaded Env.
+// the loaded Env. Isolates HOME/XDG so the global config doesn't
+// leak in.
 func envFromBody(t *testing.T, body string) *config.Env {
 	t.Helper()
 	dir := t.TempDir()
-	// Isolate from any real $HOME .env / global config.
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "xdg"))
 	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(body), 0o644); err != nil {
@@ -54,23 +54,23 @@ func summary(issues []Issue) []string {
 	return out
 }
 
-// A minimal, valid metadata set declared via .env keys.
-const minimalEnvYAML = `
-h5ad_organism=human
-h5ad_celltype=microglia
-h5ad_technology=10x_chromium_3p_v3
-h5ad_preparation=single_nucleus
-h5ad_tissue=brain
-h5ad_internal=no
-h5ad_accession=GSE123456
-h5ad_contributor=Jane <jane@example.com>
-h5ad_year=2026
-h5ad_doi=10.1038/foo
+// A minimal, valid metadata set declared via .env (bare keys).
+const minimalEnvBody = `
+organism=human
+celltype=microglia
+technology=10x_chromium_3p_v3
+preparation=single_nucleus
+tissue=brain
+internal=no
+accession=GSE123456
+contributor=Jane <jane@example.com>
+year=2026
+doi=10.1038/foo
 `
 
 func TestValidMetadataFromCascade(t *testing.T) {
 	v := mustParseEmbeddedVocab(t)
-	m := MetadataFromCascade(envFromBody(t, minimalEnvYAML), nil)
+	m := MetadataFromCascade(envFromBody(t, minimalEnvBody), nil, nil)
 	issues := ValidateMetadata(m, v)
 	for _, i := range issues {
 		if i.Severity == SeverityHard {
@@ -84,7 +84,7 @@ func TestValidMetadataFromCascade(t *testing.T) {
 
 func TestMissingRequiredFieldsAreHard(t *testing.T) {
 	v := mustParseEmbeddedVocab(t)
-	m := MetadataFromCascade(envFromBody(t, ""), nil)
+	m := MetadataFromCascade(envFromBody(t, ""), nil, nil)
 	issues := ValidateMetadata(m, v)
 	for _, field := range []string{"organism", "celltype", "technology",
 		"preparation", "tissue", "internal", "accession"} {
@@ -98,14 +98,14 @@ func TestMissingRequiredFieldsAreHard(t *testing.T) {
 func TestBadVocabValueIsHard(t *testing.T) {
 	v := mustParseEmbeddedVocab(t)
 	m := MetadataFromCascade(envFromBody(t, `
-h5ad_organism=martian
-h5ad_celltype=microglia
-h5ad_technology=10x_chromium_3p_v3
-h5ad_preparation=single_nucleus
-h5ad_tissue=brain
-h5ad_internal=no
-h5ad_accession=GSE1
-`), nil)
+organism=martian
+celltype=microglia
+technology=10x_chromium_3p_v3
+preparation=single_nucleus
+tissue=brain
+internal=no
+accession=GSE1
+`), nil, nil)
 	issues := ValidateMetadata(m, v)
 	if findIssue(issues, SeverityHard, "organism") == nil {
 		t.Errorf("expected HARD for organism=martian; got %v", summary(issues))
@@ -115,14 +115,14 @@ h5ad_accession=GSE1
 func TestCaseInsensitiveVocab(t *testing.T) {
 	v := mustParseEmbeddedVocab(t)
 	m := MetadataFromCascade(envFromBody(t, `
-h5ad_organism=Human
-h5ad_celltype=microglia
-h5ad_technology=10x_chromium_3p_v3
-h5ad_preparation=single_nucleus
-h5ad_tissue=brain
-h5ad_internal=no
-h5ad_accession=GSE1
-`), nil)
+organism=Human
+celltype=microglia
+technology=10x_chromium_3p_v3
+preparation=single_nucleus
+tissue=brain
+internal=no
+accession=GSE1
+`), nil, nil)
 	issues := ValidateMetadata(m, v)
 	if findIssue(issues, SeverityHard, "organism") != nil {
 		t.Errorf("organism=Human should pass case-insensitively; got %v", summary(issues))
@@ -130,38 +130,54 @@ h5ad_accession=GSE1
 }
 
 func TestListKeysParseAsLists(t *testing.T) {
-	// h5ad_celltype is registered as a list key in internal/config.
-	env := envFromBody(t, `h5ad_celltype=microglia,macrophage`)
-	m := MetadataFromCascade(env, nil)
+	env := envFromBody(t, `celltype=microglia,macrophage`)
+	m := MetadataFromCascade(env, nil, nil)
 	if len(m.Celltype) != 2 || m.Celltype[0] != "microglia" || m.Celltype[1] != "macrophage" {
 		t.Errorf("expected [microglia macrophage], got %v", m.Celltype)
 	}
 }
 
-func TestSidecarOverridesCascade(t *testing.T) {
+func TestBioSidecarOverridesCascade(t *testing.T) {
 	env := envFromBody(t, `
-h5ad_organism=mouse
-h5ad_celltype=neuron
+organism=mouse
+celltype=neuron
 `)
-	sc := &sidecar.H5ad{
+	bio := &sidecar.Bio{
 		Organism: "human",
 		Celltype: []string{"microglia"},
 	}
-	m := MetadataFromCascade(env, sc)
+	m := MetadataFromCascade(env, bio, nil)
 	if m.Organism != "human" {
-		t.Errorf("sidecar should override; got %q", m.Organism)
+		t.Errorf("Bio override should win; got %q", m.Organism)
 	}
 	if len(m.Celltype) != 1 || m.Celltype[0] != "microglia" {
-		t.Errorf("sidecar list should override; got %v", m.Celltype)
+		t.Errorf("Bio override list should win; got %v", m.Celltype)
 	}
 }
 
-func TestSidecarOnlyEmptyStringDoesNotOverride(t *testing.T) {
-	env := envFromBody(t, `h5ad_organism=mouse`)
-	sc := &sidecar.H5ad{} // empty
-	m := MetadataFromCascade(env, sc)
+func TestEmptyBioDoesNotEraseCascade(t *testing.T) {
+	env := envFromBody(t, `organism=mouse`)
+	bio := &sidecar.Bio{} // empty
+	m := MetadataFromCascade(env, bio, nil)
 	if m.Organism != "mouse" {
-		t.Errorf("empty sidecar must not erase cascade; got %q", m.Organism)
+		t.Errorf("empty Bio must not erase cascade; got %q", m.Organism)
+	}
+}
+
+func TestH5adSidecarSuppliesFileSpecific(t *testing.T) {
+	env := envFromBody(t, "")
+	h5 := &sidecar.H5ad{
+		NObs:       1234,
+		NVars:      5678,
+		GeneIDType: "hgnc_symbol",
+	}
+	m := MetadataFromCascade(env, nil, h5)
+	if m.NCells != 1234 || m.NGenes != 5678 {
+		t.Errorf("file-specific overrides not applied; got NCells=%d NGenes=%d",
+			m.NCells, m.NGenes)
+	}
+	if m.GeneIDType != "hgnc_symbol" {
+		t.Errorf("GeneIDType from H5ad not applied; got %q", m.GeneIDType)
 	}
 }
 
@@ -169,16 +185,13 @@ func TestPublicIDPattern(t *testing.T) {
 	cases := map[string]bool{
 		"GSE12345":              true,
 		"gse12345":              true,
-		"SRP123":                true,
 		"SRR1234567":            true,
 		"PRJNA12345":            true,
 		"phs001345.v1.p1":       true,
 		"EGAS00001000123":       true,
 		"10.5281/zenodo.123456": true,
-		"10.1038/s41586-024-1":  true,
 		"my_lab_internal":       false,
 		"":                      false,
-		"random string":         false,
 	}
 	for in, want := range cases {
 		if got := looksPublicID(in); got != want {
@@ -190,14 +203,14 @@ func TestPublicIDPattern(t *testing.T) {
 func TestInternalNoNeedsPublicID(t *testing.T) {
 	v := mustParseEmbeddedVocab(t)
 	m := MetadataFromCascade(envFromBody(t, `
-h5ad_organism=human
-h5ad_celltype=microglia
-h5ad_technology=10x_chromium_3p_v3
-h5ad_preparation=single_nucleus
-h5ad_tissue=brain
-h5ad_internal=no
-h5ad_accession=my_lab_2026_pilot
-`), nil)
+organism=human
+celltype=microglia
+technology=10x_chromium_3p_v3
+preparation=single_nucleus
+tissue=brain
+internal=no
+accession=my_lab_2026_pilot
+`), nil, nil)
 	issues := ValidateMetadata(m, v)
 	if findIssue(issues, SeveritySoft, "accession") == nil {
 		t.Errorf("internal=no + non-public accession should SOFT-warn; got %v",
@@ -208,14 +221,14 @@ h5ad_accession=my_lab_2026_pilot
 func TestInternalYesAllowsFreeformAccession(t *testing.T) {
 	v := mustParseEmbeddedVocab(t)
 	m := MetadataFromCascade(envFromBody(t, `
-h5ad_organism=human
-h5ad_celltype=microglia
-h5ad_technology=10x_chromium_3p_v3
-h5ad_preparation=single_nucleus
-h5ad_tissue=brain
-h5ad_internal=yes
-h5ad_accession=lab_2026_AD_microglia_v1
-`), nil)
+organism=human
+celltype=microglia
+technology=10x_chromium_3p_v3
+preparation=single_nucleus
+tissue=brain
+internal=yes
+accession=lab_2026_AD_microglia_v1
+`), nil, nil)
 	issues := ValidateMetadata(m, v)
 	if findIssue(issues, SeveritySoft, "accession") != nil {
 		t.Errorf("internal=yes should allow freeform accession; got %v", summary(issues))

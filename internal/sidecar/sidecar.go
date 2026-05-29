@@ -76,15 +76,15 @@ type S3 struct {
 	UploadedAt time.Time
 }
 
-// H5ad captures a digest of the sanity-check pass for an .h5ad file:
-// selected metadata-yaml fields plus inspector-derived shape info.
-// Persisted at `mus s3 inspect` / `mus s3 upload` time so a later
-// `mus check` can detect drift without re-running anndata.
+// Bio captures broadly-applicable experiment metadata — organism,
+// tissue, technology, etc. — that typically applies to ALL data
+// files in a project, not just h5ad files. These fields are written
+// as bare KEY=VALUE lines (no prefix) so the same `.env` cascade keys
+// also apply when mus grows non-h5ad data tools.
 //
-// All fields are optional; an empty H5ad block means no inspection
-// has been recorded yet.
-type H5ad struct {
-	// --- From the sibling metadata.yaml (mirrored for offline reading)
+// Read order at deposit time (lowest → highest precedence): cascade
+// .env (bare keys), then this struct (per-file override in sidecar).
+type Bio struct {
 	Organism    string
 	Celltype    []string
 	Technology  string
@@ -93,27 +93,38 @@ type H5ad struct {
 	Region      []string
 	Disease     []string
 	Sex         string
-	Internal    string // "yes" / "no"
-	Accession   string
-	DOI         string
-	Year        int
-	Contributor string
-	GeneIDType  string
 
-	// --- Inspector-derived shape info
+	Title       string
+	Contributor string
+	Year        int
+	DOI         string
+	Source      string
+	License     string
+
+	Internal  string // "yes" / "no"
+	Accession string
+}
+
+// H5ad captures the genuinely .h5ad-file-specific fields stamped at
+// inspection time: file shape, anndata version, sha pin for the
+// "cached pass" optimisation. Persisted under the h5ad_ prefix so it
+// can't collide with future per-file blocks for other formats.
+//
+// All fields are optional; an empty H5ad block means no inspection
+// has been recorded yet.
+type H5ad struct {
 	NObs           int64
 	NVars          int64
 	Layers         []string
 	Embedding      string // "X_umap" preferred, else "X_tsne"
 	AnnDataVersion string
+	GeneIDType     string
 
-	// --- Stamp
 	InspectedAt time.Time
 
 	// InspectedSha256 is the sha256 of the .h5ad file at the moment
-	// `mus s3 inspect` ran. `mus check` compares the file's current
-	// sha against this: equal → the previous PASS is still valid and
-	// anndata doesn't need to re-run; differ → re-inspect.
+	// `mus h5ad check` ran. `mus check` compares the file's current
+	// sha against this: equal → cached pass; differ → re-inspect.
 	InspectedSha256 string
 }
 
@@ -132,6 +143,7 @@ type Doc struct {
 	IRODS       *IRODS
 	ELN         *ELN
 	S3          *S3
+	Bio         *Bio
 	H5ad        *H5ad
 }
 
@@ -178,12 +190,14 @@ func IsSidecar(path string) bool {
 
 // sidecarListKeys lists the sidecar fields that are comma-separated lists.
 var sidecarListKeys = map[string]bool{
-	"tags":          true,
-	"h5ad_celltype": true,
-	"h5ad_tissue":   true,
-	"h5ad_region":   true,
-	"h5ad_disease":  true,
-	"h5ad_layers":   true,
+	"tags": true,
+	// Bio (bare; broadly applicable across data files):
+	"celltype": true,
+	"tissue":   true,
+	"region":   true,
+	"disease":  true,
+	// H5ad (file-shape; truly h5ad-specific):
+	"h5ad_layers": true,
 }
 
 func parseOpts() envformat.Options {
@@ -340,23 +354,28 @@ func docToMap(d *Doc) map[string]any {
 		putStr(out, "s3_etag", d.S3.Etag)
 		putTime(out, "s3_uploaded_at", d.S3.UploadedAt)
 	}
-	if d.H5ad != nil {
-		putStr(out, "h5ad_organism", d.H5ad.Organism)
-		putList(out, "h5ad_celltype", d.H5ad.Celltype)
-		putStr(out, "h5ad_technology", d.H5ad.Technology)
-		putStr(out, "h5ad_preparation", d.H5ad.Preparation)
-		putList(out, "h5ad_tissue", d.H5ad.Tissue)
-		putList(out, "h5ad_region", d.H5ad.Region)
-		putList(out, "h5ad_disease", d.H5ad.Disease)
-		putStr(out, "h5ad_sex", d.H5ad.Sex)
-		putStr(out, "h5ad_internal", d.H5ad.Internal)
-		putStr(out, "h5ad_accession", d.H5ad.Accession)
-		putStr(out, "h5ad_doi", d.H5ad.DOI)
-		if d.H5ad.Year > 0 {
-			out["h5ad_year"] = strconv.Itoa(d.H5ad.Year)
+	if d.Bio != nil {
+		// Bare keys — same names a project's .env would use.
+		putStr(out, "organism", d.Bio.Organism)
+		putList(out, "celltype", d.Bio.Celltype)
+		putStr(out, "technology", d.Bio.Technology)
+		putStr(out, "preparation", d.Bio.Preparation)
+		putList(out, "tissue", d.Bio.Tissue)
+		putList(out, "region", d.Bio.Region)
+		putList(out, "disease", d.Bio.Disease)
+		putStr(out, "sex", d.Bio.Sex)
+		putStr(out, "title", d.Bio.Title)
+		putStr(out, "contributor", d.Bio.Contributor)
+		if d.Bio.Year > 0 {
+			out["year"] = strconv.Itoa(d.Bio.Year)
 		}
-		putStr(out, "h5ad_contributor", d.H5ad.Contributor)
-		putStr(out, "h5ad_gene_id_type", d.H5ad.GeneIDType)
+		putStr(out, "doi", d.Bio.DOI)
+		putStr(out, "source", d.Bio.Source)
+		putStr(out, "license", d.Bio.License)
+		putStr(out, "internal", d.Bio.Internal)
+		putStr(out, "accession", d.Bio.Accession)
+	}
+	if d.H5ad != nil {
 		if d.H5ad.NObs > 0 {
 			out["h5ad_n_obs"] = strconv.FormatInt(d.H5ad.NObs, 10)
 		}
@@ -366,6 +385,7 @@ func docToMap(d *Doc) map[string]any {
 		putList(out, "h5ad_layers", d.H5ad.Layers)
 		putStr(out, "h5ad_embedding", d.H5ad.Embedding)
 		putStr(out, "h5ad_anndata_version", d.H5ad.AnnDataVersion)
+		putStr(out, "h5ad_gene_id_type", d.H5ad.GeneIDType)
 		putTime(out, "h5ad_inspected_at", d.H5ad.InspectedAt)
 		putStr(out, "h5ad_inspected_sha256", d.H5ad.InspectedSha256)
 	}
@@ -441,27 +461,34 @@ func docFromMap(in map[string]any) (*Doc, error) {
 			UploadedAt: parseTime(getStr(in, "s3_uploaded_at")),
 		}
 	}
+	if hasBioFields(in) {
+		d.Bio = &Bio{
+			Organism:    getStr(in, "organism"),
+			Celltype:    getList(in, "celltype"),
+			Technology:  getStr(in, "technology"),
+			Preparation: getStr(in, "preparation"),
+			Tissue:      getList(in, "tissue"),
+			Region:      getList(in, "region"),
+			Disease:     getList(in, "disease"),
+			Sex:         getStr(in, "sex"),
+			Title:       getStr(in, "title"),
+			Contributor: getStr(in, "contributor"),
+			Year:        parseInt(getStr(in, "year"), 0),
+			DOI:         getStr(in, "doi"),
+			Source:      getStr(in, "source"),
+			License:     getStr(in, "license"),
+			Internal:    getStr(in, "internal"),
+			Accession:   getStr(in, "accession"),
+		}
+	}
 	if hasPrefix(in, "h5ad_") {
 		d.H5ad = &H5ad{
-			Organism:       getStr(in, "h5ad_organism"),
-			Celltype:       getList(in, "h5ad_celltype"),
-			Technology:     getStr(in, "h5ad_technology"),
-			Preparation:    getStr(in, "h5ad_preparation"),
-			Tissue:         getList(in, "h5ad_tissue"),
-			Region:         getList(in, "h5ad_region"),
-			Disease:        getList(in, "h5ad_disease"),
-			Sex:            getStr(in, "h5ad_sex"),
-			Internal:       getStr(in, "h5ad_internal"),
-			Accession:      getStr(in, "h5ad_accession"),
-			DOI:            getStr(in, "h5ad_doi"),
-			Year:           parseInt(getStr(in, "h5ad_year"), 0),
-			Contributor:    getStr(in, "h5ad_contributor"),
-			GeneIDType:     getStr(in, "h5ad_gene_id_type"),
-			NObs:           parseInt64(getStr(in, "h5ad_n_obs"), 0),
-			NVars:          parseInt64(getStr(in, "h5ad_n_vars"), 0),
-			Layers:         getList(in, "h5ad_layers"),
-			Embedding:      getStr(in, "h5ad_embedding"),
+			NObs:            parseInt64(getStr(in, "h5ad_n_obs"), 0),
+			NVars:           parseInt64(getStr(in, "h5ad_n_vars"), 0),
+			Layers:          getList(in, "h5ad_layers"),
+			Embedding:       getStr(in, "h5ad_embedding"),
 			AnnDataVersion:  getStr(in, "h5ad_anndata_version"),
+			GeneIDType:      getStr(in, "h5ad_gene_id_type"),
 			InspectedAt:     parseTime(getStr(in, "h5ad_inspected_at")),
 			InspectedSha256: getStr(in, "h5ad_inspected_sha256"),
 		}
@@ -541,6 +568,24 @@ func parseTime(s string) time.Time {
 func hasPrefix(m map[string]any, prefix string) bool {
 	for k := range m {
 		if strings.HasPrefix(k, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// bioFieldKeys lists the bare-named Bio fields. Used by hasBioFields
+// to detect whether to instantiate the Bio block on read.
+var bioFieldKeys = []string{
+	"organism", "celltype", "technology", "preparation",
+	"tissue", "region", "disease", "sex",
+	"title", "contributor", "year", "doi", "source", "license",
+	"internal", "accession",
+}
+
+func hasBioFields(m map[string]any) bool {
+	for _, k := range bioFieldKeys {
+		if _, ok := m[k]; ok {
 			return true
 		}
 	}

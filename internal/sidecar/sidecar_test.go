@@ -69,20 +69,22 @@ func TestH5adInfoRoundtrip(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	in := &Doc{
 		File: FileInfo{Sha256: "abc"},
+		Bio: &Bio{
+			Organism:    "human",
+			Celltype:    []string{"microglia", "macrophage"},
+			Technology:  "10x_chromium_3p_v3",
+			Preparation: "single_nucleus",
+			Tissue:      []string{"brain"},
+			Region:      []string{"prefrontal_cortex", "hippocampus"},
+			Disease:     []string{"alzheimer"},
+			Sex:         "mixed",
+			Internal:    "no",
+			Accession:   "GSE123456",
+			DOI:         "10.1038/foo",
+			Year:        2026,
+			Contributor: "Jane",
+		},
 		H5ad: &H5ad{
-			Organism:       "human",
-			Celltype:       []string{"microglia", "macrophage"},
-			Technology:     "10x_chromium_3p_v3",
-			Preparation:    "single_nucleus",
-			Tissue:         []string{"brain"},
-			Region:         []string{"prefrontal_cortex", "hippocampus"},
-			Disease:        []string{"alzheimer"},
-			Sex:            "mixed",
-			Internal:       "no",
-			Accession:      "GSE123456",
-			DOI:            "10.1038/foo",
-			Year:           2026,
-			Contributor:    "Jane",
 			GeneIDType:     "hgnc_symbol",
 			NObs:           73888,
 			NVars:          24940,
@@ -96,10 +98,12 @@ func TestH5adInfoRoundtrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(scPath)
-	// Spot-check key serialisation forms.
+	// Spot-check serialisation: Bio fields are bare, H5ad fields are
+	// h5ad_-prefixed.
 	for _, want := range []string{
-		"h5ad_organism=human",
-		"h5ad_celltype=microglia,macrophage",
+		"organism=human",
+		"celltype=microglia,macrophage",
+		"technology=10x_chromium_3p_v3",
 		"h5ad_n_obs=73888",
 		"h5ad_n_vars=24940",
 		"h5ad_layers=counts",
@@ -110,29 +114,34 @@ func TestH5adInfoRoundtrip(t *testing.T) {
 			t.Errorf("missing %q in:\n%s", want, raw)
 		}
 	}
+	// Confirm we DIDN'T emit the old h5ad_organism style.
+	for _, banned := range []string{"h5ad_organism", "h5ad_celltype", "h5ad_tissue"} {
+		if strings.Contains(string(raw), banned+"=") {
+			t.Errorf("found legacy %q key in:\n%s", banned, raw)
+		}
+	}
 
 	out, err := Read(scPath)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if out.Bio == nil {
+		t.Fatalf("Bio block lost on read: %+v", out)
+	}
+	if out.Bio.Organism != "human" {
+		t.Errorf("Bio.Organism = %q", out.Bio.Organism)
+	}
+	if len(out.Bio.Celltype) != 2 || out.Bio.Celltype[0] != "microglia" {
+		t.Errorf("Bio.Celltype = %v", out.Bio.Celltype)
+	}
 	if out.H5ad == nil {
 		t.Fatalf("H5ad block lost on read: %+v", out)
 	}
-	h := out.H5ad
-	if h.Organism != "human" {
-		t.Errorf("Organism = %q", h.Organism)
+	if out.H5ad.NObs != 73888 || out.H5ad.NVars != 24940 {
+		t.Errorf("dims = %d/%d", out.H5ad.NObs, out.H5ad.NVars)
 	}
-	if len(h.Celltype) != 2 || h.Celltype[0] != "microglia" || h.Celltype[1] != "macrophage" {
-		t.Errorf("Celltype = %v", h.Celltype)
-	}
-	if h.NObs != 73888 || h.NVars != 24940 {
-		t.Errorf("dims = %d/%d", h.NObs, h.NVars)
-	}
-	if h.Year != 2026 {
-		t.Errorf("Year = %d", h.Year)
-	}
-	if !h.InspectedAt.Equal(now) {
-		t.Errorf("InspectedAt = %v, want %v", h.InspectedAt, now)
+	if !out.H5ad.InspectedAt.Equal(now) {
+		t.Errorf("InspectedAt = %v, want %v", out.H5ad.InspectedAt, now)
 	}
 }
 
@@ -143,7 +152,6 @@ func TestH5adInspectedSha256Roundtrip(t *testing.T) {
 	in := &Doc{
 		File: FileInfo{Sha256: sha},
 		H5ad: &H5ad{
-			Organism:        "human",
 			InspectedAt:     time.Now().UTC().Truncate(time.Second),
 			InspectedSha256: sha,
 		},
@@ -164,8 +172,8 @@ func TestH5adInspectedSha256Roundtrip(t *testing.T) {
 	}
 }
 
-func TestH5adAbsentWhenNoFields(t *testing.T) {
-	// Doc with no H5ad set should NOT serialise any h5ad_* keys.
+func TestBioAndH5adAbsentWhenNoFields(t *testing.T) {
+	// Doc without Bio / H5ad set should NOT serialise any of their keys.
 	dir := t.TempDir()
 	scPath := filepath.Join(dir, "x.mus")
 	in := &Doc{File: FileInfo{Sha256: "abc"}}
@@ -173,8 +181,10 @@ func TestH5adAbsentWhenNoFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(scPath)
-	if strings.Contains(string(raw), "h5ad_") {
-		t.Errorf("h5ad_* keys present despite empty H5ad block:\n%s", raw)
+	for _, banned := range []string{"organism=", "celltype=", "technology=", "h5ad_"} {
+		if strings.Contains(string(raw), banned) {
+			t.Errorf("unexpected key %q in empty-block sidecar:\n%s", banned, raw)
+		}
 	}
 }
 

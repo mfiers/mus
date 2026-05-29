@@ -189,11 +189,13 @@ func runH5adInspection(cmd *cobra.Command, cache *hashcache.Cache,
 	if err != nil {
 		return nil, fmt.Errorf("load cascade for %s: %w", dir, err)
 	}
-	var sc *sidecar.H5ad
+	var bio *sidecar.Bio
+	var h5 *sidecar.H5ad
 	if doc, err := readMaybe(sidecar.SidecarPath(h5adPath)); err == nil && doc != nil {
-		sc = doc.H5ad
+		bio = doc.Bio
+		h5 = doc.H5ad
 	}
-	meta := h5ad.MetadataFromCascade(env, sc)
+	meta := h5ad.MetadataFromCascade(env, bio, h5)
 
 	insp := h5ad.NewPythonInspector()
 	insp.ProgressOut = cmd.ErrOrStderr()
@@ -226,7 +228,8 @@ func stampSidecar(r *h5ad.Report, sha string) error {
 	if doc.File.Sha256 == "" && sha != "" {
 		doc.File.Sha256 = sha
 	}
-	h := &sidecar.H5ad{
+	// File-shape block (h5ad-specific).
+	doc.H5ad = &sidecar.H5ad{
 		NObs:            r.Inspection.NObs,
 		NVars:           r.Inspection.NVars,
 		Layers:          append([]string(nil), r.Inspection.Layers...),
@@ -236,24 +239,43 @@ func stampSidecar(r *h5ad.Report, sha string) error {
 		InspectedSha256: sha,
 	}
 	if r.Metadata != nil {
-		m := r.Metadata
-		h.Organism = m.Organism
-		h.Celltype = append([]string(nil), m.Celltype...)
-		h.Technology = m.Technology
-		h.Preparation = m.Preparation
-		h.Tissue = append([]string(nil), m.Tissue...)
-		h.Region = append([]string(nil), m.Region...)
-		h.Disease = append([]string(nil), m.Disease...)
-		h.Sex = m.Sex
-		h.Internal = m.Internal
-		h.Accession = m.Accession
-		h.DOI = m.DOI
-		h.Year = m.Year
-		h.Contributor = m.Contributor
-		h.GeneIDType = m.GeneIDType
+		doc.H5ad.GeneIDType = r.Metadata.GeneIDType
 	}
-	doc.H5ad = h
+	// Bio block (broadly applicable) — only stamp if the metadata
+	// carries anything; avoids polluting otherwise-empty sidecars.
+	if m := r.Metadata; m != nil && hasAnyBio(m) {
+		doc.Bio = &sidecar.Bio{
+			Organism:    m.Organism,
+			Celltype:    append([]string(nil), m.Celltype...),
+			Technology:  m.Technology,
+			Preparation: m.Preparation,
+			Tissue:      append([]string(nil), m.Tissue...),
+			Region:      append([]string(nil), m.Region...),
+			Disease:     append([]string(nil), m.Disease...),
+			Sex:         m.Sex,
+			Title:       m.Title,
+			Contributor: m.Contributor,
+			Year:        m.Year,
+			DOI:         m.DOI,
+			Source:      m.Source,
+			License:     m.License,
+			Internal:    m.Internal,
+			Accession:   m.Accession,
+		}
+	}
 	return sidecar.Write(scPath, doc)
+}
+
+// hasAnyBio reports whether Metadata carries at least one
+// broadly-applicable field — used to decide whether to emit a Bio
+// block on the sidecar.
+func hasAnyBio(m *h5ad.Metadata) bool {
+	return m.Organism != "" || len(m.Celltype) > 0 || m.Technology != "" ||
+		m.Preparation != "" || len(m.Tissue) > 0 || len(m.Region) > 0 ||
+		len(m.Disease) > 0 || m.Sex != "" || m.Title != "" ||
+		m.Contributor != "" || m.Year != 0 || m.DOI != "" ||
+		m.Source != "" || m.License != "" || m.Internal != "" ||
+		m.Accession != ""
 }
 
 // --- mus s3 vocab ----------------------------------------------------------
