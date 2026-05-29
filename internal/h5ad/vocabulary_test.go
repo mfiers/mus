@@ -1,7 +1,10 @@
 package h5ad
 
 import (
+	"bytes"
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,13 +24,28 @@ func TestEmbeddedVocabularyParses(t *testing.T) {
 	for _, want := range []string{"organism", "celltype", "technology",
 		"preparation", "tissue", "internal", "accession"} {
 		if !v.IsRequired(want) {
-			t.Errorf("required field %q missing from embedded vocabulary; got Required=%v",
+			t.Errorf("required field %q missing; got Required=%v",
 				want, v.Required)
 		}
 	}
-	// Spot-check a value.
 	if !v.ValueAllowed("organism", "human") {
 		t.Errorf("organism=human should be allowed")
+	}
+}
+
+// TestEmbeddedAndCanonicalAreIdentical pins the no-drift invariant:
+// vocabulary/h5ad.yaml at the repo root and the build-time
+// vocabulary_embedded.yaml MUST be byte-equal. If you edit the
+// canonical, run `make sync-vocab` (or just copy the file).
+func TestEmbeddedAndCanonicalAreIdentical(t *testing.T) {
+	canonical, err := os.ReadFile("../../vocabulary/h5ad.yaml")
+	if err != nil {
+		t.Fatalf("read canonical: %v", err)
+	}
+	if !bytes.Equal(canonical, embeddedYAML) {
+		t.Fatal("vocabulary/h5ad.yaml and internal/h5ad/vocabulary_embedded.yaml " +
+			"differ — run `make sync-vocab` (or `cp vocabulary/h5ad.yaml " +
+			"internal/h5ad/vocabulary_embedded.yaml`).")
 	}
 }
 
@@ -44,11 +62,11 @@ func TestValueAllowed(t *testing.T) {
 		want         bool
 	}{
 		{"organism", "human", true},
-		{"organism", "HUMAN", true},        // case-insensitive
-		{"organism", " human ", true},      // whitespace trimmed
-		{"organism", "homo_sapiens", false}, // not in list
-		{"freeform", "anything", true},     // no vocab → allowed
-		{"organism", "human_being", false}, // partial match not allowed
+		{"organism", "HUMAN", true},
+		{"organism", " human ", true},
+		{"organism", "homo_sapiens", false},
+		{"freeform", "anything", true},
+		{"organism", "human_being", false},
 	}
 	for _, tc := range cases {
 		got := v.ValueAllowed(tc.field, tc.value)
@@ -70,20 +88,6 @@ func TestParseVocabularyRejectsBadSchema(t *testing.T) {
 				t.Errorf("expected error for %s", name)
 			}
 		})
-	}
-}
-
-func TestRemoteVocabPath(t *testing.T) {
-	cases := map[string]string{
-		"":                       "",
-		"/zone/home":             "/zone/home/project/h5ad_vocabulary.yaml",
-		"/zone/home/":            "/zone/home/project/h5ad_vocabulary.yaml", // trim trailing /
-		"/gbiomed/home/BADS":     "/gbiomed/home/BADS/project/h5ad_vocabulary.yaml",
-	}
-	for home, want := range cases {
-		if got := RemoteVocabPath(home); got != want {
-			t.Errorf("RemoteVocabPath(%q) = %q, want %q", home, got, want)
-		}
 	}
 }
 
@@ -109,22 +113,19 @@ func TestLocalCachePathFallsBackToHome(t *testing.T) {
 	}
 }
 
-// --- Load() with no iRODS path: cache → embedded fallback path ---------
+// --- Load() — paths through the cascade ------------------------------------
 
-func TestLoadFallsBackToEmbeddedWhenNoCacheNoIRODS(t *testing.T) {
+func TestLoadFallsBackToEmbedded(t *testing.T) {
 	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
-	t.Setenv("XDG_DATA_HOME", filepath.Join(tmp, "xdg"))
-
 	res, err := Load(context.Background(), LoadOptions{
-		IRODSHome: "", // no iRODS pull
-		CachePath: filepath.Join(tmp, "nonexistent.yaml"),
+		URL:       "http://127.0.0.1:1/never-listens", // unreachable
+		CachePath: filepath.Join(tmp, "no-cache.yaml"),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if res.Source != "embedded" {
-		t.Errorf("Source = %q, want %q", res.Source, "embedded")
+		t.Errorf("Source = %q, want embedded", res.Source)
 	}
 	if res.Vocabulary == nil || res.Vocabulary.SchemaVersion < 1 {
 		t.Errorf("expected non-nil vocabulary, got %+v", res.Vocabulary)
@@ -137,69 +138,140 @@ func TestLoadUsesCacheWhenFresh(t *testing.T) {
 	yaml := `schema_version: 1
 required: [organism]
 vocabulary:
-  organism: [human, mouse]
+  organism: [cache_only_marker]
 `
 	if err := os.WriteFile(cachePath, []byte(yaml), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	res, err := Load(context.Background(), LoadOptions{
 		CachePath: cachePath,
-		Now:       func() time.Time { return time.Now() }, // cache is fresh
+		// No URL → never tries network when cache is fresh.
+		URL: "http://127.0.0.1:1/never-listens",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if res.Source != "cache" {
-		t.Errorf("Source = %q, want %q (warnings=%v)", res.Source, "cache", res.Warnings)
+		t.Errorf("Source = %q, want cache", res.Source)
 	}
-	// Cached YAML had fewer organisms — confirm we used the cache, not embedded.
-	if !res.Vocabulary.ValueAllowed("organism", "mouse") {
-		t.Errorf("mouse should be allowed via cache")
-	}
-	if res.Vocabulary.ValueAllowed("organism", "macaque") {
-		t.Errorf("macaque should NOT be in our tiny cache fixture (got embedded by mistake)")
+	if !res.Vocabulary.ValueAllowed("organism", "cache_only_marker") {
+		t.Errorf("did not use cache: %+v", res.Vocabulary)
 	}
 }
 
-func TestLoadFallsThroughCacheWhenStale(t *testing.T) {
+func TestLoadFetchesFromHTTPSWhenCacheStale(t *testing.T) {
+	served := []byte(`schema_version: 1
+required: [organism]
+vocabulary:
+  organism: [served_marker]
+`)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		_, _ = w.Write(served)
+	}))
+	defer srv.Close()
+
 	tmp := t.TempDir()
 	cachePath := filepath.Join(tmp, "vocab.yaml")
-	// Use a vocabulary file with unique markers so we can detect which
-	// source was actually used.
+
+	res, err := Load(context.Background(), LoadOptions{
+		URL:       srv.URL,
+		CachePath: cachePath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Source != "codeberg" {
+		t.Errorf("Source = %q, want codeberg", res.Source)
+	}
+	if !res.Vocabulary.ValueAllowed("organism", "served_marker") {
+		t.Errorf("did not get served content: %+v", res.Vocabulary)
+	}
+	// And the cache file should now exist with the served body.
+	cached, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(cached, served) {
+		t.Errorf("cache not updated; got %s", cached)
+	}
+}
+
+func TestLoadStaleCacheBeatsEmbedded(t *testing.T) {
+	tmp := t.TempDir()
+	cachePath := filepath.Join(tmp, "vocab.yaml")
 	yaml := `schema_version: 1
 required: [organism]
 vocabulary:
-  organism: [stale_marker_only]
+  organism: [stale_cache_marker]
 `
 	if err := os.WriteFile(cachePath, []byte(yaml), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Backdate the cache to 48h ago — past the 24h TTL.
 	old := time.Now().Add(-48 * time.Hour)
 	if err := os.Chtimes(cachePath, old, old); err != nil {
 		t.Fatal(err)
 	}
 
 	res, err := Load(context.Background(), LoadOptions{
-		IRODSHome: "",       // no iRODS available
-		CachePath: cachePath, // stale
+		URL:       "http://127.0.0.1:1/never-listens", // network unreachable
+		CachePath: cachePath,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Stale cache is preferred over embedded (better-than-nothing).
 	if res.Source != "cache" {
-		t.Errorf("Source = %q, want %q (stale cache should still win over embedded)",
-			res.Source, "cache")
+		t.Errorf("Source = %q, want cache (stale-cache > embedded)", res.Source)
+	}
+	if !res.Vocabulary.ValueAllowed("organism", "stale_cache_marker") {
+		t.Errorf("did not use stale cache: %+v", res.Vocabulary)
 	}
 	hasStaleWarning := false
 	for _, w := range res.Warnings {
 		if strings.Contains(w, "stale cache") {
 			hasStaleWarning = true
-			break
 		}
 	}
 	if !hasStaleWarning {
-		t.Errorf("expected 'stale cache' warning, got: %v", res.Warnings)
+		t.Errorf("expected stale-cache warning, got %v", res.Warnings)
+	}
+}
+
+func TestLoadRefreshSkipsCacheTTL(t *testing.T) {
+	served := []byte(`schema_version: 1
+required: [organism]
+vocabulary:
+  organism: [refreshed_marker]
+`)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		_, _ = w.Write(served)
+	}))
+	defer srv.Close()
+
+	tmp := t.TempDir()
+	cachePath := filepath.Join(tmp, "vocab.yaml")
+	old := []byte(`schema_version: 1
+required: [organism]
+vocabulary:
+  organism: [old_cache_marker]
+`)
+	if err := os.WriteFile(cachePath, old, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Fresh cache, but caller asks for refresh.
+	res, err := Load(context.Background(), LoadOptions{
+		URL:         srv.URL,
+		CachePath:   cachePath,
+		IgnoreCache: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Source != "codeberg" {
+		t.Errorf("Source = %q, want codeberg (--refresh should skip cache)", res.Source)
+	}
+	if !res.Vocabulary.ValueAllowed("organism", "refreshed_marker") {
+		t.Errorf("did not fetch refreshed content: %+v", res.Vocabulary)
 	}
 }

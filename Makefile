@@ -109,6 +109,12 @@ lint:
 tidy:
 	$(GO) mod tidy
 
+# Copy the canonical h5ad vocabulary into the package's embedded copy.
+# The TestEmbeddedAndCanonicalAreIdentical test fails if they differ.
+sync-vocab:
+	cp vocabulary/h5ad.yaml internal/h5ad/vocabulary_embedded.yaml
+	@echo "synced vocabulary/h5ad.yaml -> internal/h5ad/vocabulary_embedded.yaml"
+
 clean:
 	rm -rf bin dist
 

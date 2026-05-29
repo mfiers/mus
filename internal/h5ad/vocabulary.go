@@ -1,44 +1,40 @@
 // Package h5ad implements the sanity checks defined in the anthive
 // H5AD ingestion spec (doc/H5AD_INGESTION_SPEC.md). It validates both
 // the structure of the .h5ad file (via an embedded Python inspector
-// that uses anndata) and the sibling .metadata.yaml against a
-// controlled vocabulary served from iRODS.
+// that uses anndata) and metadata declared by the user (via the
+// `.env` cascade + per-file sidecar) against a controlled vocabulary
+// served from this repo on Codeberg.
 //
 // This file: the vocabulary itself — controlled-value lists plus the
-// required/soft field partitioning. The canonical source lives on
-// iRODS at <irods_home>/project/h5ad_vocabulary.yaml. mus pulls that
-// best-effort on each invocation (with a TTL-cached local copy), and
-// falls back to a copy embedded at build time when iRODS is
-// unreachable.
+// required/soft field partitioning. The canonical source lives at
+// https://codeberg.org/mfiers/mus/raw/branch/main/vocabulary/h5ad.yaml
+// and is mirrored locally at vocabulary_embedded.yaml for the
+// offline / first-run fallback. The two files are kept byte-identical
+// by a sync test.
 package h5ad
 
 import (
 	"context"
 	_ "embed"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"codeberg.org/mfiers/mus/internal/iron"
 	"gopkg.in/yaml.v3"
 )
 
 // CacheTTL controls how long a downloaded vocabulary is treated as
-// fresh before mus tries to re-pull from iRODS. Hard-coded by design —
-// see CLAUDE.md "Things deliberately NOT done".
+// fresh before mus tries to re-fetch from Codeberg. Hard-coded by
+// design — see CLAUDE.md "Things deliberately NOT done".
 const CacheTTL = 24 * time.Hour
 
-// RemoteVocabPath returns the iRODS path where the controlled
-// vocabulary YAML lives. Mirrors stage-2 elnmap's
-// <irods_home>/project/eln_mappings.json shape.
-func RemoteVocabPath(irodsHome string) string {
-	if irodsHome == "" {
-		return ""
-	}
-	return strings.TrimRight(irodsHome, "/") + "/project/h5ad_vocabulary.yaml"
-}
+// DefaultVocabURL is the public HTTPS URL serving the on-main copy of
+// vocabulary/h5ad.yaml. Overridable via LoadOptions.URL for tests.
+const DefaultVocabURL = "https://codeberg.org/mfiers/mus/raw/branch/main/vocabulary/h5ad.yaml"
 
 // LocalCachePath returns the user-level cache file where mus stores
 // the most recently downloaded vocabulary. Same XDG conventions as
@@ -54,10 +50,8 @@ func LocalCachePath() string {
 	return filepath.Join(home, ".local", "share", "mus", "h5ad_vocabulary.yaml")
 }
 
-// embeddedYAML is the build-time fallback. It mirrors the spec at
-// /data/1/users/mark/anthive4/doc/H5AD_INGESTION_SPEC.md §3 and §4.
-// Touch this only when the spec changes and the iRODS YAML hasn't
-// caught up yet.
+// embeddedYAML is the build-time fallback. Identical to
+// vocabulary/h5ad.yaml at the repo root (sync enforced by test).
 //
 //go:embed vocabulary_embedded.yaml
 var embeddedYAML []byte
@@ -82,9 +76,7 @@ func (v *Vocabulary) IsRequired(field string) bool {
 }
 
 // AllowedValues returns the controlled values for field, or nil if
-// the field is not under vocabulary control. The match used in
-// Validate is case-insensitive (per spec §3) but underscore-vs-space
-// is strict.
+// the field is not under vocabulary control.
 func (v *Vocabulary) AllowedValues(field string) []string {
 	if v.Vocab == nil {
 		return nil
@@ -127,14 +119,14 @@ func ParseVocabulary(raw []byte) (*Vocabulary, error) {
 	return v, nil
 }
 
-// LoadOptions configures Load. Tests use Loader to inject a fake
-// iron.Client; production callers leave it nil for the default.
+// LoadOptions configures Load. Tests override URL and HTTPClient to
+// point at an httptest.Server.
 type LoadOptions struct {
-	IRODSHome  string         // <irods_home> from the cascade; "" disables iRODS pull
-	Iron       *iron.Client   // pre-built iron client; nil = construct via iron.New()
-	CachePath  string         // override cache file location (tests)
-	Now        func() time.Time
-	IgnoreCache bool          // force a re-pull (used by `mus s3 vocab refresh`)
+	URL         string       // "" → DefaultVocabURL
+	HTTPClient  *http.Client // nil → default with 30s timeout
+	CachePath   string       // "" → LocalCachePath()
+	Now         func() time.Time
+	IgnoreCache bool // force a re-fetch (skip TTL)
 }
 
 func (o *LoadOptions) now() time.Time {
@@ -147,25 +139,27 @@ func (o *LoadOptions) now() time.Time {
 // LoadResult records where the returned vocabulary came from.
 type LoadResult struct {
 	Vocabulary *Vocabulary
-	Source     string // "irods" | "cache" | "embedded"
-	Path       string // file path for "cache" or "embedded"; remote path for "irods"
+	Source     string // "codeberg" | "cache" | "embedded"
+	Path       string // file path for "cache" / "embedded"; URL for "codeberg"
 	Warnings   []string
 }
 
-// Load returns the active Vocabulary, trying in order: live iRODS pull
-// (if fresh-enough cache doesn't exist), local cache (if within TTL),
-// embedded fallback. Network failures and stale cache fall through
-// silently — only embedded-and-corrupted is a hard error.
+// Load returns the active Vocabulary, trying in order: live HTTPS
+// fetch (if fresh-enough cache doesn't exist), local cache (within
+// TTL), embedded fallback. Network failures and stale cache fall
+// through silently — only embedded-and-corrupted is a hard error.
 func Load(ctx context.Context, opts LoadOptions) (*LoadResult, error) {
 	res := &LoadResult{}
 	cachePath := opts.CachePath
 	if cachePath == "" {
 		cachePath = LocalCachePath()
 	}
+	url := opts.URL
+	if url == "" {
+		url = DefaultVocabURL
+	}
 
-	// 1. Cache freshness check (skip if --ignore-cache or if iRODS
-	//    is unreachable; iRODS reachability is implicit via the
-	//    iron.New() attempt below).
+	// 1. Cache freshness check (skip if --ignore-cache).
 	if !opts.IgnoreCache && cachePath != "" {
 		if st, err := os.Stat(cachePath); err == nil {
 			age := opts.now().Sub(st.ModTime())
@@ -180,42 +174,33 @@ func Load(ctx context.Context, opts LoadOptions) (*LoadResult, error) {
 						return res, nil
 					}
 					res.Warnings = append(res.Warnings,
-						fmt.Sprintf("cached vocab parse error (using older fallback): %v", err))
+						fmt.Sprintf("cached vocab parse error (falling through): %v", err))
 				}
 			}
 		}
 	}
 
-	// 2. Try iRODS.
-	remotePath := RemoteVocabPath(opts.IRODSHome)
-	if remotePath != "" {
-		client := opts.Iron
+	// 2. Try Codeberg HTTPS.
+	if url != "" {
+		client := opts.HTTPClient
 		if client == nil {
-			c, err := iron.New()
-			if err == nil {
-				client = c
-			} else {
-				res.Warnings = append(res.Warnings,
-					fmt.Sprintf("iron unavailable: %v", err))
-			}
+			client = &http.Client{Timeout: 30 * time.Second}
 		}
-		if client != nil {
-			if vocab, warns, err := pullFromIRODS(ctx, client, remotePath, cachePath); err == nil {
-				res.Vocabulary = vocab
-				res.Source = "irods"
-				res.Path = remotePath
-				res.Warnings = append(res.Warnings, warns...)
-				return res, nil
-			} else {
-				res.Warnings = append(res.Warnings,
-					fmt.Sprintf("iRODS pull (%s) failed: %v", remotePath, err))
-			}
+		if vocab, warns, err := pullFromURL(ctx, client, url, cachePath); err == nil {
+			res.Vocabulary = vocab
+			res.Source = "codeberg"
+			res.Path = url
+			res.Warnings = append(res.Warnings, warns...)
+			return res, nil
+		} else {
+			res.Warnings = append(res.Warnings,
+				fmt.Sprintf("HTTPS fetch (%s) failed: %v", url, err))
 		}
 	}
 
-	// 3. Stale cache (TTL expired but file present) is better than
-	//    embedded — we know iRODS just failed but the cache is real
-	//    data from a previous run.
+	// 3. Stale cache (TTL expired but file present) beats embedded —
+	//    we know the network just failed but the cache has real data
+	//    from a previous run.
 	if cachePath != "" {
 		if raw, err := os.ReadFile(cachePath); err == nil {
 			if vocab, err := ParseVocabulary(raw); err == nil {
@@ -223,7 +208,7 @@ func Load(ctx context.Context, opts LoadOptions) (*LoadResult, error) {
 				res.Source = "cache"
 				res.Path = cachePath
 				res.Warnings = append(res.Warnings,
-					"using stale cache (iRODS unreachable)")
+					"using stale cache (Codeberg unreachable)")
 				return res, nil
 			}
 		}
@@ -237,34 +222,32 @@ func Load(ctx context.Context, opts LoadOptions) (*LoadResult, error) {
 	res.Vocabulary = vocab
 	res.Source = "embedded"
 	res.Warnings = append(res.Warnings,
-		"using embedded fallback (iRODS and cache both unavailable)")
+		"using embedded fallback (Codeberg unreachable and no cache)")
 	return res, nil
 }
 
-// pullFromIRODS downloads remotePath to a temp file, parses, and on
-// success atomically writes to cachePath. Returns the parsed vocab.
-func pullFromIRODS(ctx context.Context, client *iron.Client,
-	remotePath, cachePath string) (*Vocabulary, []string, error) {
+// pullFromURL does the HTTPS fetch, parses, and on success atomically
+// writes to cachePath. Returns the parsed vocabulary.
+func pullFromURL(ctx context.Context, client *http.Client,
+	url, cachePath string) (*Vocabulary, []string, error) {
 
-	if _, err := client.Stat(ctx, remotePath); err != nil {
-		return nil, nil, fmt.Errorf("stat: %w", err)
-	}
-	tmp, err := os.CreateTemp("", "h5ad_vocab-*.yaml")
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return nil, nil, fmt.Errorf("create temp: %w", err)
+		return nil, nil, fmt.Errorf("build request: %w", err)
 	}
-	tmpName := tmp.Name()
-	tmp.Close()
-	defer os.Remove(tmpName)
+	req.Header.Set("Accept", "application/x-yaml, text/yaml, text/plain, */*")
 
-	if err := client.Download(ctx, remotePath, tmpName, iron.DownloadOpts{
-		Exclusive: false,
-	}); err != nil {
-		return nil, nil, fmt.Errorf("download: %w", err)
-	}
-	raw, err := os.ReadFile(tmpName)
+	resp, err := client.Do(req)
 	if err != nil {
-		return nil, nil, fmt.Errorf("read downloaded: %w", err)
+		return nil, nil, fmt.Errorf("HTTP GET: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return nil, nil, fmt.Errorf("HTTP %d %s", resp.StatusCode, resp.Status)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1 MiB cap
+	if err != nil {
+		return nil, nil, fmt.Errorf("read body: %w", err)
 	}
 	vocab, err := ParseVocabulary(raw)
 	if err != nil {

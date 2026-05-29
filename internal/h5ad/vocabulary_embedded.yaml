@@ -1,13 +1,25 @@
-# Embedded fallback for the h5ad ingestion vocabulary.
+# h5ad ingestion vocabulary — canonical copy.
 #
-# The canonical source is the YAML at
-#   <irods_home>/project/h5ad_vocabulary.yaml
-# pulled at runtime. This file is mus's last-resort copy when iRODS is
-# unreachable AND the user has never run mus before (no local cache).
+# Source of truth for `mus h5ad check`. mus fetches the `main` version
+# from Codeberg at runtime:
+#   https://codeberg.org/mfiers/mus/raw/branch/main/vocabulary/h5ad.yaml
+# with a 24-hour local cache TTL. A build-time copy lives at
+# internal/h5ad/vocabulary_embedded.yaml as the offline fallback.
 #
-# Update this only when the spec at
-#   /data/1/users/mark/anthive4/doc/H5AD_INGESTION_SPEC.md
-# changes AND the iRODS file is also being updated.
+# Distilled from /data/1/users/mark/anthive4/doc/H5AD_INGESTION_SPEC.md
+# (§3 controlled values + §4 required/soft field partition).
+#
+# When the spec changes:
+#   1. Edit this file.
+#   2. Run `make sync-vocab` (copies into internal/h5ad/) — the
+#      `internal/h5ad` sync test fails otherwise.
+#   3. Commit and push to main on Codeberg.
+#   4. Every mus user picks up the new version on their next
+#      `mus h5ad check` (or `mus h5ad vocab --refresh` to bypass the
+#      24-hour TTL).
+#
+# Bump schema_version when removing or renaming keys; additions don't
+# require a bump.
 
 schema_version: 1
 

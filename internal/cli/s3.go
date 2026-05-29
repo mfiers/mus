@@ -9,23 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"codeberg.org/mfiers/mus/internal/config"
-	"codeberg.org/mfiers/mus/internal/defaults"
 	"codeberg.org/mfiers/mus/internal/h5ad"
 	"codeberg.org/mfiers/mus/internal/hashcache"
 	"codeberg.org/mfiers/mus/internal/sidecar"
 	"github.com/spf13/cobra"
 )
 
-// irodsHomeFromEnv returns the cascade's irods_home if set, otherwise
-// the baked-in default (so `mus s3 vocab` works from any directory
-// without explicit configuration).
-func irodsHomeFromEnv(env *config.Env) string {
-	if v := env.String("irods_home"); v != "" {
-		return v
-	}
-	return defaults.IRODSHome
-}
 
 func newS3Cmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -181,17 +170,7 @@ func shortSha(s string) string {
 func runH5adInspection(cmd *cobra.Command, cache *hashcache.Cache,
 	pathHint string) (*h5ad.Report, error) {
 
-	dir, err := workingDir(cmd)
-	if err != nil {
-		return nil, err
-	}
-	env, err := config.Load(dir)
-	if err != nil {
-		return nil, err
-	}
-	vocabRes, err := h5ad.Load(cmd.Context(), h5ad.LoadOptions{
-		IRODSHome: irodsHomeFromEnv(env),
-	})
+	vocabRes, err := h5ad.Load(cmd.Context(), h5ad.LoadOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("load vocabulary: %w", err)
 	}
@@ -275,16 +254,7 @@ func newS3VocabCmd() *cobra.Command {
 }
 
 func runS3Vocab(cmd *cobra.Command, refresh bool) error {
-	dir, err := workingDir(cmd)
-	if err != nil {
-		return err
-	}
-	env, err := config.Load(dir)
-	if err != nil {
-		return err
-	}
 	res, err := h5ad.Load(cmd.Context(), h5ad.LoadOptions{
-		IRODSHome:   irodsHomeFromEnv(env),
 		IgnoreCache: refresh,
 	})
 	if err != nil {
