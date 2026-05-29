@@ -14,6 +14,12 @@
 //     `tags`) the value is split on `,`. A value `-foo` removes a prior
 //     `foo` from the list — useful when a deeper file in the cascade wants
 //     to drop something a shallower one set.
+//   - List items that contain `,` themselves (e.g. the MONDO label
+//     `leukoencephalopathy, diffuse hereditary, with spheroids 1`) are
+//     written as double-quoted strings. `\"` inside a quoted item is a
+//     literal `"`; `\\` is a literal `\`. Unquoted items still parse
+//     exactly as before — quoting is purely additive. Marshal
+//     auto-quotes only items that need it.
 //
 // Anything outside that grammar (a line with no `=`, an unknown escape) is a
 // parse error.
@@ -68,12 +74,11 @@ func Parse(raw []byte, opts Options) (map[string]any, error) {
 		}
 		if opts.ListKeys[key] {
 			cur, _ := result[key].([]string)
-			for _, item := range strings.Split(value, ",") {
-				item = strings.TrimSpace(item)
-				if item != "" {
-					cur = append(cur, item)
-				}
+			items, err := splitListValue(value)
+			if err != nil {
+				return nil, fmt.Errorf("line %d: %w", lineNum, err)
 			}
+			cur = append(cur, items...)
 			result[key] = cur
 			continue
 		}
@@ -151,12 +156,14 @@ func Marshal(values map[string]any) ([]byte, error) {
 			}
 			fmt.Fprintf(&buf, "%s=%s\n", k, v)
 		case []string:
-			for _, item := range v {
-				if strings.ContainsAny(item, ",\n") {
-					return nil, fmt.Errorf("list item %q for %q contains ',' or newline", item, k)
+			parts := make([]string, len(v))
+			for i, item := range v {
+				if strings.ContainsRune(item, '\n') {
+					return nil, fmt.Errorf("list item %q for %q contains newline", item, k)
 				}
+				parts[i] = quoteListItem(item)
 			}
-			fmt.Fprintf(&buf, "%s=%s\n", k, strings.Join(v, ","))
+			fmt.Fprintf(&buf, "%s=%s\n", k, strings.Join(parts, ","))
 		default:
 			return nil, fmt.Errorf("unsupported value type %T for key %q", v, k)
 		}
@@ -172,6 +179,92 @@ func validateKey(k string) error {
 		return fmt.Errorf("key %q contains forbidden character", k)
 	}
 	return nil
+}
+
+// splitListValue tokenises a list value into items, respecting
+// double-quoted segments (which may contain commas). Inside a quoted
+// segment, `\"` is a literal `"` and `\\` is a literal `\`.
+//
+// Trim/skip semantics:
+//   - Items that had NO quoted segment are TrimSpace'd, mirroring the
+//     legacy behaviour of a plain comma-split.
+//   - Items with ANY quoted segment are returned verbatim (the user
+//     opted into explicit content by using quotes).
+//   - Empty items (after trim, or an empty quoted item) are skipped.
+func splitListValue(value string) ([]string, error) {
+	var items []string
+	var cur strings.Builder
+	inQuotes := false
+	sawQuotes := false
+
+	flush := func() {
+		s := cur.String()
+		if !sawQuotes {
+			s = strings.TrimSpace(s)
+		}
+		if s != "" {
+			items = append(items, s)
+		}
+		cur.Reset()
+		sawQuotes = false
+	}
+
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if inQuotes {
+			if c == '\\' && i+1 < len(value) {
+				next := value[i+1]
+				if next == '"' || next == '\\' {
+					cur.WriteByte(next)
+					i++
+					continue
+				}
+				cur.WriteByte(c)
+				continue
+			}
+			if c == '"' {
+				inQuotes = false
+				continue
+			}
+			cur.WriteByte(c)
+			continue
+		}
+		// Outside quotes.
+		switch c {
+		case '"':
+			inQuotes = true
+			sawQuotes = true
+		case ',':
+			flush()
+		default:
+			cur.WriteByte(c)
+		}
+	}
+	if inQuotes {
+		return nil, fmt.Errorf("unterminated quoted list item in %q", value)
+	}
+	flush()
+	return items, nil
+}
+
+// quoteListItem returns the item as it should appear in a Marshal'd
+// list value: bare when safe, double-quoted (with `\"` and `\\` escapes)
+// when the item contains a comma, quote, or backslash.
+func quoteListItem(item string) string {
+	if !strings.ContainsAny(item, ",\"\\") {
+		return item
+	}
+	var buf strings.Builder
+	buf.WriteByte('"')
+	for i := 0; i < len(item); i++ {
+		c := item[i]
+		if c == '"' || c == '\\' {
+			buf.WriteByte('\\')
+		}
+		buf.WriteByte(c)
+	}
+	buf.WriteByte('"')
+	return buf.String()
 }
 
 func applyListItem(lst *[]string, v string) {

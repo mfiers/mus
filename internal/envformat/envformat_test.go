@@ -3,6 +3,7 @@ package envformat
 import (
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -135,11 +136,107 @@ func TestMarshalRejectsBadValues(t *testing.T) {
 	if _, err := Marshal(map[string]any{"k=bad": "v"}); err == nil {
 		t.Errorf("Marshal accepted key with =")
 	}
-	if _, err := Marshal(map[string]any{"k": []string{"good", "bad,comma"}}); err == nil {
-		t.Errorf("Marshal accepted list item with ,")
+	// List items containing commas are now ALLOWED (auto-quoted) —
+	// only newlines in list items are still fatal.
+	if _, err := Marshal(map[string]any{"k": []string{"good", "bad\nnewline"}}); err == nil {
+		t.Errorf("Marshal accepted list item with newline")
 	}
 	if _, err := Marshal(map[string]any{"k": 123}); err == nil {
 		t.Errorf("Marshal accepted non-string non-list value")
+	}
+}
+
+// TestQuotedListItemMONDORoundtrip is the motivating case: a MONDO
+// disease label with embedded commas must survive Marshal → Parse.
+func TestQuotedListItemMONDORoundtrip(t *testing.T) {
+	opts := Options{ListKeys: map[string]bool{"disease": true}}
+	in := map[string]any{
+		"disease": []string{
+			"Alzheimer disease",
+			"leukoencephalopathy, diffuse hereditary, with spheroids 1",
+			"normal",
+		},
+	}
+	raw, err := Marshal(in)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	// The middle item must be quoted in the serialised form.
+	if !strings.Contains(string(raw), `"leukoencephalopathy, diffuse hereditary, with spheroids 1"`) {
+		t.Errorf("MONDO label not quoted in:\n%s", raw)
+	}
+	out, err := Parse(raw, opts)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	got, _ := out["disease"].([]string)
+	want := []string{"Alzheimer disease", "leukoencephalopathy, diffuse hereditary, with spheroids 1", "normal"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("disease = %v, want %v", got, want)
+	}
+}
+
+func TestQuotedAndUnquotedMixInOneList(t *testing.T) {
+	opts := Options{ListKeys: map[string]bool{"tag": true}}
+	raw := `tag=alpha,"middle, with comma",beta`
+	out, err := Parse([]byte(raw), opts)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	got, _ := out["tag"].([]string)
+	want := []string{"alpha", "middle, with comma", "beta"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("tag = %v, want %v", got, want)
+	}
+}
+
+func TestQuotedListEscapesQuoteAndBackslash(t *testing.T) {
+	opts := Options{ListKeys: map[string]bool{"note": true}}
+	// Item contains a literal " and a literal \. Marshal must escape
+	// both; Parse must un-escape them.
+	in := map[string]any{
+		"note": []string{`he said "hi"`, `path\to\file`},
+	}
+	raw, err := Marshal(in)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	// Spot-check the serialised escapes.
+	if !strings.Contains(string(raw), `"he said \"hi\""`) {
+		t.Errorf("quote not escaped:\n%s", raw)
+	}
+	if !strings.Contains(string(raw), `"path\\to\\file"`) {
+		t.Errorf("backslash not escaped:\n%s", raw)
+	}
+	out, err := Parse(raw, opts)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	got, _ := out["note"].([]string)
+	want := []string{`he said "hi"`, `path\to\file`}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("note = %v, want %v", got, want)
+	}
+}
+
+func TestUnterminatedQuoteIsError(t *testing.T) {
+	opts := Options{ListKeys: map[string]bool{"tag": true}}
+	if _, err := Parse([]byte(`tag="missing closing quote`), opts); err == nil {
+		t.Errorf("Parse accepted unterminated quoted list item")
+	}
+}
+
+func TestQuotedItemPreservesWhitespace(t *testing.T) {
+	opts := Options{ListKeys: map[string]bool{"tag": true}}
+	out, err := Parse([]byte(`tag="  spaces around  ",  unquoted_trimmed  `), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := out["tag"].([]string)
+	// Quoted item keeps its leading/trailing spaces; unquoted is trimmed.
+	want := []string{"  spaces around  ", "unquoted_trimmed"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("tag = %q, want %q", got, want)
 	}
 }
 
