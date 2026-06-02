@@ -141,9 +141,11 @@ def _human(n) -> str:
 def _is_sparse(matrix) -> bool:
     if sp.issparse(matrix):
         return True
-    # anndata 0.10's backed SparseDataset
-    cls = type(matrix).__name__
-    if "Sparse" in cls and ("Dataset" in cls or "View" in cls):
+    # anndata's backed-mode wrappers: SparseDataset (0.9-ish),
+    # CSRDataset / CSCDataset (0.10+). Be permissive on class-name
+    # detection so we route to the sparse-aware path.
+    cls = type(matrix).__name__.lower()
+    if "sparse" in cls or "csr" in cls or "csc" in cls:
         return True
     return False
 
@@ -236,7 +238,13 @@ def _stream_dense(matrix, out: dict, label: str) -> None:
 
     for start in range(0, n_rows, DENSE_ROW_CHUNK):
         stop = min(start + DENSE_ROW_CHUNK, n_rows)
-        arr = np.asarray(matrix[start:stop])
+        slab = matrix[start:stop]
+        # Defensive: a "dense" backed wrapper may still return a
+        # sparse matrix from slicing (anndata 0.10's CSRDataset).
+        if sp.issparse(slab) or hasattr(slab, "data") and hasattr(slab, "indices"):
+            arr = np.asarray(slab.data)
+        else:
+            arr = np.asarray(slab)
         if arr.size == 0:
             continue
         local_min = float(arr.min())
