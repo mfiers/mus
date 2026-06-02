@@ -52,9 +52,177 @@ func withH5adFile(t *testing.T, contents []byte, doc *sidecar.Doc) (string, *has
 	return h5adPath, cache
 }
 
-func TestCachedH5adPass_ShaMatches(t *testing.T) {
+// vocabShaFixture is a fixed hex string used as the "current vocab
+// sha" in cache-hit tests. The sidecar is stamped with the same
+// value; mismatches use a different value.
+const vocabShaFixture = "f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1"
+
+// checkVersionFixture mirrors h5ad.CheckVersion at the time these
+// tests were written. We pass it explicitly (not via the constant)
+// so the test pins the contract independently of the running
+// version — bumps don't silently break the test.
+const checkVersionFixture = 2
+
+func TestCachedH5adPass_AllKeysMatch(t *testing.T) {
 	contents := []byte("stub h5ad bytes")
-	// Pre-compute the sha so we can stamp it into the sidecar.
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "xdg-data"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "xdg-config"))
+	cache, err := hashcache.Open("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close()
+	h5adPath := filepath.Join(dir, "mydata.h5ad")
+	if err := os.WriteFile(h5adPath, contents, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sha, err := cache.Sum(h5adPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sidecar.Write(sidecar.SidecarPath(h5adPath), &sidecar.Doc{
+		File: sidecar.FileInfo{Sha256: sha},
+		H5ad: &sidecar.H5ad{
+			InspectedAt:           time.Now().UTC().Truncate(time.Second),
+			InspectedSha256:       sha,
+			InspectedVocabSha256:  vocabShaFixture,
+			InspectedCheckVersion: checkVersionFixture,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	hit, err := cachedH5adPass(cache, h5adPath, vocabShaFixture, checkVersionFixture, &stdout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hit {
+		t.Errorf("expected cache hit; stdout=%q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "cached pass") {
+		t.Errorf("expected 'cached pass' message, got: %s", stdout.String())
+	}
+}
+
+func TestCachedH5adPass_ShaDiffers(t *testing.T) {
+	contents := []byte("stub h5ad bytes")
+	h5adPath, cache := withH5adFile(t, contents, &sidecar.Doc{
+		H5ad: &sidecar.H5ad{
+			InspectedAt:           time.Now().UTC().Truncate(time.Second),
+			InspectedSha256:       "deadbeefcafebabe", // wrong sha
+			InspectedVocabSha256:  vocabShaFixture,
+			InspectedCheckVersion: checkVersionFixture,
+		},
+	})
+	var stdout bytes.Buffer
+	hit, err := cachedH5adPass(cache, h5adPath, vocabShaFixture, checkVersionFixture, &stdout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hit {
+		t.Errorf("expected cache miss when sha differs; stdout=%q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "file sha changed") {
+		t.Errorf("expected 'file sha changed' reason, got: %s", stdout.String())
+	}
+}
+
+func TestCachedH5adPass_VocabChanged(t *testing.T) {
+	contents := []byte("stub")
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "xdg-data"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "xdg-config"))
+	cache, err := hashcache.Open("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close()
+	h5adPath := filepath.Join(dir, "mydata.h5ad")
+	if err := os.WriteFile(h5adPath, contents, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sha, err := cache.Sum(h5adPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Sidecar recorded an OLDER vocab sha than the current one.
+	if err := sidecar.Write(sidecar.SidecarPath(h5adPath), &sidecar.Doc{
+		File: sidecar.FileInfo{Sha256: sha},
+		H5ad: &sidecar.H5ad{
+			InspectedAt:           time.Now().UTC().Truncate(time.Second),
+			InspectedSha256:       sha,
+			InspectedVocabSha256:  "0000000000000000000000000000000000000000000000000000000000000000",
+			InspectedCheckVersion: checkVersionFixture,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	hit, err := cachedH5adPass(cache, h5adPath, vocabShaFixture, checkVersionFixture, &stdout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hit {
+		t.Errorf("expected cache miss when vocab sha differs; stdout=%q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "vocabulary changed") {
+		t.Errorf("expected 'vocabulary changed' reason, got: %s", stdout.String())
+	}
+}
+
+func TestCachedH5adPass_CheckVersionBumped(t *testing.T) {
+	contents := []byte("stub")
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "xdg-data"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "xdg-config"))
+	cache, err := hashcache.Open("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close()
+	h5adPath := filepath.Join(dir, "mydata.h5ad")
+	if err := os.WriteFile(h5adPath, contents, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sha, err := cache.Sum(h5adPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Sidecar recorded an OLDER check version than the running one.
+	if err := sidecar.Write(sidecar.SidecarPath(h5adPath), &sidecar.Doc{
+		File: sidecar.FileInfo{Sha256: sha},
+		H5ad: &sidecar.H5ad{
+			InspectedAt:           time.Now().UTC().Truncate(time.Second),
+			InspectedSha256:       sha,
+			InspectedVocabSha256:  vocabShaFixture,
+			InspectedCheckVersion: 1, // older than the runtime
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	hit, err := cachedH5adPass(cache, h5adPath, vocabShaFixture, 2, &stdout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hit {
+		t.Errorf("expected cache miss when check_version bumped; stdout=%q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "h5ad-check code version") {
+		t.Errorf("expected 'h5ad-check code version' reason, got: %s", stdout.String())
+	}
+}
+
+func TestCachedH5adPass_LegacySidecarMissingNewKeys(t *testing.T) {
+	// A sidecar stamped before this feature lands won't have
+	// InspectedVocabSha256 / InspectedCheckVersion set. Treat as
+	// stale → cache miss → re-inspect.
+	contents := []byte("stub")
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "xdg-data"))
@@ -77,46 +245,26 @@ func TestCachedH5adPass_ShaMatches(t *testing.T) {
 		H5ad: &sidecar.H5ad{
 			InspectedAt:     time.Now().UTC().Truncate(time.Second),
 			InspectedSha256: sha,
+			// InspectedVocabSha256 == "" and InspectedCheckVersion == 0 (legacy)
 		},
 	}); err != nil {
 		t.Fatal(err)
 	}
-
 	var stdout bytes.Buffer
-	hit, err := cachedH5adPass(cache, h5adPath, &stdout)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !hit {
-		t.Errorf("expected cache hit when sha matches; stdout=%q", stdout.String())
-	}
-	if !strings.Contains(stdout.String(), "cached pass") {
-		t.Errorf("expected 'cached pass' message, got: %s", stdout.String())
-	}
-}
-
-func TestCachedH5adPass_ShaDiffers(t *testing.T) {
-	contents := []byte("stub h5ad bytes")
-	h5adPath, cache := withH5adFile(t, contents, &sidecar.Doc{
-		H5ad: &sidecar.H5ad{
-			InspectedAt:     time.Now().UTC().Truncate(time.Second),
-			InspectedSha256: "deadbeefcafebabe", // wrong sha
-		},
-	})
-	var stdout bytes.Buffer
-	hit, err := cachedH5adPass(cache, h5adPath, &stdout)
+	hit, err := cachedH5adPass(cache, h5adPath, vocabShaFixture, checkVersionFixture, &stdout)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if hit {
-		t.Errorf("expected cache miss when sha differs; stdout=%q", stdout.String())
+		t.Errorf("legacy sidecar (no vocab/check_v fields) must invalidate cache; stdout=%q",
+			stdout.String())
 	}
 }
 
 func TestCachedH5adPass_NoSidecar(t *testing.T) {
 	h5adPath, cache := withH5adFile(t, []byte("stub"), nil)
 	var stdout bytes.Buffer
-	hit, err := cachedH5adPass(cache, h5adPath, &stdout)
+	hit, err := cachedH5adPass(cache, h5adPath, vocabShaFixture, checkVersionFixture, &stdout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +278,7 @@ func TestCachedH5adPass_SidecarWithoutH5adBlock(t *testing.T) {
 		File: sidecar.FileInfo{Sha256: "abc"},
 	})
 	var stdout bytes.Buffer
-	hit, err := cachedH5adPass(cache, h5adPath, &stdout)
+	hit, err := cachedH5adPass(cache, h5adPath, vocabShaFixture, checkVersionFixture, &stdout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +292,7 @@ func TestCachedH5adPass_EmptyInspectedSha(t *testing.T) {
 		H5ad: &sidecar.H5ad{NObs: 100}, // H5ad block present but no InspectedSha256
 	})
 	var stdout bytes.Buffer
-	hit, err := cachedH5adPass(cache, h5adPath, &stdout)
+	hit, err := cachedH5adPass(cache, h5adPath, vocabShaFixture, checkVersionFixture, &stdout)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -151,6 +151,20 @@ type H5ad struct {
 	// `mus h5ad check` ran. `mus check` compares the file's current
 	// sha against this: equal → cached pass; differ → re-inspect.
 	InspectedSha256 string
+
+	// InspectedVocabSha256 is the sha256 of the raw vocabulary YAML
+	// in effect at check time (mus's vocab.LoadResult.ContentSha256
+	// for whichever source — codeberg / cache / embedded — actually
+	// fed the validator). If the vocab has changed since, the
+	// recorded PASS may no longer reflect today's rules; the cached
+	// pass is invalidated and mus re-runs.
+	InspectedVocabSha256 string
+
+	// InspectedCheckVersion records mus's h5ad.CheckVersion at check
+	// time. Bumped when the structural / soft / derived rules
+	// change. A sidecar whose value is < the running constant is
+	// stale; the cached pass is invalidated and mus re-runs.
+	InspectedCheckVersion int
 }
 
 // Doc is the full sidecar document.
@@ -431,6 +445,10 @@ func docToMap(d *Doc) map[string]any {
 		putStr(out, "h5ad_gene_id_type", d.H5ad.GeneIDType)
 		putTime(out, "h5ad_inspected_at", d.H5ad.InspectedAt)
 		putStr(out, "h5ad_inspected_sha256", d.H5ad.InspectedSha256)
+		putStr(out, "h5ad_inspected_vocab_sha256", d.H5ad.InspectedVocabSha256)
+		if d.H5ad.InspectedCheckVersion > 0 {
+			out["h5ad_inspected_check_version"] = strconv.Itoa(d.H5ad.InspectedCheckVersion)
+		}
 	}
 	return out
 }
@@ -541,10 +559,12 @@ func docFromMap(in map[string]any) (*Doc, error) {
 			NVars:           parseInt64(getStr(in, "h5ad_n_vars"), 0),
 			Layers:          getList(in, "h5ad_layers"),
 			Embedding:       getStr(in, "h5ad_embedding"),
-			AnnDataVersion:  getStr(in, "h5ad_anndata_version"),
-			GeneIDType:      getStr(in, "h5ad_gene_id_type"),
-			InspectedAt:     parseTime(getStr(in, "h5ad_inspected_at")),
-			InspectedSha256: getStr(in, "h5ad_inspected_sha256"),
+			AnnDataVersion:        getStr(in, "h5ad_anndata_version"),
+			GeneIDType:            getStr(in, "h5ad_gene_id_type"),
+			InspectedAt:           parseTime(getStr(in, "h5ad_inspected_at")),
+			InspectedSha256:       getStr(in, "h5ad_inspected_sha256"),
+			InspectedVocabSha256:  getStr(in, "h5ad_inspected_vocab_sha256"),
+			InspectedCheckVersion: parseInt(getStr(in, "h5ad_inspected_check_version"), 0),
 		}
 	}
 	return d, nil

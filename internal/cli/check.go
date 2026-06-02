@@ -7,8 +7,10 @@ import (
 	"strings"
 
 	"codeberg.org/mfiers/mus/internal/folder"
+	"codeberg.org/mfiers/mus/internal/h5ad"
 	"codeberg.org/mfiers/mus/internal/hashcache"
 	"codeberg.org/mfiers/mus/internal/sidecar"
+	"codeberg.org/mfiers/mus/internal/vocab"
 	"github.com/spf13/cobra"
 )
 
@@ -236,39 +238,58 @@ func checkH5adFreshness(cmd *cobra.Command, cache *hashcache.Cache,
 	stderr := cmd.ErrOrStderr()
 	currentSha := doc.File.Sha256 // checkOne already verified this matches the file
 
-	// 1. Inspection recorded AND sha unchanged → cached pass.
-	if doc.H5ad != nil && doc.H5ad.InspectedSha256 != "" &&
-		strings.EqualFold(doc.H5ad.InspectedSha256, currentSha) {
-		fmt.Fprintf(stderr, "         h5ad: cached pass (inspected %s, sha unchanged)\n",
-			doc.H5ad.InspectedAt.UTC().Format("2006-01-02"))
-		return checkResult{path: dataPath, status: "ok"}
-	}
-
-	// 2. No recorded inspection at all → not a failure, but flag it.
+	// 0. No recorded inspection at all → flag, don't fail.
 	if doc.H5ad == nil || doc.H5ad.InspectedSha256 == "" {
 		fmt.Fprintf(stderr,
-			"         h5ad: no inspection recorded — run `mus s3 inspect %s` to validate\n",
+			"         h5ad: no inspection recorded — run `mus h5ad check %s` to validate\n",
 			filepath.Base(dataPath))
 		return checkResult{path: dataPath, status: "ok"}
 	}
 
-	// 3. Recorded inspection but sha changed → re-run.
-	fmt.Fprintf(stderr,
-		"         h5ad: sha changed since inspection on %s — re-running anndata (this can take 10-60s)\n",
-		doc.H5ad.InspectedAt.UTC().Format("2006-01-02"))
+	// Load the active vocab so we can compare its sha against the
+	// one stamped on the sidecar.
+	vocabRes, err := vocab.Load(cmd.Context(), vocab.LoadOptions{})
+	if err != nil {
+		return checkResult{path: dataPath, status: "error",
+			detail: fmt.Sprintf("load vocabulary: %v", err)}
+	}
 
-	report, err := runH5adInspection(cmd, cache, dataPath)
+	// Three keys must match for the cached pass to apply. Otherwise
+	// we re-inspect. Tell the user which key forced the re-run.
+	var reason string
+	switch {
+	case !strings.EqualFold(doc.H5ad.InspectedSha256, currentSha):
+		reason = fmt.Sprintf("sha changed since inspection on %s",
+			doc.H5ad.InspectedAt.UTC().Format("2006-01-02"))
+	case doc.H5ad.InspectedVocabSha256 == "" ||
+		!strings.EqualFold(doc.H5ad.InspectedVocabSha256, vocabRes.ContentSha256):
+		reason = "vocabulary changed since last check"
+	case doc.H5ad.InspectedCheckVersion < h5ad.CheckVersion:
+		reason = fmt.Sprintf("mus h5ad-check code version bumped (sidecar=%d, current=%d)",
+			doc.H5ad.InspectedCheckVersion, h5ad.CheckVersion)
+	}
+	if reason == "" {
+		fmt.Fprintf(stderr,
+			"         h5ad: cached pass (inspected %s, sha+vocab+check_v unchanged)\n",
+			doc.H5ad.InspectedAt.UTC().Format("2006-01-02"))
+		return checkResult{path: dataPath, status: "ok"}
+	}
+
+	fmt.Fprintf(stderr,
+		"         h5ad: %s — re-running anndata (this can take 10-60s)\n", reason)
+
+	report, err := runH5adInspectionWithVocab(cmd, cache, dataPath, vocabRes)
 	if err != nil {
 		return checkResult{path: dataPath, status: "error", detail: err.Error()}
 	}
 	if report.HasHard() {
 		return checkResult{path: dataPath, status: "mismatch",
-			detail: fmt.Sprintf("%d HARD finding(s) — run `mus s3 inspect` to see details",
+			detail: fmt.Sprintf("%d HARD finding(s) — run `mus h5ad check` to see details",
 				len(report.Hard()))}
 	}
 
-	// 4. Pass — refresh the sidecar with the new InspectedSha256.
-	if err := stampSidecar(report, currentSha); err != nil {
+	// Pass — refresh the sidecar with all three cache keys.
+	if err := stampSidecar(report, currentSha, vocabRes.ContentSha256, h5ad.CheckVersion); err != nil {
 		fmt.Fprintf(stderr, "         h5ad: WARN — could not refresh sidecar: %v\n", err)
 	} else {
 		fmt.Fprintf(stderr, "         h5ad: ✓ re-inspected, sidecar refreshed\n")

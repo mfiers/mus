@@ -17,6 +17,24 @@ import (
 	"codeberg.org/mfiers/mus/internal/vocab"
 )
 
+// CheckVersion is the running version of mus's h5ad-check code path.
+//
+// Bump this whenever a structural rule, soft-check threshold, or
+// derived field changes in a way that could flip a previously-passed
+// file. A sidecar with H5ad.InspectedCheckVersion < this value is
+// treated as a stale cache → mus re-runs the inspection regardless
+// of the file's sha.
+//
+// Bump-worthy changes (examples):
+//   - new HARD rule added or relaxed
+//   - soft-warning threshold changed (e.g. Ensembl-id %)
+//   - inspection-derived field renamed/added in the report
+//   - matching-rule change (case / whitespace normalisation)
+//
+// Non-bump-worthy changes:
+//   - error-message wording, log formatting, comments.
+const CheckVersion = 2
+
 // Report is the combined finding list plus the inputs that produced
 // it (handy for CLI display and sidecar writes).
 type Report struct {

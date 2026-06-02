@@ -98,9 +98,17 @@ func runH5adCheck(cmd *cobra.Command, arg string, force bool) error {
 	stdout := cmd.OutOrStdout()
 	stderr := cmd.ErrOrStderr()
 
-	// Cached-pass shortcut.
+	// Load the vocabulary first — its content sha is part of the
+	// cache key, so the shortcut needs it.
+	vocabRes, err := vocab.Load(cmd.Context(), vocab.LoadOptions{})
+	if err != nil {
+		return fmt.Errorf("load vocabulary: %w", err)
+	}
+
+	// Cached-pass shortcut: file sha + vocab sha + check version
+	// must ALL match what was recorded.
 	if !force {
-		hit, err := cachedH5adPass(cache, abs, stdout)
+		hit, err := cachedH5adPass(cache, abs, vocabRes.ContentSha256, h5ad.CheckVersion, stdout)
 		if err != nil {
 			return err
 		}
@@ -109,8 +117,8 @@ func runH5adCheck(cmd *cobra.Command, arg string, force bool) error {
 		}
 	}
 
-	// Full inspection.
-	report, err := runH5adInspection(cmd, cache, abs)
+	// Full inspection (re-uses the vocab we already loaded).
+	report, err := runH5adInspectionWithVocab(cmd, cache, abs, vocabRes)
 	if err != nil {
 		return err
 	}
@@ -121,47 +129,93 @@ func runH5adCheck(cmd *cobra.Command, arg string, force bool) error {
 			len(report.Hard()))
 	}
 
-	// PASS → stamp the sidecar.
+	// PASS → stamp the sidecar with file sha + vocab sha + check
+	// version. All three must match on a future run for the cached
+	// pass to apply.
 	sha, err := cache.Sum(abs)
 	if err != nil {
 		fmt.Fprintf(stderr, "WARN: could not compute sha256 of %s: %v\n", abs, err)
 		return nil
 	}
-	if err := stampSidecar(report, sha); err != nil {
+	if err := stampSidecar(report, sha, vocabRes.ContentSha256, h5ad.CheckVersion); err != nil {
 		fmt.Fprintf(stderr, "WARN: could not write sidecar: %v\n", err)
 		return nil
 	}
-	fmt.Fprintf(stderr, "wrote sidecar %s (inspected_sha256=%s)\n",
-		sidecar.SidecarPath(abs), shortSha(sha))
+	fmt.Fprintf(stderr, "wrote sidecar %s (sha=%s vocab=%s check_v=%d)\n",
+		sidecar.SidecarPath(abs), shortSha(sha),
+		shortSha(vocabRes.ContentSha256), h5ad.CheckVersion)
 	return nil
 }
 
 // cachedH5adPass returns true (and prints a one-line cached-pass
-// message) when the sidecar's H5ad.InspectedSha256 matches the file's
-// current sha256 — meaning the previously-recorded PASS is still
-// valid and anndata doesn't need to re-run.
-func cachedH5adPass(cache *hashcache.Cache, h5adPath string, stdout io.Writer) (bool, error) {
+// message) ONLY when ALL THREE inputs match what the sidecar recorded:
+//
+//   - the .h5ad file's current sha256 == H5ad.InspectedSha256
+//   - the active vocabulary's content sha256 == H5ad.InspectedVocabSha256
+//   - h5ad.CheckVersion == H5ad.InspectedCheckVersion
+//
+// Any single mismatch invalidates the cached pass and triggers a
+// re-inspection. The skip reason is printed to the caller so the
+// user understands why mus is spinning up anndata again.
+func cachedH5adPass(cache *hashcache.Cache, h5adPath string,
+	currentVocabSha string, currentCheckVersion int,
+	stdout io.Writer) (bool, error) {
+
 	scPath := sidecar.SidecarPath(h5adPath)
 	doc, err := readMaybe(scPath)
 	if err != nil {
 		return false, err
 	}
 	if doc == nil || doc.H5ad == nil || doc.H5ad.InspectedSha256 == "" {
-		return false, nil
+		return false, nil // no recorded inspection
 	}
+
 	sum, err := cache.Sum(h5adPath)
 	if err != nil {
 		return false, err
 	}
+	// Reasons we'd reject the cache, in priority order (most
+	// actionable first). Returning the first reason we hit so the
+	// caller can show it.
 	if !strings.EqualFold(sum, doc.H5ad.InspectedSha256) {
+		fmt.Fprintf(stdout,
+			"  re-inspecting %s: file sha changed since %s\n",
+			h5adPath, doc.H5ad.InspectedAt.UTC().Format("2006-01-02"))
 		return false, nil
 	}
+	if doc.H5ad.InspectedVocabSha256 == "" ||
+		!strings.EqualFold(doc.H5ad.InspectedVocabSha256, currentVocabSha) {
+		fmt.Fprintf(stdout,
+			"  re-inspecting %s: vocabulary changed since last check\n"+
+				"    (was %s, now %s)\n",
+			h5adPath,
+			shortShaOr(doc.H5ad.InspectedVocabSha256, "(unrecorded)"),
+			shortSha(currentVocabSha))
+		return false, nil
+	}
+	if doc.H5ad.InspectedCheckVersion < currentCheckVersion {
+		fmt.Fprintf(stdout,
+			"  re-inspecting %s: mus h5ad-check code version bumped "+
+				"(sidecar=%d, current=%d)\n",
+			h5adPath,
+			doc.H5ad.InspectedCheckVersion, currentCheckVersion)
+		return false, nil
+	}
+	// All three keys match.
 	fmt.Fprintf(stdout,
-		"✓ %s: cached pass (inspected %s, sha unchanged)\n"+
+		"✓ %s: cached pass (inspected %s, sha+vocab+check_v unchanged)\n"+
 			"  re-run with --force to re-inspect.\n",
 		h5adPath,
 		doc.H5ad.InspectedAt.UTC().Format("2006-01-02"))
 	return true, nil
+}
+
+// shortShaOr returns shortSha(s), or `fallback` if s is empty.
+func shortShaOr(s, fallback string) string {
+	if s == "" {
+		return fallback
+	}
+	return shortSha(s)
 }
 
 // --- shared inspection helpers (also used by `mus check`) ------------------
@@ -182,6 +236,15 @@ func runH5adInspection(cmd *cobra.Command, cache *hashcache.Cache,
 	if err != nil {
 		return nil, fmt.Errorf("load vocabulary: %w", err)
 	}
+	return runH5adInspectionWithVocab(cmd, cache, h5adPath, vocabRes)
+}
+
+// runH5adInspectionWithVocab is the variant that takes a pre-loaded
+// LoadResult, used by `mus h5ad check` (which loads the vocab once
+// for both the cache check and the inspection).
+func runH5adInspectionWithVocab(cmd *cobra.Command, cache *hashcache.Cache,
+	h5adPath string, vocabRes *vocab.LoadResult) (*h5ad.Report, error) {
+	_ = vocab.Load // (kept import live)
 
 	// 2. Metadata from cascade (.env walked up from the h5ad's dir)
 	//    + the data file's existing sidecar Bio/H5ad blocks (if any).
@@ -215,7 +278,7 @@ func runH5adInspection(cmd *cobra.Command, cache *hashcache.Cache,
 // sections. `sha` is the sha256 of the .h5ad file at inspection
 // time — recorded so a later `mus check` can decide whether the
 // recorded PASS is still valid without re-running anndata.
-func stampSidecar(r *h5ad.Report, sha string) error {
+func stampSidecar(r *h5ad.Report, sha string, vocabSha string, checkVersion int) error {
 	scPath := sidecar.SidecarPath(r.H5adPath)
 	doc, err := readMaybe(scPath)
 	if err != nil {
@@ -232,13 +295,15 @@ func stampSidecar(r *h5ad.Report, sha string) error {
 	}
 	// File-shape block (h5ad-specific).
 	doc.H5ad = &sidecar.H5ad{
-		NObs:            r.Inspection.NObs,
-		NVars:           r.Inspection.NVars,
-		Layers:          append([]string(nil), r.Inspection.Layers...),
-		Embedding:       embeddingLabel(r.Inspection),
-		AnnDataVersion:  r.Inspection.AnnDataVersion,
-		InspectedAt:     time.Now().UTC().Truncate(time.Second),
-		InspectedSha256: sha,
+		NObs:                  r.Inspection.NObs,
+		NVars:                 r.Inspection.NVars,
+		Layers:                append([]string(nil), r.Inspection.Layers...),
+		Embedding:             embeddingLabel(r.Inspection),
+		AnnDataVersion:        r.Inspection.AnnDataVersion,
+		InspectedAt:           time.Now().UTC().Truncate(time.Second),
+		InspectedSha256:       sha,
+		InspectedVocabSha256:  vocabSha,
+		InspectedCheckVersion: checkVersion,
 	}
 	if r.Metadata != nil {
 		doc.H5ad.GeneIDType = r.Metadata.GeneIDType

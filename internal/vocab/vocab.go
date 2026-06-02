@@ -14,7 +14,9 @@ package vocab
 
 import (
 	"context"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -179,10 +181,17 @@ func (o *LoadOptions) now() time.Time {
 
 // LoadResult records where the returned vocabulary came from.
 type LoadResult struct {
-	Vocabulary *Vocabulary
-	Source     string // "codeberg" | "cache" | "embedded"
-	Path       string // file path for "cache" / "embedded"; URL for "codeberg"
-	Warnings   []string
+	Vocabulary    *Vocabulary
+	Source        string // "codeberg" | "cache" | "embedded"
+	Path          string // file path for "cache" / "embedded"; URL for "codeberg"
+	ContentSha256 string // hex sha256 of the raw YAML bytes — a vocab-version fingerprint
+	Warnings      []string
+}
+
+// contentSha256 returns the hex-encoded sha256 of raw.
+func contentSha256(raw []byte) string {
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
 }
 
 // Load returns the active Vocabulary, trying in order: live HTTPS
@@ -212,6 +221,7 @@ func Load(ctx context.Context, opts LoadOptions) (*LoadResult, error) {
 						res.Vocabulary = vocab
 						res.Source = "cache"
 						res.Path = cachePath
+						res.ContentSha256 = contentSha256(raw)
 						return res, nil
 					}
 					res.Warnings = append(res.Warnings,
@@ -227,10 +237,11 @@ func Load(ctx context.Context, opts LoadOptions) (*LoadResult, error) {
 		if client == nil {
 			client = &http.Client{Timeout: 30 * time.Second}
 		}
-		if vocab, warns, err := pullFromURL(ctx, client, url, cachePath); err == nil {
+		if vocab, raw, warns, err := pullFromURL(ctx, client, url, cachePath); err == nil {
 			res.Vocabulary = vocab
 			res.Source = "codeberg"
 			res.Path = url
+			res.ContentSha256 = contentSha256(raw)
 			res.Warnings = append(res.Warnings, warns...)
 			return res, nil
 		} else {
@@ -248,6 +259,7 @@ func Load(ctx context.Context, opts LoadOptions) (*LoadResult, error) {
 				res.Vocabulary = vocab
 				res.Source = "cache"
 				res.Path = cachePath
+				res.ContentSha256 = contentSha256(raw)
 				res.Warnings = append(res.Warnings,
 					"using stale cache (Codeberg unreachable)")
 				return res, nil
@@ -262,37 +274,39 @@ func Load(ctx context.Context, opts LoadOptions) (*LoadResult, error) {
 	}
 	res.Vocabulary = vocab
 	res.Source = "embedded"
+	res.ContentSha256 = contentSha256(embeddedYAML)
 	res.Warnings = append(res.Warnings,
 		"using embedded fallback (Codeberg unreachable and no cache)")
 	return res, nil
 }
 
 // pullFromURL does the HTTPS fetch, parses, and on success atomically
-// writes to cachePath. Returns the parsed vocabulary.
+// writes to cachePath. Returns the parsed vocabulary AND the raw
+// bytes (so callers can compute the content fingerprint).
 func pullFromURL(ctx context.Context, client *http.Client,
-	url, cachePath string) (*Vocabulary, []string, error) {
+	url, cachePath string) (*Vocabulary, []byte, []string, error) {
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return nil, nil, fmt.Errorf("build request: %w", err)
+		return nil, nil, nil, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Accept", "application/x-yaml, text/yaml, text/plain, */*")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, nil, fmt.Errorf("HTTP GET: %w", err)
+		return nil, nil, nil, fmt.Errorf("HTTP GET: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
-		return nil, nil, fmt.Errorf("HTTP %d %s", resp.StatusCode, resp.Status)
+		return nil, nil, nil, fmt.Errorf("HTTP %d %s", resp.StatusCode, resp.Status)
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1 MiB cap
 	if err != nil {
-		return nil, nil, fmt.Errorf("read body: %w", err)
+		return nil, nil, nil, fmt.Errorf("read body: %w", err)
 	}
 	vocab, err := Parse(raw)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	var warns []string
 	if cachePath != "" {
@@ -301,7 +315,7 @@ func pullFromURL(ctx context.Context, client *http.Client,
 				fmt.Sprintf("could not update local cache %s: %v", cachePath, err))
 		}
 	}
-	return vocab, warns, nil
+	return vocab, raw, warns, nil
 }
 
 // writeCache writes raw to cachePath atomically (mkdir-all + temp-rename).
