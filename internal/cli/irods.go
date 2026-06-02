@@ -150,7 +150,7 @@ func resolveIRODSCollection(env *config.Env, overrideDataProject, overrideRemote
 func newIRODSUploadCmd() *cobra.Command {
 	// IRON's upload is idempotent by default: matching size+modtime → skip;
 	// different → overwrite. There is no "force" concept to expose.
-	var exclusive, newer, dryRun, noELNComment bool
+	var exclusive, newer, dryRun, noELNComment, forceH5adUpload bool
 	var dataProject, remoteName, packRaw string
 	verify := true // verify-checksum on by default; opt-out below
 	cmd := &cobra.Command{
@@ -181,7 +181,7 @@ func newIRODSUploadCmd() *cobra.Command {
 				Exclusive:      exclusive,
 				Newer:          newer,
 				DryRun:         dryRun,
-			}, dataProject, remoteName, pack, !noELNComment)
+			}, dataProject, remoteName, pack, !noELNComment, forceH5adUpload)
 		},
 	}
 	cmd.Flags().BoolVar(&verify, "verify-checksum", true, "re-hash both sides after upload (default: on)")
@@ -200,10 +200,12 @@ func newIRODSUploadCmd() *cobra.Command {
 		"skip applying mus_* AVU metadata to the uploaded iRODS object")
 	cmd.Flags().BoolVar(&noELNComment, "no-eln-comment", false,
 		"don't post an upload summary as a COMMENT section in the linked ELN experiment")
+	cmd.Flags().BoolVar(&forceH5adUpload, "force-h5ad-upload", false,
+		"bypass the .h5ad sanity-check gate (NOT recommended — depositor's responsibility)")
 	return cmd
 }
 
-func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, overrideDataProject, overrideRemoteName string, pack packMode, postELNComment bool) error {
+func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, overrideDataProject, overrideRemoteName string, pack packMode, postELNComment, forceH5adUpload bool) error {
 	dir, err := workingDir(cmd)
 	if err != nil {
 		return err
@@ -219,7 +221,6 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "→ remote collection: %s\n", remoteCollection)
 
 	client, err := iron.New()
 	if err != nil {
@@ -234,6 +235,22 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 	ctx, cancel := context.WithCancel(cmd.Context())
 	defer cancel()
 
+	// h5ad gate — refuse the whole batch BEFORE any bytes leave the
+	// machine if any .h5ad in args (or inside a folder arg) lacks a
+	// fresh PASS. --force-h5ad-upload bypasses.
+	failures, err := gateH5adForUpload(ctx, cache, args, forceH5adUpload)
+	if err != nil {
+		return fmt.Errorf("h5ad gate: %w", err)
+	}
+	if len(failures) > 0 {
+		return formatH5adGateError(failures)
+	}
+	if forceH5adUpload {
+		fmt.Fprintln(os.Stderr,
+			"⚠ --force-h5ad-upload set — h5ad sanity-check gate BYPASSED for this batch")
+	}
+
+	fmt.Fprintf(os.Stderr, "→ remote collection: %s\n", remoteCollection)
 	if err := client.Mkdir(ctx, remoteCollection); err != nil {
 		return fmt.Errorf("imkdir %s: %w", remoteCollection, err)
 	}
