@@ -162,7 +162,14 @@ mus config set tissue 'middle temporal gyrus,hippocampus,frontal cortex'
 mus config set disease 'Alzheimer disease'
 ```
 
-To remove a key, hand-edit the `.env` and delete the line.
+Remove a key:
+
+```bash
+mus config unset access
+```
+
+`unset` preserves any comments in the `.env` and only deletes the
+file if it ends up truly empty (no keys, no comments).
 
 ### File annotation — set with `mus tag` (and auto by upload)
 

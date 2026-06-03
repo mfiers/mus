@@ -16,7 +16,12 @@ func newConfigCmd() *cobra.Command {
 		Use:   "config",
 		Short: "manage .mus TOML config (cascading)",
 	}
-	cmd.AddCommand(newConfigShowCmd(), newConfigSetCmd(), newConfigFilesCmd())
+	cmd.AddCommand(
+		newConfigShowCmd(),
+		newConfigSetCmd(),
+		newConfigUnsetCmd(),
+		newConfigFilesCmd(),
+	)
 	return cmd
 }
 
@@ -94,6 +99,30 @@ func validateConfigValue(key, value string) error {
 		return dataproject.ValidateName(value)
 	}
 	return nil
+}
+
+func newConfigUnsetCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "unset KEY",
+		Short: "remove a key from the local .env",
+		Long: "Removes KEY from the local folder's .env. Preserves any\n" +
+			"comments and blank lines in the file. If removing KEY leaves\n" +
+			"the file with no keys AND no comments (only whitespace), the\n" +
+			"file is deleted; otherwise it's kept with the surviving\n" +
+			"content.\n\n" +
+			"This is local-only — keys inherited from parent .env files\n" +
+			"are not touched. To remove a key from a parent, run\n" +
+			"`mus -C PARENT_DIR config unset KEY`.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			key := args[0]
+			dir, err := workingDir(cmd)
+			if err != nil {
+				return err
+			}
+			return config.Unset(dir, key)
+		},
+	}
 }
 
 func newConfigFilesCmd() *cobra.Command {
