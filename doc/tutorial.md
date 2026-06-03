@@ -89,64 +89,136 @@ files you ask it to upload.
 
 ## 4. How annotations work — folder vs file
 
-Two places to put annotation:
+Two places annotation lives: a **`.env`** in the folder, applying to
+everything under it, and a **`*.mus` sidecar** next to one file,
+applying only to that file. Don't edit either by hand — mus has
+commands for both.
 
-### Folder annotation — `.env`
+### Folder annotation — set with `mus config set`
 
-A plain `KEY=VALUE` file. Applies to **every file under that folder
-and all subfolders**. mus collects every `.env` from `/` down to your
-working directory, merging them in that order; closer-to-cwd `.env`
-files override shallower ones.
-
-For our example:
+The primary command. Each call writes one key into the local folder's
+`.env` (creating the file if needed):
 
 ```bash
+cd ~/projects/microglia_pilot
+
+mus config set data_project Fiers2025
+mus config set eln_experiment_id 12345
+mus config set organism human
+mus config set tissue 'middle temporal gyrus'
+mus config set technology 10x_chromium_3p_v3
+mus config set suspension_type nucleus
+mus config set source internal
+mus config set access internal
+```
+
+What ends up on disk (you can also hand-edit, but the command is
+safer — it validates `data_project` against the `NameYear` pattern
+and uses atomic writes so a Ctrl-C can't leave a half-written file):
+
+```
 # ~/projects/microglia_pilot/.env
+access=internal
 data_project=Fiers2025
 eln_experiment_id=12345
 organism=human
-tissue=middle temporal gyrus
-technology=10x_chromium_3p_v3
-suspension_type=nucleus
 source=internal
+suspension_type=nucleus
+technology=10x_chromium_3p_v3
+tissue=middle temporal gyrus
+```
+
+Inspect what's effective at any point in the tree:
+
+```bash
+mus config show              # merged cascade
+mus config show --local      # just this folder's .env
+mus config files             # paths of every .env that contributes
+```
+
+**Cascade rule:** mus collects every `.env` from `/` down to your
+working directory and merges them in that order; closer-to-cwd
+`.env` files override shallower ones. Every file under
+`microglia_pilot/` inherits the values above without you having to
+repeat them in `raw/` or `final/`.
+
+Subfolders override the parent — same command, run from the subfolder:
+
+```bash
+# Override access for the published version in final/
+mus -C final config set access public
+mus -C final config set doi 10.1234/microglia.2025
+```
+
+The `-C DIR` flag works like `git -C` — run mus as if it were
+invoked from `DIR`. The resulting `final/.env` overrides
+`access=internal` from the parent; `organism`, `tissue`, …
+cascade through unchanged.
+
+Lists are comma-separated:
+
+```bash
+mus config set tissue 'middle temporal gyrus,hippocampus,frontal cortex'
+mus config set disease 'Alzheimer disease'
+```
+
+To remove a key, hand-edit the `.env` and delete the line.
+
+### File annotation — set with `mus tag` (and auto by upload)
+
+The `*.mus` sidecar lives next to the data file (`foo.h5ad` →
+`foo.h5ad.mus`). It records the file's sha256 + size + mtime and a
+snapshot of the resolved cascade at the moment the file was tagged.
+Applies to **only that one file.**
+
+Create or refresh a sidecar:
+
+```bash
+mus tag final/microglia_clusters.h5ad
+mus tag final/microglia_clusters.h5ad \
+    -m "post-QC final figure source" \
+    -t qc-pass -t figure3
+```
+
+What ends up on disk (mus generates this; do not hand-edit):
+
+```
+# final/microglia_clusters.h5ad.mus
 access=internal
+data_project=Fiers2025
+eln_experiment_id=12345
+hashed=2026-06-03T10:00:00Z
+mtime=2026-06-03T09:55:12Z
+note=post-QC final figure source
+organism=human
+sha256=acb5475ab89a05d813c8dc0c987c4d2198d319fc21b8df1551cde4e3316fd2d7
+size=1342515200
+suspension_type=nucleus
+tags=qc-pass,figure3
+technology=10x_chromium_3p_v3
+tissue=middle temporal gyrus
+version=1
 ```
 
-Every upload from anywhere under `microglia_pilot/` inherits these.
-You write them once, you don't repeat them in `raw/` or `final/`.
+`mus tag` is also what `mus irods upload` does first — it makes sure
+the sidecar exists with a fresh sha256 before uploading.
 
-Subfolders refine via their own `.env`:
+`mus tag` flags for sidecar-only content (rest comes from the
+cascade):
 
-```bash
-# ~/projects/microglia_pilot/raw/.env
-note=10x output as received from VIB sequencing core 2025-09-14
-```
+| Flag | Purpose |
+| --- | --- |
+| `-m / --note` | free-text note on this file |
+| `-t / --tag` | tag (repeatable) |
+| `-f / --force` | rehash even if the cached sha is still valid |
 
-```bash
-# ~/projects/microglia_pilot/final/.env
-access=public                # this is the published version
-doi=10.1234/microglia.2025
-```
+For a per-file annotation that isn't a note or tag (a single sample
+with a different `tissue`, one file you want `access=public` while
+the rest are `internal`), today the cleanest path is a per-subfolder
+`.env` + move the file there. A future `mus tag --set key=value`
+flag is on the roadmap.
 
-The `access=public` in `final/.env` overrides the `access=internal`
-in the parent. The unchanged keys (organism, tissue, …) cascade
-through unchanged.
-
-### File annotation — `*.mus` sidecar
-
-Created automatically by `mus tag <file>` and `mus irods upload <file>`.
-Lives next to the data file (`foo.h5ad` → `foo.h5ad.mus`). Records the
-sha256, size, mtime, iRODS path, and a snapshot of the resolved cascade
-at the moment the file was tagged. Applies to **only that one file**.
-
-Use folder `.env` for things that are true of the whole folder (the
-project name, the experiment, the organism, the technology). The file
-sidecar is the right place for the rare per-file exception (one
-sample with a different tissue, one file marked `access=public` while
-the rest stay internal) — though today the easiest way to set those
-is still a per-subfolder `.env` plus moving the file into that subfolder.
-
-Rule of thumb: **the .env is your recipe; the .mus sidecar is what
+Rule of thumb: **the .env is your recipe; the `*.mus` sidecar is what
 actually happened.**
 
 ### Where they live in version control
