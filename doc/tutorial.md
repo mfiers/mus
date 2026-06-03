@@ -21,11 +21,11 @@ iron auth               # one-shot — prompts for password / SSO
 mus irods login         # optional: same as `iron auth`, plus prereq checks
 ```
 
-`iron auth` is the actual credential exchange. `mus irods login`
-is a thin wrapper that checks the prerequisites (iron on PATH,
-env file present) before invoking `iron auth`, then verifies with
-`iron pwd`. Use whichever you prefer — the result is the same
-cached credential under `~/.irods/`.
+`iron auth` is the actual credential exchange. `mus irods login` is
+a thin wrapper that checks prerequisites (iron on PATH, env file
+present) before invoking `iron auth`, then verifies with `iron pwd`.
+Use whichever you prefer — the result is the same cached credential
+under `~/.irods/`.
 
 **ELN auth.** Get a token in eLab (Apps & Connections → Manage
 authentication → Generate access token), then:
@@ -40,125 +40,279 @@ No ELN access? Run `mus eln disable --global` once and skip this.
 
 ## 2. What to back up
 
-**Yes, back up:**
+Three categories, regardless of how your project tree is shaped:
 
-- **raw data** — primary measurements, sequencing reads, microscope
-  acquisitions, instrument exports. Things you cannot regenerate.
+- **scripts / code** — the pipeline that turns raw → final. If lost
+  you cannot reproduce the analysis.
+- **raw data** — primary measurements you cannot regenerate: fastq,
+  proteomics raw files, microscope acquisitions, instrument exports.
 - **final / publication-ready data** — the curated h5ad, the figure
-  source CSVs, the manuscript-supporting tables.
+  source tables, the manuscript supplement.
 
-**No, don't back up:**
-
-- **intermediate** files — everything in `data/intermediate/` that
-  can be regenerated from raw via `make`. Re-derive them on demand.
-
-Rule of thumb: if losing it would force you to repeat wet-lab work
-or rerun a 12-hour pipeline, back it up.
+Skip anything you can regenerate from those three with a `make` run
+(BAMs, count matrices, intermediate normalisations, plots). The point
+of mus is to back up what's irreplaceable, not to mirror your whole
+working tree.
 
 ---
 
-## 3. Annotate, then upload
+## 3. A worked example
 
-Every folder mus uploads from needs at minimum two facts:
+For the rest of the tutorial we'll use a toy single-cell pilot. Layout:
+
+```
+~/projects/microglia_pilot/
+  .env                        ← project-level annotation
+  README.md
+  scripts/
+    01_qc.py
+    02_normalize.py
+    03_cluster.py
+  raw/
+    .env                      ← override: raw-specific annotation
+    sample01.fastq.gz
+    sample02.fastq.gz
+  intermediate/               ← NOT backed up (regeneratable from raw)
+    sample01.bam
+    sample01.counts
+  final/
+    .env                      ← override: published-ready annotation
+    microglia_clusters.h5ad
+    figure_data.csv
+```
+
+Adapt the directory names to your own conventions — mus doesn't care
+about the layout, only about which `.env` files it finds and which
+files you ask it to upload.
+
+---
+
+## 4. How annotations work — folder vs file
+
+Two places to put annotation:
+
+### Folder annotation — `.env`
+
+A plain `KEY=VALUE` file. Applies to **every file under that folder
+and all subfolders**. mus collects every `.env` from `/` down to your
+working directory, merging them in that order; closer-to-cwd `.env`
+files override shallower ones.
+
+For our example:
+
+```bash
+# ~/projects/microglia_pilot/.env
+data_project=Fiers2025
+eln_experiment_id=12345
+organism=human
+tissue=middle temporal gyrus
+technology=10x_chromium_3p_v3
+suspension_type=nucleus
+source=internal
+access=internal
+```
+
+Every upload from anywhere under `microglia_pilot/` inherits these.
+You write them once, you don't repeat them in `raw/` or `final/`.
+
+Subfolders refine via their own `.env`:
+
+```bash
+# ~/projects/microglia_pilot/raw/.env
+note=10x output as received from VIB sequencing core 2025-09-14
+```
+
+```bash
+# ~/projects/microglia_pilot/final/.env
+access=public                # this is the published version
+doi=10.1234/microglia.2025
+```
+
+The `access=public` in `final/.env` overrides the `access=internal`
+in the parent. The unchanged keys (organism, tissue, …) cascade
+through unchanged.
+
+### File annotation — `*.mus` sidecar
+
+Created automatically by `mus tag <file>` and `mus irods upload <file>`.
+Lives next to the data file (`foo.h5ad` → `foo.h5ad.mus`). Records the
+sha256, size, mtime, iRODS path, and a snapshot of the resolved cascade
+at the moment the file was tagged. Applies to **only that one file**.
+
+Use folder `.env` for things that are true of the whole folder (the
+project name, the experiment, the organism, the technology). The file
+sidecar is the right place for the rare per-file exception (one
+sample with a different tissue, one file marked `access=public` while
+the rest stay internal) — though today the easiest way to set those
+is still a per-subfolder `.env` plus moving the file into that subfolder.
+
+Rule of thumb: **the .env is your recipe; the .mus sidecar is what
+actually happened.**
+
+### Where they live in version control
+
+- `.env` files at the project root SHOULD be committed to git — they
+  describe the dataset.
+- `*.mus` sidecars SHOULD be committed too. They're tiny (~1 KB), plain
+  text, and after `mus rm` they're the only handle that can restore
+  the data (see §12). `mus tag` and `mus irods upload` update them in
+  place without clobbering fields they don't touch — diff-friendly.
+
+---
+
+## 5. The required minimum
+
+A folder mus uploads from needs exactly two facts:
 
 | Required | Why |
 | --- | --- |
-| `data_project` (e.g. `Fiers2025`) | Path component on iRODS; groups all data from one project under one collection. |
+| `data_project` (e.g. `Fiers2025`) | Path component on iRODS; groups all data from one project under one collection. Format: `NameYear` (capital first letter, ends in 4 digits). |
 | `eln_experiment_id` (or `eln_disabled=true`) | Links each upload back to a lab notebook entry so anyone can find context. |
 
-`mus eln link 12345` sets both (it pulls the experiment, infers
-`data_project` from collaborators if it can, asks you to confirm,
-writes the folder's `.env`).
+The easiest way to set both is `mus eln link <experiment_id>`:
 
-If you have no ELN:
+```bash
+cd ~/projects/microglia_pilot
+mus eln link 12345
+```
+
+This:
+1. Fetches the experiment's name, study, project, and collaborators
+   from eLab.
+2. Suggests a `data_project` name (collaborator surname + year, or
+   the one your colleagues already used for this experiment if mus
+   can find it in the lab's iRODS catalog).
+3. Writes `eln_experiment_id`, `eln_experiment_name`, `data_project`,
+   and the rest into `~/projects/microglia_pilot/.env`.
+
+No ELN access? Set them by hand:
 
 ```bash
 mus config set data_project Fiers2025
-mus config set eln_experiment_name MyPilot
-mus eln disable                              # this folder
+mus config set eln_experiment_name microglia_pilot
+mus eln disable
 ```
 
-### Recommended annotation
+---
 
-These two are recommended for every dataset:
+## 6. Recommended: source & access
 
-| Key | Values |
-| --- | --- |
-| `source` | `internal` (made here) / `external` (downloaded) |
-| `access` | `internal` (unpublished, lab-only) / `public` (published) |
+Two orthogonal axes. Set both at the folder level.
+
+| Key | Values | Meaning |
+| --- | --- | --- |
+| `source` | `internal` | Produced in our lab. |
+|  | `external` | Downloaded from a public dataset (CellxGene, GEO, ArrayExpress, …). |
+| `access` | `internal` | Lab-only — unpublished or under embargo. |
+|  | `public` | Published, shareable, no embargo. |
 
 ```bash
 mus config set source internal
 mus config set access internal
 ```
 
-### Biology (optional but useful for h5ad files)
+For the published version in `final/`:
 
-`organism`, `tissue`, `cell_type`, `disease`, `technology`,
-`suspension_type`, `sex`, `age`, … are all controlled-vocabulary
-fields. Values must come from the joint vocabulary:
+```bash
+mus -C final config set access public
+mus -C final config set doi 10.1234/microglia.2025
+```
 
-- **Live:**
-  <https://codeberg.org/mfiers/mus/src/branch/main/vocabulary/main.yaml>
-- **Local:** `mus vocab show` (your current fetched copy)
+---
+
+## 7. Biology annotation (use it everywhere)
+
+These fields are useful for **any data file**, not only h5ad — a BAM
+from a single sample carries the same organism / tissue / disease
+that the h5ad downstream of it carries. Set them once at the project
+root and they cascade to every upload.
+
+All values are drawn from a controlled vocabulary:
+
+- Live: <https://codeberg.org/mfiers/mus/src/branch/main/vocabulary/main.yaml>
+- Local: `mus vocab show`
+
+Field → ontology mapping:
+
+| Field | Ontology | Browse |
+| --- | --- | --- |
+| `tissue` | UBERON labels | <https://www.ebi.ac.uk/ols4/ontologies/uberon> |
+| `cell_type` | CL labels | <https://www.ebi.ac.uk/ols4/ontologies/cl> |
+| `disease` | MONDO labels | <https://www.ebi.ac.uk/ols4/ontologies/mondo> |
+| `technology` | EFO-aligned protocol/chemistry | <https://www.ebi.ac.uk/ols4/ontologies/efo> |
+
+Use **labels**, not IDs. `tissue=middle temporal gyrus` — not
+`UBERON:0002771`. mus validates against the vocabulary; labels are
+the primary key, IDs are optional companion fields.
+
+Example for the microglia pilot:
 
 ```bash
 mus config set organism human
-mus config set tissue 'frontal cortex,hippocampus'
+mus config set tissue 'middle temporal gyrus,hippocampus'
 mus config set cell_type 'microglial cell'
+mus config set disease 'Alzheimer disease'
 mus config set technology 10x_chromium_3p_v3
-mus config set suspension_type nucleus
+mus config set suspension_type nucleus    # cell / nucleus / na
+mus config set sex pooled
+mus config set age 65y-90y
 ```
 
-Tissue must be **UBERON**, cell_type must be **CL**, disease must
-be **MONDO** — labels (not IDs) from the joint vocabulary. mus
-validates on `mus h5ad check`.
+Lists are comma-separated. Multi-word labels with embedded commas
+(`"leukoencephalopathy, diffuse hereditary, with spheroids 1"`) get
+double-quoted automatically.
+
+The more you fill in, the easier it is to find this dataset later via
+`iron query` (e.g. "all internal AD-microglia data the lab has") and
+the richer the AVU metadata stamped on the iRODS object.
 
 ---
 
-## 4. Pack & upload
+## 8. Pack & upload
 
-### Single files
+### Single file
 
 ```bash
-mus irods upload my_analysis.h5ad
+cd ~/projects/microglia_pilot
+mus h5ad check final/microglia_clusters.h5ad    # validates structure + vocab
+mus irods upload final/microglia_clusters.h5ad
 ```
 
-### Folders
+`.h5ad` files are gated: `mus h5ad check` must have validated them
+before `mus irods upload` will accept them. The check stamps a pass
+into the sidecar. `--force-h5ad-upload` bypasses; you'll regret it.
 
-mus profiles the folder and decides whether to pack:
+### Folder with many small files
 
 ```bash
 mus irods upload scripts/
-# scripts/ — 412 files, total 1.8 MB, median 4 KB
+# scripts/ — 3 files, total 8 KB, median 2 KB
 # Many small files — pack into scripts.tar.gz? [t/a/c]
 ```
 
-- **`t` (pack)** — recommended when you have many small files
-  (iRODS overhead per object dominates). mus tar+gzips locally,
-  uploads one archive, keeps the local archive by default.
-- **`a` (as-is)** — preserves the directory structure on iRODS
-  (browsable from the Mango web UI). Use for small numbers of
-  large files.
+- **`t` (pack)** — recommended when you have many small files. iRODS
+  per-object overhead dominates for tiny things. mus tar+gzips
+  locally, uploads one archive.
+- **`a` (as-is)** — preserves the directory tree on iRODS (browsable
+  in the Mango web UI). Use for a small number of larger files.
 
-Non-interactive callers must pass `--pack tar.gz` or `--pack none`.
+Non-interactive callers (CI, scripts) must pass `--pack tar.gz` or
+`--pack none` explicitly.
 
-### h5ad files
-
-`.h5ad` files are gated. Before upload, run `mus h5ad check` so the
-inspector validates structure, vocabulary, and stamps the result
-into the sidecar:
+### Whole project at once
 
 ```bash
-mus h5ad check my_analysis.h5ad
-mus irods upload my_analysis.h5ad
+cd ~/projects/microglia_pilot
+mus irods upload scripts/ raw/ final/
 ```
 
-`--force-h5ad-upload` bypasses the gate but you'll regret it.
+Three uploads, one inherited annotation set, one ELN comment per
+folder. The `intermediate/` subfolder is simply not in the argument
+list — it's not backed up.
 
 ---
 
-## 5. Where the data lands
+## 9. Where the data lands + the `.mus` sidecars
 
 Layout on iRODS:
 
@@ -166,28 +320,67 @@ Layout on iRODS:
 <irods_home>/project/<data_project>/<eln_experiment_name>/<basename>
 ```
 
-For example: `/gbiomed/home/BADS/mus/project/Fiers2025/sea_ad_pilot/my_analysis.h5ad`
+So `final/microglia_clusters.h5ad` lands at e.g.
+`/gbiomed/home/BADS/mus/project/Fiers2025/microglia_pilot/microglia_clusters.h5ad`.
 
-After upload, two things exist locally:
+After upload, three things exist locally next to each uploaded file:
 
-- the original file (untouched)
-- a **`*.mus` sidecar** next to it with the iRODS path, persistent
-  URL, sha256, and (for folders) the recursive Merkle hash
+- the original file (unchanged)
+- a `*.mus` sidecar with iRODS path, persistent URL, sha256, and a
+  snapshot of the resolved cascade
+- for folder uploads: one folder-level `<foldername>.mus` sidecar
+  with the recursive Merkle hash, not per-file sidecars
 
-A linked ELN experiment gets a one-line comment with a clickable
-PURL link, so future-you (or a colleague) can find the data from
-the ELN entry. Skip the comment with `--no-eln-comment`.
+A linked ELN experiment receives a one-line comment per upload with
+clickable persistent URLs — so future-you (or a colleague) can jump
+from the ELN entry to the data. `--no-eln-comment` opts out per call.
 
-All resolved metadata (organism, tissue, source, access, sha256,
-…) is also attached to the iRODS object as AVU triplets — visible
-in `iron meta ls` and queryable via `iquest`.
+All resolved metadata (organism, tissue, technology, source, access,
+sha256, …) is also attached to the iRODS object as **AVU triplets** —
+visible in `iron meta ls` and queryable via `iron query`. AVU is iRODS
+jargon for "attribute-value-unit" key-value metadata.
+
+**Note:** `.mus` sidecars and `.env` files **stay local** — they're
+not uploaded. mus passes `--ignore=*.mus,.env` to iron on folder
+uploads so they can't slip in. The iRODS catalog carries the
+metadata as AVU; the local sidecar carries the same metadata plus
+the path / URL / PURL pointers.
+
+### Leave the `*.mus` sidecars in place
+
+This is important. The sidecar is your handle to the data:
+
+- It records the sha256 — needed by `mus check` and `mus rm` to
+  detect drift.
+- It records the iRODS path and persistent URL — needed by
+  `mus irods get` to download the file back.
+- After a `mus rm` it becomes a **tombstone** (see §11) — the only
+  remaining pointer to where the data lives.
+
+Do not `rm *.mus`. Do not gitignore them in shared lab projects.
+Treat them like the data file's passport.
 
 ---
 
-## 6. Safely delete local data
+## 10. Verify, anytime
 
-Use `mus rm`, not `rm`. It refuses to delete unless three checks
-pass:
+```bash
+mus check                           # every *.mus in this dir
+mus check -r .                      # recurse
+mus irods check                     # local hash vs iron's remote checksum
+mus irods check --deep scripts.mus  # walk the iRODS tree for as-is folders
+```
+
+`mus check` is fast (it uses a local sha256 cache keyed on size +
+mtime). `mus irods check --deep` is slow for large folder-as-is
+uploads but it's the only way to confirm bytes-on-disk match
+bytes-on-iRODS file-by-file.
+
+---
+
+## 11. Safely delete local data
+
+Use `mus rm`, not `rm`. It refuses to delete unless three checks pass:
 
 1. sidecar says the file is uploaded (`irods_status=uploaded`)
 2. fresh local hash matches what was uploaded (no local drift)
@@ -195,94 +388,137 @@ pass:
    loss)
 
 ```bash
-mus rm --dry-run my_analysis.h5ad     # show plan, touch nothing
-mus rm my_analysis.h5ad               # prompts y/N
-mus rm -y my_analysis.h5ad scripts/   # skip prompt, batch
+mus rm --dry-run final/microglia_clusters.h5ad    # show plan, touch nothing
+mus rm final/microglia_clusters.h5ad              # prompts y/N
+mus rm -y scripts/ raw/                           # skip prompt, batch
 ```
 
 For folders uploaded as-is, `mus rm` walks `iron tree --json` and
-compares every file. Slow on big trees, but it's the only way to
-be sure.
+compares every file. Slow on big trees, but it's the only way to be
+sure.
 
-By default `mus rm` keeps the `.mus` sidecar as a **tombstone**
-(irods_status flips to `local_deleted`). Use `--delete-sidecar` to
-remove it too.
+**By default `mus rm` keeps the `*.mus` sidecar** as a **tombstone**
+(`irods_status` flips to `local_deleted`). Use `--delete-sidecar` to
+remove the sidecar too — but you usually don't want to.
 
 ---
 
-## 7. The sidecar after deletion — how to restore
+## 12. Restore from a tombstone
 
 A tombstoned sidecar still carries everything you need:
-`irods_path`, `irods_purl`, sha256. You can restore the original
-file (or folder) any time:
+`irods_path`, `irods_purl`, sha256. You can restore the data any time.
+`mus irods get` accepts multiple sidecars; shell globs work:
 
 ```bash
-mus irods get my_analysis.h5ad.mus
+mus irods get final/microglia_clusters.h5ad.mus
 mus irods get scripts.mus
+mus irods get final/*.mus                      # all sidecars in final/
+mus irods get final/*.mus raw/*.mus            # multi-folder
 ```
 
 Verification on restore is automatic: mus recomputes the hash and
-compares to the sidecar; mismatch → loud `PROVENANCE MISMATCH`
-error.
+compares to the sidecar. Mismatch → loud `PROVENANCE MISMATCH` error,
+file left in place for inspection.
+
+### Metadata refresh on get
+
+`mus irods get` also pulls the current AVU back from iRODS and folds
+it into the local sidecar. This catches the case where a colleague
+enriched the metadata on iRODS after the original upload (e.g. added
+`disease` or fixed a `cell_type` label).
+
+| Situation | Behaviour on get |
+| --- | --- |
+| AVU has a field the sidecar didn't | silently added to the sidecar |
+| AVU agrees with the sidecar | silent no-op |
+| AVU differs from the sidecar | `~ key: old → new` warning line, sidecar overwritten |
+
+The refresh runs even when the file is already local and matches the
+sidecar (download is skipped, AVU refresh isn't). So `mus irods get
+*.mus` is a safe idempotent way to bring local annotation up to date
+with what the lab has put on the catalog.
 
 A few teammate-facing properties of tombstones:
 
 - They're tiny (~1 KB), worth keeping in git for shared projects.
 - They survive iRODS-side moves and renames because the `irods_purl`
   is a persistent identifier, not a path.
-- If you also `--delete-sidecar`d, you can still find the object
-  with `mus irods scan find <sha256>` if you noted the hash, or
-  by browsing under `<irods_home>/project/<data_project>/`.
+- If you `--delete-sidecar`d, you can still find the object with
+  `mus irods scan find <sha256>` if you noted the hash, or by
+  browsing under `<irods_home>/project/<data_project>/`.
 
 ---
 
-## 8. End-to-end example
+## 13. End-to-end transcript
 
 ```bash
-cd /data/projects/sea_ad_pilot
-mus eln link 12345                    # writes .env with eln_* + data_project
-mus config set source external        # SEA-AD is published data
-mus config set access public
+# Setup ------------------------------------------------------------
+cd ~/projects/microglia_pilot
+
+mus eln link 12345                                  # writes .env
+
+mus config set source internal
+mus config set access internal
 mus config set organism human
-mus config set tissue 'middle temporal gyrus,prefrontal cortex'
+mus config set tissue 'middle temporal gyrus'
+mus config set cell_type 'microglial cell'
+mus config set disease 'Alzheimer disease'
 mus config set technology 10x_chromium_3p_v3
 mus config set suspension_type nucleus
 
-mus h5ad check sea_ad.h5ad            # inspect + stamp pass
-mus irods upload sea_ad.h5ad          # → /gbiomed/.../Fiers2025/sea_ad_pilot/sea_ad.h5ad
-                                      # → ELN comment with clickable PURL
+# Per-subfolder overrides
+mus -C final config set access public
+mus -C final config set doi 10.1234/microglia.2025
 
-# … later, freeing local disk:
-mus rm sea_ad.h5ad                    # verifies, then deletes, keeps tombstone
-ls
-# sea_ad.h5ad.mus    ← tombstone
+# Validate, then back up -------------------------------------------
+mus h5ad check final/microglia_clusters.h5ad
 
-# … much later, need it back:
-mus irods get sea_ad.h5ad.mus         # downloads, verifies sha256
+mus irods upload scripts/                           # pack? → t
+mus irods upload raw/sample01.fastq.gz raw/sample02.fastq.gz
+mus irods upload final/microglia_clusters.h5ad final/figure_data.csv
+
+# Free local disk after a clean check ------------------------------
+mus rm -y final/microglia_clusters.h5ad
+ls final/
+# microglia_clusters.h5ad.mus    ← tombstone
+# figure_data.csv
+# figure_data.csv.mus
+# .env
+
+# Restore months later when you need the h5ad back -----------------
+mus irods get final/microglia_clusters.h5ad.mus
 ```
 
 ---
 
-## 9. Common pitfalls
+## 14. Common pitfalls
 
-- **"data_project not set"** — `mus eln link` or `mus config set
-  data_project Fiers2025`. Format is `NameYear`: capital first
-  letter, ends in 4 digits.
+- **"data_project not set"** — `mus eln link 12345` or
+  `mus config set data_project Fiers2025`. Format is `NameYear`:
+  capital first letter, ends in 4 digits.
 - **"no ELN status declared"** — every folder must explicitly link
-  or `mus eln disable`. There is no implicit non-ELN state — pick
-  one consciously.
+  or `mus eln disable`. No implicit non-ELN — pick consciously.
 - **"vocabulary changed since last check"** — the joint vocab was
   updated. Re-run `mus h5ad check`.
+- **"value not in vocabulary"** — check the spelling against
+  <https://codeberg.org/mfiers/mus/src/branch/main/vocabulary/main.yaml>
+  or open an issue to extend the vocab.
 - **"local drift since upload"** on `mus rm` — you (or a process)
-  modified the file after upload. Re-upload or restore the
+  modified the file after upload. Re-upload, or restore the
   original, then retry.
 - **Many small files** — always pack. iRODS metadata overhead
   dominates for tiny objects.
+- **Deleted `*.mus` by accident** — recover from git, or find the
+  object via `mus irods scan find <sha256>` if you noted the hash.
 
 ---
 
 ## See also
 
-- [quickstart.md](quickstart.md) — full reference manual
-- [joint vocabulary](https://codeberg.org/mfiers/mus/src/branch/main/vocabulary/main.yaml)
+- [quickstart.md](quickstart.md) — full reference manual with every flag
+- [joint vocabulary](https://codeberg.org/mfiers/mus/src/branch/main/vocabulary/main.yaml) — the controlled-value lists
+- UBERON: <https://www.ebi.ac.uk/ols4/ontologies/uberon> — anatomy
+- CL: <https://www.ebi.ac.uk/ols4/ontologies/cl> — cell types
+- MONDO: <https://www.ebi.ac.uk/ols4/ontologies/mondo> — diseases
+- EFO: <https://www.ebi.ac.uk/ols4/ontologies/efo> — assays / protocols
 - `mus <command> --help` — every subcommand documents its flags
