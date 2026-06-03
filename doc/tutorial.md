@@ -9,17 +9,32 @@ A short, opinionated walkthrough for BADS depositors. Companion to
 
 ```bash
 curl -sSL https://codeberg.org/mfiers/mus/raw/branch/main/install.sh | bash
-mus irods login         # bridges to KU Leuven Mango via `iron`
-mus eln login           # if you have eLabJournal access
 ```
 
-`mus irods login` walks you through downloading
-`irods_environment.json` from <https://mango.kuleuven.be/> the first
-time. `mus eln login` prompts for a token from the eLab UI
-(Apps & Connections → Manage authentication → Generate access token).
+**iRODS auth.** First time on this machine, grab your iRODS
+environment file from <https://mango.kuleuven.be/> (top-right user
+menu → "Download iRODS environment") and save it as
+`~/.irods/irods_environment.json`. Then:
 
-No ELN access? Run `mus eln disable --global` once and skip the
-second login.
+```bash
+iron auth               # one-shot — prompts for password / SSO
+mus irods login         # optional: same as `iron auth`, plus prereq checks
+```
+
+`iron auth` is the actual credential exchange. `mus irods login`
+is a thin wrapper that checks the prerequisites (iron on PATH,
+env file present) before invoking `iron auth`, then verifies with
+`iron pwd`. Use whichever you prefer — the result is the same
+cached credential under `~/.irods/`.
+
+**ELN auth.** Get a token in eLab (Apps & Connections → Manage
+authentication → Generate access token), then:
+
+```bash
+mus eln login
+```
+
+No ELN access? Run `mus eln disable --global` once and skip this.
 
 ---
 
