@@ -197,6 +197,108 @@ func TestNotify_RefreshesStaleCache(t *testing.T) {
 	}
 }
 
+func TestCheckNow_UpToDate(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"tag_name": "v0.2.1"}`))
+	}))
+	defer srv.Close()
+	withEndpoint(t, srv.URL)
+	withCacheHome(t, t.TempDir())
+
+	st := CheckNow(context.Background(), "0.2.1")
+	if st.Kind != StatusUpToDate {
+		t.Errorf("kind = %v, want StatusUpToDate", st.Kind)
+	}
+	if st.LatestTag != "v0.2.1" {
+		t.Errorf("LatestTag = %q", st.LatestTag)
+	}
+}
+
+func TestCheckNow_Behind(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"tag_name": "v0.5.0"}`))
+	}))
+	defer srv.Close()
+	withEndpoint(t, srv.URL)
+	withCacheHome(t, t.TempDir())
+
+	st := CheckNow(context.Background(), "0.2.1")
+	if st.Kind != StatusBehind {
+		t.Errorf("kind = %v, want StatusBehind", st.Kind)
+	}
+	if st.LatestTag != "v0.5.0" {
+		t.Errorf("LatestTag = %q", st.LatestTag)
+	}
+}
+
+func TestCheckNow_Ahead(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"tag_name": "v0.2.0"}`))
+	}))
+	defer srv.Close()
+	withEndpoint(t, srv.URL)
+	withCacheHome(t, t.TempDir())
+
+	st := CheckNow(context.Background(), "0.3.0-dev")
+	if st.Kind != StatusAhead {
+		t.Errorf("kind = %v, want StatusAhead", st.Kind)
+	}
+}
+
+func TestCheckNow_DevBuildSkipsNetwork(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("dev build should not hit the endpoint")
+	}))
+	defer srv.Close()
+	withEndpoint(t, srv.URL)
+	withCacheHome(t, t.TempDir())
+
+	st := CheckNow(context.Background(), "dev")
+	if st.Kind != StatusDevBuild {
+		t.Errorf("kind = %v, want StatusDevBuild", st.Kind)
+	}
+}
+
+func TestCheckNow_NetworkErrorIsUnknown(t *testing.T) {
+	withEndpoint(t, "http://127.0.0.1:1") // unroutable
+	withCacheHome(t, t.TempDir())
+
+	st := CheckNow(context.Background(), "0.2.1")
+	if st.Kind != StatusUnknown {
+		t.Errorf("kind = %v, want StatusUnknown", st.Kind)
+	}
+	if st.Err == nil {
+		t.Error("expected Err to be populated")
+	}
+}
+
+func TestCheckNow_RefreshesCache(t *testing.T) {
+	// CheckNow should also update the cache so subsequent background
+	// Notify calls see the fresh data.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"tag_name": "v0.3.0"}`))
+	}))
+	defer srv.Close()
+	withEndpoint(t, srv.URL)
+	cacheHome := t.TempDir()
+	withCacheHome(t, cacheHome)
+
+	_ = CheckNow(context.Background(), "0.2.1")
+
+	cachePath := filepath.Join(cacheHome, "mus", "upgrade_check.json")
+	raw, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatalf("cache not written: %v", err)
+	}
+	var rec cacheRecord
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		t.Fatal(err)
+	}
+	if rec.LatestTag != "v0.3.0" {
+		t.Errorf("cache LatestTag = %q, want v0.3.0", rec.LatestTag)
+	}
+}
+
 func TestNotify_FallsBackToStaleCacheOnNetworkFailure(t *testing.T) {
 	// Stale cache + unroutable endpoint → keep using the stale
 	// value rather than going silent. Better signal than none.

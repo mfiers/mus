@@ -76,6 +76,56 @@ func Notify(ctx context.Context, currentVersion string, stderr io.Writer) {
 		currentVersion, latest)
 }
 
+// StatusKind enumerates the outcomes of a freshness check.
+type StatusKind int
+
+const (
+	StatusUnknown      StatusKind = iota // could not reach Codeberg
+	StatusDevBuild                       // currentVersion == "dev"
+	StatusUpToDate                       // current == latest
+	StatusAhead                          // current > latest (rare; dev tag)
+	StatusBehind                         // current < latest — upgrade available
+)
+
+// Status captures the result of a one-shot freshness probe.
+type Status struct {
+	Kind      StatusKind
+	Current   string // currentVersion as passed in
+	LatestTag string // upstream tag (e.g. "v0.3.0"); empty on Unknown / DevBuild
+	Err       error  // populated on Unknown
+}
+
+// CheckNow does a freshness probe with NO cache — always hits Codeberg
+// (or returns Unknown on failure). Use this for `mus version` where the
+// user expects up-to-the-moment info rather than the once-per-24h
+// background notice. Network failures map to StatusUnknown with Err set.
+func CheckNow(ctx context.Context, currentVersion string) Status {
+	if currentVersion == "" || currentVersion == "dev" {
+		return Status{Kind: StatusDevBuild, Current: currentVersion}
+	}
+	tag, ok := fetchLatestTag(ctx)
+	if !ok {
+		return Status{
+			Kind:    StatusUnknown,
+			Current: currentVersion,
+			Err:     fmt.Errorf("could not reach %s", Endpoint),
+		}
+	}
+	// Refresh the cache opportunistically — a forced check is also a
+	// fresh check for the background notifier.
+	writeCache(cacheFile(), cacheRecord{LatestTag: tag, CheckedAt: time.Now().UTC()})
+
+	cmp := compareVersions(currentVersion, stripV(tag))
+	switch {
+	case cmp < 0:
+		return Status{Kind: StatusBehind, Current: currentVersion, LatestTag: tag}
+	case cmp > 0:
+		return Status{Kind: StatusAhead, Current: currentVersion, LatestTag: tag}
+	default:
+		return Status{Kind: StatusUpToDate, Current: currentVersion, LatestTag: tag}
+	}
+}
+
 // latestTag returns the latest release tag, using the on-disk cache
 // when fresh and refreshing it from Codeberg otherwise. The bool is
 // false when no usable result could be obtained (silently, by
