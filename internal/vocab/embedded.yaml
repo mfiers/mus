@@ -180,14 +180,9 @@ vocabulary:
     - entorhinal cortex
     - middle temporal gyrus
     - angular gyrus
-    # NON-CANONICAL — kept to validate existing h5adstore depositors;
-    # ask the depositor to migrate to the UBERON canonical form when
-    # editing the sidecar.
-    - midtemporal cortex           # canonical: middle temporal gyrus
-    - occipitotemporal cortex      # canonical: fusiform gyrus / occipitotemporal gyrus
-    - grey matter                  # canonical: gray matter
-    - basal ganglia                # canonical: basal ganglion
-    # /NON-CANONICAL
+    # NON-CANONICAL legacy — UBERON has no exact match for this term
+    # (Gerrits2021 etc.). Keep until a canonical mapping is agreed.
+    - occipitotemporal cortex
     - gray matter
     - basal ganglion
     - caudate nucleus
