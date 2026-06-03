@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"codeberg.org/mfiers/mus/internal/atomicfile"
 	"codeberg.org/mfiers/mus/internal/envformat"
 )
 
@@ -285,25 +286,7 @@ func Write(path string, d *Doc) error {
 	header := []byte("# mus sidecar — generated, do not hand-edit unless you know what you're doing\n")
 	out := append(header, raw...)
 
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".mus.sidecar.tmp.*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-
-	if _, err := tmp.Write(out); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmpName, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
+	return atomicfile.Replace(path, out, 0o644)
 }
 
 // Stale returns true if the sidecar's recorded size or mtime no longer

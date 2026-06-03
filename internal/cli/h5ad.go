@@ -287,10 +287,13 @@ func stampSidecar(r *h5ad.Report, sha string, vocabSha string, checkVersion int)
 	if doc == nil {
 		doc = &sidecar.Doc{}
 	}
-	// Stamp the file's sha256 if not already there (typical for users
-	// who go straight to `mus h5ad check` without first running
-	// `mus tag`). This is what `mus check` later compares against.
-	if doc.File.Sha256 == "" && sha != "" {
+	// Stamp the file's sha256 every time stampSidecar runs.
+	// The previous "only if empty" guard left stale shas in
+	// sidecars after the data file was re-written in place — the
+	// cache key check (file_sha == sidecar_sha) then compared the
+	// new file's sha against the OLD recorded one and rejected a
+	// freshly-inspected file as "changed since inspection".
+	if sha != "" {
 		doc.File.Sha256 = sha
 	}
 	// File-shape block (h5ad-specific).

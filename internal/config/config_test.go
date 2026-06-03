@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -149,6 +150,91 @@ func TestUnsetEmptiesAndRemovesFile(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, FileName)); !os.IsNotExist(err) {
 		t.Errorf("expected .env removed once empty, stat err = %v", err)
+	}
+}
+
+func TestUnsetPreservesCommentsWhenLastKeyRemoved(t *testing.T) {
+	// User has hand-edited a .env with a comment block. Unset must
+	// not delete the file just because it would otherwise be
+	// keyless — the comment is documentation the user typed.
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	contents := "# project notes\n# important context\neln_disabled=true\n"
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Unset(dir, "eln_disabled"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("file deleted despite surviving comments: %v", err)
+	}
+	if !strings.Contains(string(got), "project notes") ||
+		!strings.Contains(string(got), "important context") {
+		t.Errorf("comments lost on Unset: %q", got)
+	}
+	if strings.Contains(string(got), "eln_disabled") {
+		t.Errorf("key not removed: %q", got)
+	}
+}
+
+func TestUnsetPreservesCommentsWhenOtherKeysRemain(t *testing.T) {
+	// A keys-and-comments file. Unset removes the key but must
+	// preserve the comments in the file body.
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	contents := "# header\neln_disabled=true\nirods_home=/zone/home/x\n# trailer\n"
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Unset(dir, "eln_disabled"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"# header", "# trailer", "irods_home=/zone/home/x"} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("missing %q after Unset:\n%s", want, got)
+		}
+	}
+	if strings.Contains(string(got), "eln_disabled") {
+		t.Errorf("key still present: %q", got)
+	}
+}
+
+func TestUnsetKeepsWhitespaceOnlyAsEmpty(t *testing.T) {
+	// Pure-whitespace remainder (no comments, no keys) → delete.
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	if err := os.WriteFile(path, []byte("\n\neln_disabled=true\n\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Unset(dir, "eln_disabled"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("whitespace-only file should be deleted; stat err=%v", err)
+	}
+}
+
+func TestStripKeyLines_HandlesMultipleAssignments(t *testing.T) {
+	// List-valued keys can appear multiple times. All assignments
+	// to the unset key must be removed; other keys untouched.
+	in := "# header\ntag=a\nname=alice\ntag=b,c\n# end\n"
+	got, removed := stripKeyLines(in, "tag")
+	if !removed {
+		t.Error("expected removed=true")
+	}
+	for _, want := range []string{"# header", "name=alice", "# end"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "tag=") {
+		t.Errorf("not all tag lines removed:\n%s", got)
 	}
 }
 

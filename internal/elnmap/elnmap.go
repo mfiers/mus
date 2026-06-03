@@ -20,6 +20,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"codeberg.org/mfiers/mus/internal/atomicfile"
 )
 
 // Mapping is one stored entry.
@@ -95,24 +97,7 @@ func (s *Store) save() error {
 	if err != nil {
 		return err
 	}
-	dir := filepath.Dir(s.path)
-	tmp, err := os.CreateTemp(dir, "eln_mappings.json.tmp.*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if _, err := tmp.Write(raw); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmpName, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, s.path)
+	return atomicfile.Replace(s.path, raw, 0o600)
 }
 
 // Lookup returns the stored mapping for an experiment ID, or (nil, nil) if
@@ -229,25 +214,8 @@ func writeJSONAtomic(path string, data any, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, ".elnmap.tmp.*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if _, err := tmp.Write(raw); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmpName, mode); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
+	return atomicfile.Replace(path, raw, mode)
 }

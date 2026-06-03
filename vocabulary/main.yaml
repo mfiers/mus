@@ -159,17 +159,41 @@ vocabulary:
     # Non-single-cell.
     - bulk_RNA-seq
     - mass-spectrometry
+    # Assay-type labels (chemistry-unspecified). Use only when the
+    # exact protocol / chemistry is unknown or wasn't recorded —
+    # prefer the specific chemistry above.
+    - snRNA-seq
+    - scRNA-seq
 
   tissue:
     # UBERON-style labels. Mostly brain-focused for now (lab scope).
     # Extend as needed when other organs come into the catalog.
     - brain
+    - brainstem
     - cortex
     - prefrontal cortex
+    - dorsolateral prefrontal cortex
     - motor cortex
     - occipital cortex
     - temporal cortex
     - parietal cortex
+    - entorhinal cortex
+    - middle temporal gyrus
+    - angular gyrus
+    # NON-CANONICAL — kept to validate existing h5adstore depositors;
+    # ask the depositor to migrate to the UBERON canonical form when
+    # editing the sidecar.
+    - midtemporal cortex           # canonical: middle temporal gyrus
+    - occipitotemporal cortex      # canonical: fusiform gyrus / occipitotemporal gyrus
+    - grey matter                  # canonical: gray matter
+    - basal ganglia                # canonical: basal ganglion
+    # /NON-CANONICAL
+    - gray matter
+    - basal ganglion
+    - caudate nucleus
+    - corpus callosum
+    - facial nucleus
+    - olfactory bulb
     - hippocampus
     - striatum
     - thalamus

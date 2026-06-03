@@ -30,15 +30,29 @@ func stubCmd() (*cobra.Command, *bytes.Buffer) {
 	return cmd, stderr
 }
 
-// isolateHome points HOME/XDG at a temp dir so vocab.Load picks up a
-// fresh local cache (or falls through to the embedded vocab when
-// there's no network — fine for tests).
+// isolateHome points HOME/XDG at a temp dir AND pre-seeds the vocab
+// cache so vocab.Load resolves to the build-time embedded.yaml
+// (which is what embeddedVocabSha() hashes). Without the seed,
+// vocab.Load would attempt a real HTTPS fetch — slow, flaky in CI,
+// and whose content sha may not match the embedded copy.
 func isolateHome(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "xdg-data"))
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "xdg-config"))
+
+	vocabCachePath := filepath.Join(dir, "xdg-data", "mus", "h5ad_vocabulary.yaml")
+	if err := os.MkdirAll(filepath.Dir(vocabCachePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	embedded, err := os.ReadFile("../vocab/embedded.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(vocabCachePath, embedded, 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // embeddedVocabSha returns the sha256 of the bytes vocab.Load would

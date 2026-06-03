@@ -133,7 +133,11 @@ func normalizeForMatch(s string) string {
 		b.WriteRune(r)
 		prevSpace = false
 	}
-	return b.String()
+	// Second trim: a leading/trailing `_` or `-` became a single space
+	// in the loop above. Without this second trim, "_microglia_"
+	// normalises to " microglia " — which won't match "microglia"
+	// already in the vocabulary.
+	return strings.TrimSpace(b.String())
 }
 
 // Embedded returns the build-time vocabulary directly, without any

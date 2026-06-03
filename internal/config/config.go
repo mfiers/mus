@@ -12,9 +12,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"strings"
 	"sync"
 
+	"codeberg.org/mfiers/mus/internal/atomicfile"
 	"codeberg.org/mfiers/mus/internal/envformat"
 )
 
@@ -294,25 +295,77 @@ func UnsetFromFile(path string, key string) error {
 }
 
 func unsetAtPath(absPath, key string) error {
-	if _, err := os.Stat(absPath); err != nil {
+	raw, err := os.ReadFile(absPath)
+	if err != nil {
 		if os.IsNotExist(err) {
 			return nil // nothing to unset
 		}
 		return err
 	}
-	parsed, err := loadSingle(absPath)
-	if err != nil {
-		return err
+	// Walk the file line-by-line so we preserve user comments and
+	// blank lines. The legacy code deflated the whole file through
+	// envformat.Marshal which silently dropped comments — that lost
+	// project documentation on every Unset call.
+	surviving, removed := stripKeyLines(string(raw), key)
+	if !removed {
+		return nil // key wasn't present
 	}
-	envformat.Resolve(parsed, parseOpts())
-	if _, present := parsed[key]; !present {
-		return nil
-	}
-	delete(parsed, key)
-	if len(parsed) == 0 {
+	if isEffectivelyEmpty(surviving) {
+		// "If empty don't leave it floating around" — delete only when
+		// the file truly has nothing useful left (no keys, no
+		// comments, just whitespace).
 		return os.Remove(absPath)
 	}
-	return atomicWrite(absPath, parsed)
+	return atomicfile.Replace(absPath, []byte(surviving), 0o644)
+}
+
+// stripKeyLines returns the file content with every line that assigns
+// `key` removed. A line "matches" when its trimmed prefix (before `=`)
+// equals key. Blank lines and `#` comment lines pass through. Returns
+// the surviving text and a bool indicating whether any line was
+// dropped.
+func stripKeyLines(content, key string) (string, bool) {
+	var b strings.Builder
+	b.Grow(len(content))
+	removed := false
+	// strings.SplitAfter keeps line terminators on each chunk so
+	// reassembly preserves the original line-ending style and the
+	// presence (or absence) of a final newline.
+	for _, line := range strings.SplitAfter(content, "\n") {
+		if line == "" {
+			continue
+		}
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			b.WriteString(line)
+			continue
+		}
+		idx := strings.IndexByte(trimmed, '=')
+		if idx < 0 {
+			// Malformed line — keep it; Unset isn't a syntax fixer.
+			b.WriteString(line)
+			continue
+		}
+		if strings.TrimSpace(trimmed[:idx]) == key {
+			removed = true
+			continue
+		}
+		b.WriteString(line)
+	}
+	return b.String(), removed
+}
+
+// isEffectivelyEmpty reports whether content has no meaningful payload
+// — only whitespace lines, no keys, no comments. A file with even a
+// single comment is NOT empty (the user wrote that comment on
+// purpose).
+func isEffectivelyEmpty(content string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		if strings.TrimSpace(line) != "" {
+			return false
+		}
+	}
+	return true
 }
 
 // discover walks from `/` down to `dir`, returning every `.env` in load order.
@@ -401,31 +454,9 @@ func copyValues(in map[string]any) map[string]any {
 }
 
 func atomicWrite(path string, values map[string]any) error {
-	// Sort keys for deterministic output (envformat.Marshal also sorts).
-	keys := make([]string, 0, len(values))
-	for k := range values {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
 	raw, err := envformat.Marshal(values)
 	if err != nil {
 		return err
 	}
-
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".env.tmp.*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-
-	if _, err := tmp.Write(raw); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
+	return atomicfile.Replace(path, raw, 0o644)
 }

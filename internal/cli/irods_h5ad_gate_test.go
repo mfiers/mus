@@ -31,12 +31,32 @@ func embeddedVocabShaForGate(t *testing.T) string {
 // gateTestSetup writes a stub .h5ad file under an isolated HOME +
 // hashcache. Optionally writes a sidecar with the given fields.
 // Returns the h5ad path and the cache so the gate can run.
+//
+// The vocab cache is pre-seeded with the build-time embedded.yaml.
+// Without that, the gate's vocab.Load would fall through to a real
+// HTTPS fetch (slow, flaky in CI, and producing a content sha that
+// may differ from the embedded vocab the test stamped into the
+// sidecar) — making "vocabulary changed" failures non-deterministic.
 func gateTestSetup(t *testing.T, sidecarFields *sidecar.H5ad) (string, *hashcache.Cache) {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "xdg-data"))
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "xdg-config"))
+
+	// Seed the vocab cache so vocab.Load uses a known-fresh local
+	// copy whose content sha matches what the sidecar stamp uses.
+	vocabCachePath := filepath.Join(dir, "xdg-data", "mus", "h5ad_vocabulary.yaml")
+	if err := os.MkdirAll(filepath.Dir(vocabCachePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	embedded, err := os.ReadFile("../vocab/embedded.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(vocabCachePath, embedded, 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	h5adPath := filepath.Join(dir, "mydata.h5ad")
 	if err := os.WriteFile(h5adPath, []byte("stub h5ad bytes"), 0o644); err != nil {

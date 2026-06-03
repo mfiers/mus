@@ -85,6 +85,10 @@ func TestValueAllowed(t *testing.T) {
 		// runs of internal whitespace collapse
 		{"tissue", "white  matter   of frontal lobe", true},
 		{"tissue", "white_matter_of_frontal_lobe", true},
+		// leading/trailing _ and - must not block matches
+		{"cell_type", "_microglial_cell_", true},
+		{"cell_type", "-microglial-cell-", true},
+		{"cell_type", "  microglial_cell  ", true},
 		// not in list → false
 		{"organism", "homo sapiens", false},
 		{"organism", "homo_sapiens", false},
