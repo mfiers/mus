@@ -439,6 +439,10 @@ func finalizeFolderSidecar(
 			doc.ELN.ProjectName = v
 		}
 	}
+	// Biology fields from the .env cascade. Folder uploads carry one
+	// Bio block at the folder-sidecar level, applied to every object
+	// in the collection (via the AVU on the collection itself).
+	stampBioFromEnv(doc, env)
 
 	// Local sidecar update + AVU push are both skipped on dry-run.
 	// On dry-run we may not have actually uploaded the bytes (iron

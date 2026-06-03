@@ -118,6 +118,9 @@ func runTag(cmd *cobra.Command, args []string, note string, tags []string, force
 		if dp := env.String("data_project"); dp != "" {
 			doc.DataProject = dp
 		}
+		// Biology fields from cascade — gap-fill semantics so an
+		// h5ad-inspector value (already in doc.Bio) wins over .env.
+		stampBioFromEnv(doc, env)
 
 		if err := sidecar.Write(scPath, doc); err != nil {
 			return err
