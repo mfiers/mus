@@ -2,10 +2,13 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
+
+	"codeberg.org/mfiers/mus/internal/upgradecheck"
 )
 
 // Build-time variables, populated via -ldflags. See Makefile.
@@ -35,6 +38,13 @@ func NewRootCmd() *cobra.Command {
 			if err := os.Chdir(dir); err != nil {
 				return fmt.Errorf("-C %s: %w", dir, err)
 			}
+		}
+		// One-line-per-day notice if Codeberg shows a newer release.
+		// Skipped for `mus upgrade` itself (it does its own version
+		// check) and `mus version` (terse output, no noise). All
+		// errors are absorbed silently — see upgradecheck.Notify.
+		if shouldRunUpgradeCheck(cmd) {
+			upgradecheck.Notify(context.Background(), Version, cmd.ErrOrStderr())
 		}
 		return nil
 	}
@@ -78,4 +88,17 @@ func Run() int {
 // this already reflects any `-C` override.
 func workingDir(cmd *cobra.Command) (string, error) {
 	return os.Getwd()
+}
+
+// shouldRunUpgradeCheck returns true unless cmd is one of the
+// subcommands where the once-per-day "new release available" notice
+// would be redundant or unwanted.
+func shouldRunUpgradeCheck(cmd *cobra.Command) bool {
+	for c := cmd; c != nil; c = c.Parent() {
+		switch c.Name() {
+		case "upgrade", "version", "verify", "completion":
+			return false
+		}
+	}
+	return true
 }
