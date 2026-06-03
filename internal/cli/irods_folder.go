@@ -227,7 +227,11 @@ func uploadFolderDirect(
 	if err := client.Mkdir(ctx, remoteCollection); err != nil {
 		return fmt.Errorf("imkdir %s: %w", remoteCollection, err)
 	}
-	if err := client.Upload(ctx, srcAbs, remoteTarget, opts); err != nil {
+	// Exclude mus's working-state files from the recursive copy —
+	// the metadata is on the iRODS AVU, not in these files.
+	folderOpts := opts
+	folderOpts.Ignore = append(folderOpts.Ignore, "*.mus", ".env")
+	if err := client.Upload(ctx, srcAbs, remoteTarget, folderOpts); err != nil {
 		return err
 	}
 	return finalizeFolderSidecar(cmd, srcAbs, remotePath, env, prof, nil, client, ctx, uploads, "folder")
@@ -436,17 +440,21 @@ func finalizeFolderSidecar(
 		}
 	}
 
-	if err := sidecar.Write(scPath, doc); err != nil {
-		return err
-	}
-	fmt.Fprintf(stdout, "  wrote %s\n", scPath)
-
-	// Apply mus_* AVU metadata unless explicitly skipped or this was a
-	// dry-run (where the catalog object may be a phantom).
-	noMeta, _ := cmd.Flags().GetBool("no-metadata")
+	// Local sidecar update + AVU push are both skipped on dry-run.
+	// On dry-run we may not have actually uploaded the bytes (iron
+	// just prints), so recording an upload locally — or trying to
+	// attach AVU to a catalog entry that may be a phantom — would
+	// be a lie.
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
-	if !noMeta && !dryRun {
-		applyMetadataToIRODS(ctx, client, remotePath, doc, cmd.ErrOrStderr())
+	if !dryRun {
+		if err := sidecar.Write(scPath, doc); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "  wrote %s\n", scPath)
+		noMeta, _ := cmd.Flags().GetBool("no-metadata")
+		if !noMeta {
+			applyMetadataToIRODS(ctx, client, remotePath, doc, cmd.ErrOrStderr())
+		}
 	}
 
 	if uploads != nil {

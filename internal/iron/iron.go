@@ -115,6 +115,9 @@ func (c *Client) Upload(ctx context.Context, local, remote string, opts UploadOp
 	if opts.DryRun {
 		args = append(args, "--dry-run")
 	}
+	if len(opts.Ignore) > 0 {
+		args = append(args, "--ignore="+strings.Join(opts.Ignore, ","))
+	}
 	args = append(args, local, remote)
 	return c.Stream(ctx, args...)
 }
@@ -122,10 +125,11 @@ func (c *Client) Upload(ctx context.Context, local, remote string, opts UploadOp
 // UploadOpts toggles flags for Upload. See `iron upload --help` for full
 // semantics — these wrap the most commonly useful flags.
 type UploadOpts struct {
-	VerifyChecksum bool // re-hash both sides after transfer
-	Exclusive      bool // refuse to overwrite existing remote objects
-	Newer          bool // only upload files newer than remote
-	DryRun         bool // print actions, do not perform
+	VerifyChecksum bool     // re-hash both sides after transfer
+	Exclusive      bool     // refuse to overwrite existing remote objects
+	Newer          bool     // only upload files newer than remote
+	DryRun         bool     // print actions, do not perform
+	Ignore         []string // glob patterns (filename only) to skip when uploading a directory
 }
 
 // Download downloads remote to local. Like Upload, IRON handles
@@ -184,11 +188,32 @@ func (c *Client) Checksum(ctx context.Context, remote string) (string, error) {
 // the caller from the path's first segment) it forms a persistent URL via
 // Mango's /PID/<zone>/<id>/ route.
 type StatInfo struct {
-	ID       int64  `json:"id"`
-	Name     string `json:"name"`
-	Size     int64  `json:"size"`
-	Creator  string `json:"creator"`
-	Modified string `json:"modified"`
+	ID       int64         `json:"id"`
+	Name     string        `json:"name"`
+	Size     int64         `json:"size"`
+	Creator  string        `json:"creator"`
+	Modified string        `json:"modified"`
+	Metadata []MetaTriplet `json:"metadata"`
+}
+
+// MetaTriplet is one AVU row attached to an iRODS object. `iron stat -j`
+// surfaces metadata as an array of these.
+type MetaTriplet struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+	Units string `json:"units"`
+}
+
+// MetadataMap projects the StatInfo's Metadata list to a deduplicated
+// map[attribute] → []values. Multiple triplets with the same attribute
+// are common (it's how iRODS expresses list-valued metadata); they end
+// up as multiple entries in the returned slice.
+func (s *StatInfo) MetadataMap() map[string][]string {
+	out := map[string][]string{}
+	for _, t := range s.Metadata {
+		out[t.Name] = append(out[t.Name], t.Value)
+	}
+	return out
 }
 
 // MetaSet runs `iron meta set <remote> <key> <value>`. Replaces any
@@ -206,6 +231,25 @@ func (c *Client) MetaSet(ctx context.Context, remote, key, value string) error {
 		defer cancel()
 	}
 	_, err := c.Run(ctx, "meta", "set", remote, key, value)
+	return err
+}
+
+// MetaAdd runs `iron meta add <remote> <key> <value>`. Adds a NEW
+// AVU triplet without touching others with the same key — the
+// primitive used for list-valued attributes.
+func (c *Client) MetaAdd(ctx context.Context, remote, key, value string) error {
+	if key == "" {
+		return errors.New("MetaAdd: empty key")
+	}
+	if value == "" {
+		return errors.New("MetaAdd: empty value")
+	}
+	if c.DefaultTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.DefaultTimeout)
+		defer cancel()
+	}
+	_, err := c.Run(ctx, "meta", "add", remote, key, value)
 	return err
 }
 

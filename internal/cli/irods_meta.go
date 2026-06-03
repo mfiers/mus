@@ -1,30 +1,153 @@
 package cli
 
-// applyMetadataToIRODS — after a successful iRODS upload, attach a curated
-// subset of sidecar fields to the object via `iron meta set` so the data
-// stays self-describing even if the local sidecar is deleted or moved.
+// applyMetadataToIRODS attaches the full resolved metadata snapshot
+// from a sidecar Doc onto an iRODS object as AVU triplets via the
+// `iron meta` family. Result: the object is fully self-describing on
+// iRODS (queryable via `iquest`, visible in `iron meta ls`), and the
+// local .mus / .env files don't need to be co-uploaded.
 //
-// Keys are flat, prefixed with `mus_` to avoid colliding with other tools'
-// AVU schemas (e.g. KU Leuven's mango_mdschema). The same key set works for
-// both file and folder/archive objects.
+// Naming convention: every key is `mus_<field>` (or `mus_h5ad_<field>`
+// for the h5ad-shape block) so mus's namespace doesn't collide with
+// other tools' AVU schemas (e.g. KU Leuven's mango_mdschema).
 //
-// One `iron meta set` per key is spawned — that's ~6 process invocations
-// per upload. Acceptable for now; could be batched into a single iron call
-// later if iron grows that surface.
+// List-valued fields (tissue, cell_type, disease, condition, doi,
+// pmid, link, h5ad_layers, *_ontology_term_id) translate to MULTIPLE
+// triplets with the same attribute — iRODS's native multi-value form.
+//
+// Overwrite semantics: before writing, `iron stat -j` is used to read
+// the existing AVU. Per-key:
+//   - missing remotely → set silently
+//   - same value(s)    → skip (no churn)
+//   - different value(s) → set + print a one-line `~ key: old → new` warning
+// We never RM keys that exist remotely but aren't in the new set;
+// those may have been set by another tool or a future mus.
 
 import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
+	"strings"
 
 	"codeberg.org/mfiers/mus/internal/iron"
 	"codeberg.org/mfiers/mus/internal/sidecar"
 )
 
-// applyMetadataToIRODS writes selected sidecar fields onto the iRODS object
-// at remotePath. Returns the first hard error; per-key failures are logged
-// to stderr but don't abort (metadata is bonus, not load-bearing).
+// avuFromDoc returns the full set of AVU triplets mus wants on the
+// iRODS object for this sidecar. Single-valued entries map to a
+// one-element slice; list-valued to a multi-element slice. Empty
+// values are omitted.
+func avuFromDoc(doc *sidecar.Doc) map[string][]string {
+	out := map[string][]string{}
+	put := func(key, value string) {
+		if value != "" {
+			out[key] = []string{value}
+		}
+	}
+	putList := func(key string, values []string) {
+		if len(values) > 0 {
+			cp := make([]string, 0, len(values))
+			for _, v := range values {
+				if v != "" {
+					cp = append(cp, v)
+				}
+			}
+			if len(cp) > 0 {
+				out[key] = cp
+			}
+		}
+	}
+	if doc.DataProject != "" {
+		put("mus_data_project", doc.DataProject)
+	}
+	if doc.Bio != nil {
+		b := doc.Bio
+		// Scalars.
+		put("mus_organism", b.Organism)
+		put("mus_technology", b.Technology)
+		put("mus_suspension_type", b.SuspensionType)
+		put("mus_sex", b.Sex)
+		put("mus_age", b.Age)
+		put("mus_strain", b.Strain)
+		put("mus_title", b.Title)
+		put("mus_contributor", b.Contributor)
+		put("mus_license", b.License)
+		put("mus_source", b.Source)
+		put("mus_source_description", b.SourceDescription)
+		put("mus_access", b.Access)
+		put("mus_accession", b.Accession)
+		if b.Year > 0 {
+			put("mus_year", strconv.Itoa(b.Year))
+		}
+		// Lists.
+		putList("mus_tissue", b.Tissue)
+		putList("mus_cell_type", b.CellType)
+		putList("mus_disease", b.Disease)
+		putList("mus_condition", b.Condition)
+		putList("mus_doi", b.DOI)
+		putList("mus_pmid", b.PMID)
+		putList("mus_link", b.Link)
+		// Ontology IDs.
+		put("mus_organism_ontology_term_id", b.OrganismOntologyTermID)
+		put("mus_assay_ontology_term_id", b.AssayOntologyTermID)
+		put("mus_sex_ontology_term_id", b.SexOntologyTermID)
+		putList("mus_tissue_ontology_term_id", b.TissueOntologyTermID)
+		putList("mus_cell_type_ontology_term_id", b.CellTypeOntologyTermID)
+		putList("mus_disease_ontology_term_id", b.DiseaseOntologyTermID)
+	}
+	if doc.H5ad != nil {
+		h := doc.H5ad
+		if h.NObs > 0 {
+			put("mus_h5ad_n_obs", strconv.FormatInt(h.NObs, 10))
+		}
+		if h.NVars > 0 {
+			put("mus_h5ad_n_vars", strconv.FormatInt(h.NVars, 10))
+		}
+		putList("mus_h5ad_layers", h.Layers)
+		put("mus_h5ad_embedding", h.Embedding)
+		put("mus_h5ad_anndata_version", h.AnnDataVersion)
+		put("mus_h5ad_gene_id_type", h.GeneIDType)
+		if !h.InspectedAt.IsZero() {
+			put("mus_h5ad_inspected_at", h.InspectedAt.UTC().Format("2006-01-02T15:04:05Z"))
+		}
+		put("mus_h5ad_inspected_sha256", h.InspectedSha256)
+		put("mus_h5ad_inspected_vocab_sha256", h.InspectedVocabSha256)
+		if h.InspectedCheckVersion > 0 {
+			put("mus_h5ad_inspected_check_version", strconv.Itoa(h.InspectedCheckVersion))
+		}
+	}
+	if doc.ELN != nil {
+		put("mus_eln_experiment_id", doc.ELN.ExperimentID)
+		put("mus_eln_experiment_name", doc.ELN.ExperimentName)
+		put("mus_eln_project_name", doc.ELN.ProjectName)
+		put("mus_eln_study_name", doc.ELN.StudyName)
+	}
+	put("mus_sha256", doc.File.Sha256)
+	if doc.Folder != nil {
+		put("mus_recursive_sha256", doc.Folder.RecursiveSha256)
+		if doc.Folder.FileCount > 0 {
+			put("mus_file_count", strconv.FormatInt(doc.Folder.FileCount, 10))
+		}
+		if doc.Folder.DirCount > 0 {
+			put("mus_dir_count", strconv.FormatInt(doc.Folder.DirCount, 10))
+		}
+	}
+	if doc.Archive != nil {
+		put("mus_archive_format", doc.Archive.Format)
+		put("mus_archive_sha256", doc.Archive.Sha256)
+	}
+	if doc.IRODS != nil && !doc.IRODS.UploadedAt.IsZero() {
+		put("mus_uploaded_at",
+			doc.IRODS.UploadedAt.UTC().Format("2006-01-02T15:04:05Z"))
+	}
+	return out
+}
+
+// applyMetadataToIRODS writes the AVU set from the sidecar onto the
+// iRODS object at remotePath. Diff-and-warn: skips no-op writes,
+// surfaces value changes one line per key. Per-key failures log to
+// stderr but don't abort the upload (metadata is bonus).
 func applyMetadataToIRODS(
 	ctx context.Context,
 	client *iron.Client,
@@ -32,52 +155,109 @@ func applyMetadataToIRODS(
 	doc *sidecar.Doc,
 	stderr io.Writer,
 ) {
-	type pair struct{ key, value string }
-	var kv []pair
-
-	if doc.DataProject != "" {
-		kv = append(kv, pair{"mus_data_project", doc.DataProject})
-	}
-	if doc.ELN != nil {
-		if doc.ELN.ExperimentID != "" {
-			kv = append(kv, pair{"mus_eln_experiment_id", doc.ELN.ExperimentID})
-		}
-		if doc.ELN.ExperimentName != "" {
-			kv = append(kv, pair{"mus_eln_experiment_name", doc.ELN.ExperimentName})
-		}
-		if doc.ELN.ProjectName != "" {
-			kv = append(kv, pair{"mus_eln_project_name", doc.ELN.ProjectName})
-		}
-		if doc.ELN.StudyName != "" {
-			kv = append(kv, pair{"mus_eln_study_name", doc.ELN.StudyName})
-		}
-	}
-	if doc.File.Sha256 != "" {
-		kv = append(kv, pair{"mus_sha256", doc.File.Sha256})
-	}
-	if doc.Folder != nil && doc.Folder.RecursiveSha256 != "" {
-		kv = append(kv, pair{"mus_recursive_sha256", doc.Folder.RecursiveSha256})
-	}
-	if doc.Folder != nil && doc.Folder.FileCount > 0 {
-		kv = append(kv, pair{"mus_file_count",
-			strconv.FormatInt(doc.Folder.FileCount, 10)})
-	}
-	if doc.Archive != nil {
-		if doc.Archive.Format != "" {
-			kv = append(kv, pair{"mus_archive_format", doc.Archive.Format})
-		}
-		if doc.Archive.Sha256 != "" {
-			kv = append(kv, pair{"mus_archive_sha256", doc.Archive.Sha256})
-		}
-	}
-	if doc.IRODS != nil && !doc.IRODS.UploadedAt.IsZero() {
-		kv = append(kv, pair{"mus_uploaded_at", doc.IRODS.UploadedAt.UTC().Format("2006-01-02T15:04:05Z")})
+	want := avuFromDoc(doc)
+	if len(want) == 0 {
+		return
 	}
 
-	for _, p := range kv {
-		if err := client.MetaSet(ctx, remotePath, p.key, p.value); err != nil {
-			fmt.Fprintf(stderr, "  WARNING: iron meta set %s=%s failed: %v\n",
-				p.key, p.value, err)
+	// Read existing AVU via stat -j. If stat fails (e.g. transient
+	// network), proceed with naive set — worst case we redo writes
+	// that wouldn't have been needed.
+	var have map[string][]string
+	if info, err := client.Stat(ctx, remotePath); err == nil {
+		have = info.MetadataMap()
+	}
+
+	// Process keys in sorted order so the warning lines are stable.
+	keys := make([]string, 0, len(want))
+	for k := range want {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		newVals := want[key]
+		oldVals, hadKey := have[key]
+		if hadKey && stringSetsEqual(oldVals, newVals) {
+			continue // no churn
+		}
+		if hadKey {
+			fmt.Fprintf(stderr, "  ~ %s: %s → %s\n",
+				key, joinShort(oldVals), joinShort(newVals))
+		}
+		if err := setAVU(ctx, client, remotePath, key, newVals); err != nil {
+			fmt.Fprintf(stderr,
+				"  WARNING: iron meta failed for %s: %v\n", key, err)
 		}
 	}
+}
+
+// setAVU writes one logical attribute, using `iron meta set` for the
+// single-valued case (which both replaces existing and sets new) and
+// `iron meta unset` + per-value `iron meta add` for list-valued.
+func setAVU(ctx context.Context, client *iron.Client, remote, key string, vals []string) error {
+	if len(vals) == 1 {
+		return client.MetaSet(ctx, remote, key, vals[0])
+	}
+	// Multi-value: clear then re-add. iron set would collapse to one
+	// triplet; we need the multi-triplet form.
+	if err := client.MetaUnset(ctx, remote, key); err != nil {
+		return fmt.Errorf("unset: %w", err)
+	}
+	for _, v := range vals {
+		if err := client.MetaAdd(ctx, remote, key, v); err != nil {
+			return fmt.Errorf("add %q: %w", v, err)
+		}
+	}
+	return nil
+}
+
+// stringSetsEqual returns true when a and b carry the same elements,
+// order-insensitively (the iRODS AVU set has no defined order).
+// Duplicates within a single slice are ignored (a slice with
+// duplicates equals a slice with the same elements deduped).
+func stringSetsEqual(a, b []string) bool {
+	sa := dedupeSorted(a)
+	sb := dedupeSorted(b)
+	if len(sa) != len(sb) {
+		return false
+	}
+	for i := range sa {
+		if sa[i] != sb[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func dedupeSorted(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	cp := make([]string, len(in))
+	copy(cp, in)
+	sort.Strings(cp)
+	out := cp[:1]
+	for i := 1; i < len(cp); i++ {
+		if cp[i] != cp[i-1] {
+			out = append(out, cp[i])
+		}
+	}
+	return out
+}
+
+// joinShort renders a list of values for a warning line. Truncates
+// any single value longer than 60 chars; joins multi-value with ",".
+func joinShort(vals []string) string {
+	if len(vals) == 0 {
+		return "(none)"
+	}
+	parts := make([]string, len(vals))
+	for i, v := range vals {
+		if len(v) > 60 {
+			v = v[:57] + "..."
+		}
+		parts[i] = v
+	}
+	return strings.Join(parts, ",")
 }

@@ -256,12 +256,6 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 	}
 
 	var uploads []uploadedItem
-	// Track source folders whose .env we've already pushed in this
-	// batch (so a multi-file upload from one project doesn't push
-	// the same .env over and over). One .env per source dir per
-	// batch — the destination collection ends up with whichever
-	// source dir's .env was uploaded last (typically the only one).
-	envUploadedFrom := map[string]bool{}
 
 	for _, raw := range args {
 		if sidecar.IsSidecar(raw) {
@@ -380,46 +374,25 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 				doc.ELN.ProjectName = v
 			}
 		}
-		if err := sidecar.Write(scPath, doc); err != nil {
-			return err
-		}
-		// Apply mus_* AVU metadata unless explicitly skipped or this was a
-		// dry-run (where the catalog object may be a phantom).
-		noMeta, _ := cmd.Flags().GetBool("no-metadata")
-		if !noMeta && !opts.DryRun {
-			applyMetadataToIRODS(ctx, client, remote, doc, cmd.ErrOrStderr())
-		}
-
-		// Push the (now-updated) sidecar so the iRODS object set is
-		// self-describing — anyone reading the iRODS collection can
-		// see the file's metadata without round-tripping back to mus.
+		// Local sidecar update + AVU push are both skipped on dry-run.
+		// On dry-run we may not have actually uploaded the bytes (iron
+		// just prints), so recording an upload locally — or trying to
+		// attach AVU to a catalog entry that may be a phantom — would
+		// be a lie.
 		if !opts.DryRun {
-			remoteSidecar := remoteCollection + "/" + filepath.Base(scPath)
-			fmt.Fprintf(os.Stderr, "  + %s (sidecar)\n", remoteSidecar)
-			if err := client.Upload(ctx, scPath, remoteSidecar, opts); err != nil {
-				fmt.Fprintf(os.Stderr,
-					"WARN: could not upload sidecar %s: %v\n", scPath, err)
+			if err := sidecar.Write(scPath, doc); err != nil {
+				return err
+			}
+			noMeta, _ := cmd.Flags().GetBool("no-metadata")
+			if !noMeta {
+				applyMetadataToIRODS(ctx, client, remote, doc, cmd.ErrOrStderr())
 			}
 		}
 
-		// Push the source folder's local .env once per batch — that's
-		// the cascade entry point with project-wide annotation
-		// defaults (organism, tissue, etc.). The sidecar already has
-		// resolved values, but the .env on iRODS preserves the
-		// cascade structure for downstream tooling.
-		srcDir := filepath.Dir(abs)
-		if !opts.DryRun && !envUploadedFrom[srcDir] {
-			localEnv := filepath.Join(srcDir, ".env")
-			if _, err := os.Stat(localEnv); err == nil {
-				remoteEnv := remoteCollection + "/.env"
-				fmt.Fprintf(os.Stderr, "  + %s (cascade .env)\n", remoteEnv)
-				if err := client.Upload(ctx, localEnv, remoteEnv, opts); err != nil {
-					fmt.Fprintf(os.Stderr,
-						"WARN: could not upload %s: %v\n", localEnv, err)
-				}
-			}
-			envUploadedFrom[srcDir] = true
-		}
+		// Metadata travels as AVU on the iRODS object itself
+		// (applyMetadataToIRODS above), not as separate .mus / .env
+		// files. The depositor's local sidecar + cascade .env stay
+		// local — they're working-state, not part of the deposit.
 
 		uploads = append(uploads, uploadedItem{
 			Kind:       "file",
