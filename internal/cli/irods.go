@@ -374,6 +374,11 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 				doc.ELN.ProjectName = v
 			}
 		}
+		// Biology fields from the .env cascade — gap-fill so an h5ad
+		// inspector pass (which already populated doc.Bio) wins over
+		// what the depositor declared in .env.
+		stampBioFromEnv(doc, env)
+
 		// Local sidecar update + AVU push are both skipped on dry-run.
 		// On dry-run we may not have actually uploaded the bytes (iron
 		// just prints), so recording an upload locally — or trying to
@@ -802,13 +807,15 @@ func downloadOne(ctx context.Context, client *iron.Client,
 	if stateErr != nil {
 		return fmt.Errorf("checking local state of %s: %w", local, stateErr)
 	}
+	skipDownload := false
 	switch state {
 	case localMatch:
 		if !force {
 			fmt.Fprintf(stderr, "  ✓ %s already matches sidecar; skipping download\n", local)
-			return nil
+			skipDownload = true
+		} else {
+			fmt.Fprintf(stderr, "  ↻ %s already matches but --force is set; re-downloading\n", local)
 		}
-		fmt.Fprintf(stderr, "  ↻ %s already matches but --force is set; re-downloading\n", local)
 	case localMismatch:
 		if !force {
 			return fmt.Errorf(
@@ -822,21 +829,53 @@ func downloadOne(ctx context.Context, client *iron.Client,
 		// fall through — normal download
 	}
 
-	if err := client.Download(ctx, doc.IRODS.Path, local, iron.DownloadOpts{
-		Exclusive:      !force,
-		VerifyChecksum: verify,
-	}); err != nil {
-		return err
+	if !skipDownload {
+		if err := client.Download(ctx, doc.IRODS.Path, local, iron.DownloadOpts{
+			Exclusive:      !force,
+			VerifyChecksum: verify,
+		}); err != nil {
+			return err
+		}
+
+		// After download, re-verify what landed against what the sidecar says.
+		// iron --verify-checksum confirms transport integrity (bytes match the
+		// current iRODS object); this confirms PROVENANCE integrity (the iRODS
+		// object hasn't drifted from what mus uploaded).
+		if err := verifyDownloadedSidecar(arg, doc, stderr); err != nil {
+			return err
+		}
 	}
 
-	// After download, re-verify what landed against what the sidecar says.
-	// iron --verify-checksum confirms transport integrity (bytes match the
-	// current iRODS object); this confirms PROVENANCE integrity (the iRODS
-	// object hasn't drifted from what mus uploaded).
-	if err := verifyDownloadedSidecar(arg, doc, stderr); err != nil {
-		return err
-	}
+	// Refresh sidecar metadata from the remote AVU. Always runs — even
+	// when the download was skipped (the user may have re-run get to
+	// pick up annotation updates from a colleague). Fields the local
+	// sidecar didn't have are filled silently. Fields that DIFFER from
+	// the local sidecar surface as `~ key: old → new` warning lines and
+	// overwrite the sidecar. Failures here are non-fatal — bytes are
+	// already on disk; metadata refresh is a bonus.
+	refreshSidecarFromAVU(ctx, client, arg, doc, stderr)
 	return nil
+}
+
+// refreshSidecarFromAVU pulls the current AVU from iRODS and folds it
+// into the local sidecar via mergeAVUIntoDoc. Saves the sidecar if
+// anything changed. All failures are swallowed with a one-line note
+// — the download has already succeeded, this is non-essential.
+func refreshSidecarFromAVU(ctx context.Context, client *iron.Client,
+	sidecarPath string, doc *sidecar.Doc, stderr io.Writer) {
+	if doc.IRODS == nil || doc.IRODS.Path == "" {
+		return
+	}
+	info, err := client.Stat(ctx, doc.IRODS.Path)
+	if err != nil {
+		fmt.Fprintf(stderr, "  note: could not fetch AVU for sidecar refresh: %v\n", err)
+		return
+	}
+	if mergeAVUIntoDoc(doc, info.MetadataMap(), stderr) {
+		if err := sidecar.Write(sidecarPath, doc); err != nil {
+			fmt.Fprintf(stderr, "  note: AVU refresh found changes but sidecar write failed: %v\n", err)
+		}
+	}
 }
 
 // localState describes how a local file/folder compares to its sidecar.

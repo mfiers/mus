@@ -29,6 +29,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"codeberg.org/mfiers/mus/internal/iron"
 	"codeberg.org/mfiers/mus/internal/sidecar"
@@ -143,6 +144,256 @@ func avuFromDoc(doc *sidecar.Doc) map[string][]string {
 	}
 	return out
 }
+
+// mergeAVUIntoDoc folds the AVU map (as returned by iron stat -j)
+// into the local sidecar Doc. Semantics:
+//
+//   - field present in AVU and missing locally  → silent fill
+//   - field present in both with same value     → silent no-op
+//   - field present in both with different value → log
+//     "~ key: old → new" to stderr AND overwrite the sidecar
+//
+// Returns true if doc was mutated (caller should save the sidecar).
+//
+// Fields that represent CONTENT IDENTITY rather than metadata are
+// excluded: mus_sha256, mus_recursive_sha256, mus_archive_sha256,
+// mus_uploaded_at. Those are bookkeeping pinned to the upload
+// moment, not facts about the dataset.
+func mergeAVUIntoDoc(doc *sidecar.Doc, avu map[string][]string, stderr io.Writer) bool {
+	ctx := &avuMergeCtx{avu: avu, stderr: stderr}
+
+	ctx.scalar(&doc.DataProject, "mus_data_project")
+
+	// Bio block — lazy-allocate if AVU carries any bio key.
+	if doc.Bio == nil && hasAnyKey(avu, bioAVUKeys...) {
+		doc.Bio = &sidecar.Bio{}
+		ctx.mutated = true
+	}
+	if doc.Bio != nil {
+		b := doc.Bio
+		ctx.scalar(&b.Organism, "mus_organism")
+		ctx.scalar(&b.Technology, "mus_technology")
+		ctx.scalar(&b.SuspensionType, "mus_suspension_type")
+		ctx.scalar(&b.Sex, "mus_sex")
+		ctx.scalar(&b.Age, "mus_age")
+		ctx.scalar(&b.Strain, "mus_strain")
+		ctx.scalar(&b.Title, "mus_title")
+		ctx.scalar(&b.Contributor, "mus_contributor")
+		ctx.scalar(&b.License, "mus_license")
+		ctx.scalar(&b.Source, "mus_source")
+		ctx.scalar(&b.SourceDescription, "mus_source_description")
+		ctx.scalar(&b.Access, "mus_access")
+		ctx.scalar(&b.Accession, "mus_accession")
+		ctx.intField(&b.Year, "mus_year")
+		ctx.list(&b.Tissue, "mus_tissue")
+		ctx.list(&b.CellType, "mus_cell_type")
+		ctx.list(&b.Disease, "mus_disease")
+		ctx.list(&b.Condition, "mus_condition")
+		ctx.list(&b.DOI, "mus_doi")
+		ctx.list(&b.PMID, "mus_pmid")
+		ctx.list(&b.Link, "mus_link")
+		ctx.scalar(&b.OrganismOntologyTermID, "mus_organism_ontology_term_id")
+		ctx.scalar(&b.AssayOntologyTermID, "mus_assay_ontology_term_id")
+		ctx.scalar(&b.SexOntologyTermID, "mus_sex_ontology_term_id")
+		ctx.list(&b.TissueOntologyTermID, "mus_tissue_ontology_term_id")
+		ctx.list(&b.CellTypeOntologyTermID, "mus_cell_type_ontology_term_id")
+		ctx.list(&b.DiseaseOntologyTermID, "mus_disease_ontology_term_id")
+	}
+
+	if doc.H5ad == nil && hasAnyKey(avu, h5adAVUKeys...) {
+		doc.H5ad = &sidecar.H5ad{}
+		ctx.mutated = true
+	}
+	if doc.H5ad != nil {
+		h := doc.H5ad
+		ctx.int64Field(&h.NObs, "mus_h5ad_n_obs")
+		ctx.int64Field(&h.NVars, "mus_h5ad_n_vars")
+		ctx.list(&h.Layers, "mus_h5ad_layers")
+		ctx.scalar(&h.Embedding, "mus_h5ad_embedding")
+		ctx.scalar(&h.AnnDataVersion, "mus_h5ad_anndata_version")
+		ctx.scalar(&h.GeneIDType, "mus_h5ad_gene_id_type")
+		ctx.timeField(&h.InspectedAt, "mus_h5ad_inspected_at")
+		ctx.scalar(&h.InspectedSha256, "mus_h5ad_inspected_sha256")
+		ctx.scalar(&h.InspectedVocabSha256, "mus_h5ad_inspected_vocab_sha256")
+		ctx.intField(&h.InspectedCheckVersion, "mus_h5ad_inspected_check_version")
+	}
+
+	if doc.ELN == nil && hasAnyKey(avu, elnAVUKeys...) {
+		doc.ELN = &sidecar.ELN{}
+		ctx.mutated = true
+	}
+	if doc.ELN != nil {
+		ctx.scalar(&doc.ELN.ExperimentID, "mus_eln_experiment_id")
+		ctx.scalar(&doc.ELN.ExperimentName, "mus_eln_experiment_name")
+		ctx.scalar(&doc.ELN.ProjectName, "mus_eln_project_name")
+		ctx.scalar(&doc.ELN.StudyName, "mus_eln_study_name")
+	}
+
+	// Folder/Archive: only the COUNT fields are metadata-like and worth
+	// merging — the sha256 fields are content identity and excluded.
+	if doc.Folder != nil {
+		ctx.int64Field(&doc.Folder.FileCount, "mus_file_count")
+		ctx.int64Field(&doc.Folder.DirCount, "mus_dir_count")
+	}
+	if doc.Archive != nil {
+		ctx.scalar(&doc.Archive.Format, "mus_archive_format")
+	}
+
+	return ctx.mutated
+}
+
+// avuMergeCtx is the per-merge state passed through scalar/list/int
+// helpers so they can record mutation and emit warning lines.
+type avuMergeCtx struct {
+	avu     map[string][]string
+	stderr  io.Writer
+	mutated bool
+}
+
+func (c *avuMergeCtx) scalar(target *string, key string) {
+	vals, ok := c.avu[key]
+	if !ok || len(vals) == 0 || vals[0] == "" {
+		return
+	}
+	newVal := vals[0]
+	if *target == newVal {
+		return
+	}
+	if *target == "" {
+		*target = newVal
+		c.mutated = true
+		return
+	}
+	fmt.Fprintf(c.stderr, "  ~ %s: %s → %s\n", key, *target, newVal)
+	*target = newVal
+	c.mutated = true
+}
+
+func (c *avuMergeCtx) list(target *[]string, key string) {
+	vals, ok := c.avu[key]
+	if !ok || len(vals) == 0 {
+		return
+	}
+	if stringSetsEqual(*target, vals) {
+		return
+	}
+	cp := append([]string(nil), vals...)
+	if len(*target) == 0 {
+		*target = cp
+		c.mutated = true
+		return
+	}
+	fmt.Fprintf(c.stderr, "  ~ %s: %s → %s\n",
+		key, joinShort(*target), joinShort(vals))
+	*target = cp
+	c.mutated = true
+}
+
+func (c *avuMergeCtx) intField(target *int, key string) {
+	vals, ok := c.avu[key]
+	if !ok || len(vals) == 0 {
+		return
+	}
+	n, err := strconv.Atoi(vals[0])
+	if err != nil {
+		return
+	}
+	if *target == n {
+		return
+	}
+	if *target == 0 {
+		*target = n
+		c.mutated = true
+		return
+	}
+	fmt.Fprintf(c.stderr, "  ~ %s: %d → %d\n", key, *target, n)
+	*target = n
+	c.mutated = true
+}
+
+func (c *avuMergeCtx) int64Field(target *int64, key string) {
+	vals, ok := c.avu[key]
+	if !ok || len(vals) == 0 {
+		return
+	}
+	n, err := strconv.ParseInt(vals[0], 10, 64)
+	if err != nil {
+		return
+	}
+	if *target == n {
+		return
+	}
+	if *target == 0 {
+		*target = n
+		c.mutated = true
+		return
+	}
+	fmt.Fprintf(c.stderr, "  ~ %s: %d → %d\n", key, *target, n)
+	*target = n
+	c.mutated = true
+}
+
+func (c *avuMergeCtx) timeField(target *time.Time, key string) {
+	vals, ok := c.avu[key]
+	if !ok || len(vals) == 0 {
+		return
+	}
+	parsed, err := time.Parse("2006-01-02T15:04:05Z", vals[0])
+	if err != nil {
+		return
+	}
+	if target.Equal(parsed) {
+		return
+	}
+	if target.IsZero() {
+		*target = parsed
+		c.mutated = true
+		return
+	}
+	fmt.Fprintf(c.stderr, "  ~ %s: %s → %s\n",
+		key, target.UTC().Format("2006-01-02T15:04:05Z"),
+		parsed.UTC().Format("2006-01-02T15:04:05Z"))
+	*target = parsed
+	c.mutated = true
+}
+
+// hasAnyKey reports whether the AVU map has at least one of the
+// listed keys. Used for lazy-allocating sub-blocks (Bio, H5ad, …).
+func hasAnyKey(avu map[string][]string, keys ...string) bool {
+	for _, k := range keys {
+		if _, ok := avu[k]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// Sub-block AVU key lists for lazy allocation. Kept as package vars
+// so they can't drift from avuFromDoc / mergeAVUIntoDoc.
+var (
+	bioAVUKeys = []string{
+		"mus_organism", "mus_technology", "mus_suspension_type",
+		"mus_sex", "mus_age", "mus_strain", "mus_title",
+		"mus_contributor", "mus_license", "mus_source",
+		"mus_source_description", "mus_access", "mus_accession",
+		"mus_year", "mus_tissue", "mus_cell_type", "mus_disease",
+		"mus_condition", "mus_doi", "mus_pmid", "mus_link",
+		"mus_organism_ontology_term_id", "mus_assay_ontology_term_id",
+		"mus_sex_ontology_term_id", "mus_tissue_ontology_term_id",
+		"mus_cell_type_ontology_term_id", "mus_disease_ontology_term_id",
+	}
+	h5adAVUKeys = []string{
+		"mus_h5ad_n_obs", "mus_h5ad_n_vars", "mus_h5ad_layers",
+		"mus_h5ad_embedding", "mus_h5ad_anndata_version",
+		"mus_h5ad_gene_id_type", "mus_h5ad_inspected_at",
+		"mus_h5ad_inspected_sha256", "mus_h5ad_inspected_vocab_sha256",
+		"mus_h5ad_inspected_check_version",
+	}
+	elnAVUKeys = []string{
+		"mus_eln_experiment_id", "mus_eln_experiment_name",
+		"mus_eln_project_name", "mus_eln_study_name",
+	}
+)
 
 // applyMetadataToIRODS writes the AVU set from the sidecar onto the
 // iRODS object at remotePath. Diff-and-warn: skips no-op writes,
