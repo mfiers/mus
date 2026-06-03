@@ -62,6 +62,7 @@ func NewRootCmd() *cobra.Command {
 		newVocabCmd(),
 		newUpgradeCmd(),
 		newVerifyCmd(),
+		newRmCmd(),
 	)
 	// cobra creates the `completion` subcommand lazily during Execute();
 	// force it to exist now so we can attach `install` under it.
