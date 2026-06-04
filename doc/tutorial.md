@@ -11,21 +11,21 @@ A short, opinionated walkthrough for BADS depositors. Companion to
 curl -sSL https://codeberg.org/mfiers/mus/raw/branch/main/install.sh | bash
 ```
 
-**iRODS auth.** First time on this machine, grab your iRODS
-environment file from <https://mango.kuleuven.be/> (top-right user
-menu → "Download iRODS environment") and save it as
-`~/.irods/irods_environment.json`. Then:
+**iRODS auth.** Authenticate against the KU Leuven Mango `gbiomed`
+zone:
 
 ```bash
-iron auth               # one-shot — prompts for password / SSO
-mus irods login         # optional: same as `iron auth`, plus prereq checks
+iron auth <u-or-r-number> gbiomed gbiomed.irods.icts.kuleuven.be
 ```
 
-`iron auth` is the actual credential exchange. `mus irods login` is
-a thin wrapper that checks prerequisites (iron on PATH, env file
-present) before invoking `iron auth`, then verifies with `iron pwd`.
-Use whichever you prefer — the result is the same cached credential
-under `~/.irods/`.
+Replace `<u-or-r-number>` with your KU Leuven account number
+(`u0123456` for staff, `r0123456` for students). `iron auth` prompts
+for your password / SSO credential and caches the result under
+`~/.irods/`.
+
+`mus irods login` is an optional thin wrapper that re-runs `iron
+auth` only if `iron pwd` already fails, then verifies — use it for a
+quick "am I still authenticated?" check.
 
 **ELN auth.** Get a token in eLab (Apps & Connections → Manage
 authentication → Generate access token), then:
@@ -89,10 +89,18 @@ files you ask it to upload.
 
 ## 4. How annotations work — folder vs file
 
-Two places annotation lives: a **`.env`** in the folder, applying to
-everything under it, and a **`*.mus` sidecar** next to one file,
-applying only to that file. Don't edit either by hand — mus has
-commands for both.
+Two places annotation lives:
+
+- A **`.env`** file inside a folder. It applies to **that folder
+  AND every file and subfolder beneath it, recursively** — set it
+  once at the project root and it covers the entire tree. Subfolders
+  can add their own `.env` to refine the parent's values for just
+  that branch.
+- A **`*.mus` sidecar** sitting next to one specific data file
+  (`foo.h5ad` → `foo.h5ad.mus`). It applies to **only that one
+  file** — never spreads, never inherits to siblings.
+
+Don't edit either by hand — mus has commands for both.
 
 ### Folder annotation — set with `mus config set`
 
