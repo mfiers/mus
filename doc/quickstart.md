@@ -39,19 +39,22 @@ Three short interactive commands.
 
 ### 2a. iRODS auth
 
+Authenticate against the BADS Mango zone with `iron auth` (one
+command — it prompts for password / SSO and writes the environment
+file itself):
+
 ```bash
-mus irods login
+iron auth <u-or-r-number> gbiomed gbiomed.irods.icts.kuleuven.be
 ```
 
-`mus` does NOT manage iRODS credentials itself — it bridges to the [iron](https://rdm-docs.icts.kuleuven.be/mango/clients/iron.html) CLI. `mus irods login` walks you through:
+Substitute your KU Leuven account number (`u0123456` for staff,
+`r0123456` for students). Credentials are cached under `~/.irods/`
+(TTL is whatever iron is configured for, often a week).
 
-1. **Is iron installed?** If not, prints the install URL and stops.
-2. **Is `~/.irods/irods_environment.json` present?** That file tells iron which iRODS zone + host to talk to. If missing, mus points you at https://mango.kuleuven.be/ where you download yours from the top-right user menu (one-time per machine).
-3. **Are you already authenticated?** If `iron pwd` works → ✓, done.
-4. **Otherwise**, `mus` spawns `iron auth` interactively. Enter your password (or SSO credential — depends on your iRODS setup).
-5. **Verify.** `iron pwd` is re-run; on success → ✓.
-
-You typically run this once per machine. The credential is cached in `~/.irods/` (TTL is whatever iron is configured for, often a week).
+`mus irods login` is a verify-or-nudge helper around this: it runs
+`iron pwd` and either prints ✓ or prints the exact `iron auth`
+command above. mus does NOT bootstrap auth itself; `iron auth`
+already handles it in one shot.
 
 ### 2b. ELN auth
 

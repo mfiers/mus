@@ -1,25 +1,23 @@
 package cli
 
-// `mus irods login` walks a new user through getting `iron` authenticated.
-// The actual auth handoff goes through `iron auth` interactively (PAM
-// password or KU Leuven SSO); mus just bridges the discovery + verification
-// around it.
+// `mus irods login` is a verify-or-nudge helper for `iron auth`. mus
+// does NOT bootstrap an iRODS environment itself — `iron auth` already
+// does that in one command. mus just probes the current state and, if
+// auth is missing, points the user at the canonical iron command.
 //
 // Sequence:
 //
 //  1. Locate the `iron` binary on PATH; if missing, print install link.
-//  2. Check ~/.irods/irods_environment.json. If missing, print the URL
-//     where the user downloads it from the Mango portal.
-//  3. Probe current auth state with `iron pwd`. If already good, exit ✓.
-//  4. Run `iron auth` interactively (passes stdin/stdout through).
-//  5. Re-probe with `iron pwd`. Report success.
+//  2. Probe current auth state with `iron pwd`. If it works, ✓ done.
+//  3. Otherwise: print the `iron auth <u-or-r-number> gbiomed
+//     gbiomed.irods.icts.kuleuven.be` command and exit, asking the
+//     user to run it (it prompts for password / SSO and writes the
+//     environment file). Re-run `mus irods login` to verify.
 
 import (
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 
 	"codeberg.org/mfiers/mus/internal/iron"
 	"github.com/spf13/cobra"
@@ -28,22 +26,28 @@ import (
 func newIRODSLoginCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "login",
-		Short: "interactive: get the `iron` CLI authenticated against your iRODS zone",
-		Long: "Bridges `iron auth` so first-time users don't have to remember the\n" +
-			"steps. Confirms the iron binary is installed, points you at the Mango\n" +
-			"portal to download your irods_environment.json if missing, runs\n" +
-			"`iron auth` for the actual credential exchange, then verifies with\n" +
-			"`iron pwd`.",
+		Short: "verify iRODS authentication, or nudge you to run `iron auth`",
+		Long: "Probes `iron pwd` to confirm you're authenticated against the\n" +
+			"iRODS server. If you are: prints ✓ and exits. If not: prints the\n" +
+			"canonical `iron auth` command (with the gbiomed zone + host filled\n" +
+			"in) so you can run it yourself.\n\n" +
+			"mus does NOT bootstrap auth itself — `iron auth` already handles\n" +
+			"that in one command, including writing the environment file.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runIRODSLogin(cmd)
 		},
 	}
 }
 
+// IronAuthHint is the canonical command users should run to get
+// authenticated against the BADS / KU Leuven Mango zone. Surfaced
+// here so other commands (e.g. `mus irods upload` on a stale token)
+// can show the same string.
+const IronAuthHint = "iron auth <u-or-r-number> gbiomed gbiomed.irods.icts.kuleuven.be"
+
 func runIRODSLogin(cmd *cobra.Command) error {
 	stdout := cmd.OutOrStdout()
 
-	// Step 1: iron on PATH?
 	ironPath, err := exec.LookPath("iron")
 	if err != nil {
 		return fmt.Errorf(
@@ -52,25 +56,6 @@ func runIRODSLogin(cmd *cobra.Command) error {
 				"  (one binary download per platform).")
 	}
 	fmt.Fprintf(stdout, "✓ iron found at %s\n", ironPath)
-
-	// Step 2: iRODS env file present?
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return err
-	}
-	envFile := filepath.Join(home, ".irods", "irods_environment.json")
-	if _, err := os.Stat(envFile); err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf(
-				"iRODS environment file is missing: %s\n"+
-					"  Download yours from https://mango.kuleuven.be/\n"+
-					"  (top-right user menu → \"Download iRODS environment\")\n"+
-					"  Save it as ~/.irods/irods_environment.json, then re-run `mus irods login`.",
-				envFile)
-		}
-		return err
-	}
-	fmt.Fprintf(stdout, "✓ iRODS environment file present (%s)\n", envFile)
 
 	client, err := iron.New()
 	if err != nil {
@@ -81,29 +66,23 @@ func runIRODSLogin(cmd *cobra.Command) error {
 		ctx = context.Background()
 	}
 
-	// Step 3: already authenticated?
+	// Already authenticated? Confirm and exit.
 	if pwd, perr := client.Run(ctx, "pwd"); perr == nil {
-		fmt.Fprintf(stdout, "✓ already authenticated; iron pwd = %s\n", trimRight(pwd, '\n'))
+		fmt.Fprintf(stdout, "✓ authenticated; iron pwd = %s\n",
+			trimRight(pwd, '\n'))
+		fmt.Fprintln(stdout, "  You can now run `mus irods upload`, `mus irods get`, etc.")
 		return nil
 	}
 
-	// Step 4: run `iron auth` interactively. We invoke it through Stream so
-	// stdin/stdout/stderr pass through to the user's terminal (so PAM prompts
-	// work).
-	fmt.Fprintln(stdout, "→ running `iron auth` — follow the prompt to enter your password or SSO credential")
-	if err := client.Stream(ctx, "auth"); err != nil {
-		return fmt.Errorf("iron auth: %w", err)
-	}
-
-	// Step 5: verify
-	pwd, err := client.Run(ctx, "pwd")
-	if err != nil {
-		return fmt.Errorf("iron auth completed but `iron pwd` still fails: %w", err)
-	}
-	fmt.Fprintf(stdout, "\n✓ authenticated.  iron pwd = %s\n",
-		trimRight(pwd, '\n'))
-	fmt.Fprintln(stdout, "  You can now run `mus irods upload`, `mus irods get`, etc.")
-	return nil
+	// Not authenticated. Tell the user exactly what to run.
+	return fmt.Errorf(
+		"not authenticated against iRODS.\n"+
+			"  Run:\n"+
+			"      %s\n"+
+			"  (substitute your KU Leuven account number for <u-or-r-number>).\n"+
+			"  It prompts for your password / SSO and writes the environment\n"+
+			"  file. Then re-run `mus irods login` to verify.",
+		IronAuthHint)
 }
 
 func trimRight(s string, b byte) string {
