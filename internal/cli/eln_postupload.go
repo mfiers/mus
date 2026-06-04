@@ -59,7 +59,7 @@ type uploadedItem struct {
 //   - the cascade has no eln_experiment_id (this folder isn't ELN-linked)
 //   - the user hasn't run `mus eln login` (no token in secret store)
 func postUploadCommentToELN(env *config.Env, items []uploadedItem,
-	dryRun, enabled bool, stderr io.Writer) {
+	dryRun, enabled bool, message string, stderr io.Writer) {
 
 	if !enabled || dryRun || len(items) == 0 {
 		return
@@ -93,7 +93,7 @@ func postUploadCommentToELN(env *config.Env, items []uploadedItem,
 	}
 
 	title := buildELNCommentTitle(items)
-	body := buildELNCommentHTML(env, items)
+	body := buildELNCommentHTML(env, items, message)
 
 	jid, err := client.CreateCommentSection(expID, title, body)
 	if err != nil {
@@ -163,7 +163,7 @@ func pluralNoun(n int, noun string) string {
 // PURL is always the link target when present (persistent across moves /
 // renames). If iron stat failed during the upload, we fall back to the
 // path-based URL and add a one-line footnote so the reader knows why.
-func buildELNCommentHTML(env *config.Env, items []uploadedItem) string {
+func buildELNCommentHTML(env *config.Env, items []uploadedItem, message string) string {
 	var b strings.Builder
 
 	host, _ := os.Hostname()
@@ -172,6 +172,13 @@ func buildELNCommentHTML(env *config.Env, items []uploadedItem) string {
 		who = u.Username
 	}
 	cwd, _ := os.Getwd()
+
+	// --- message (the depositor's -m, prominent at the top) ---
+	if msg := strings.TrimSpace(message); msg != "" {
+		fmt.Fprintf(&b,
+			"<blockquote><p><strong>Upload message:</strong> %s</p></blockquote>",
+			html.EscapeString(msg))
+	}
 
 	// --- summary line ---
 	var total int64

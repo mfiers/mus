@@ -74,6 +74,7 @@ func runIRODSUploadFolder(
 	remoteCollection string,
 	env *config.Env,
 	mode packMode,
+	message string,
 	uploads *[]uploadedItem,
 ) error {
 	stdin := cmd.InOrStdin()
@@ -140,9 +141,9 @@ func runIRODSUploadFolder(
 	cleanup, _ := cmd.Flags().GetBool("cleanup-archive")
 	switch chosen {
 	case packTarGz:
-		return uploadFolderArchived(cmd, srcAbs, remoteCollection, opts, env, prof, cleanup, uploads)
+		return uploadFolderArchived(cmd, srcAbs, remoteCollection, opts, env, prof, cleanup, message, uploads)
 	case packNone:
-		return uploadFolderDirect(cmd, srcAbs, remoteCollection, opts, env, prof, uploads)
+		return uploadFolderDirect(cmd, srcAbs, remoteCollection, opts, env, prof, message, uploads)
 	}
 	_ = stderr
 	return fmt.Errorf("unknown pack mode %q", chosen)
@@ -208,6 +209,7 @@ func uploadFolderDirect(
 	opts iron.UploadOpts,
 	env *config.Env,
 	prof *folder.Profile,
+	message string,
 	uploads *[]uploadedItem,
 ) error {
 	client, err := iron.New()
@@ -234,7 +236,7 @@ func uploadFolderDirect(
 	if err := client.Upload(ctx, srcAbs, remoteTarget, folderOpts); err != nil {
 		return err
 	}
-	return finalizeFolderSidecar(cmd, srcAbs, remotePath, env, prof, nil, client, ctx, uploads, "folder")
+	return finalizeFolderSidecar(cmd, srcAbs, remotePath, env, prof, nil, client, ctx, uploads, "folder", message)
 }
 
 // uploadFolderArchived builds <basename>.tar.gz, uploads the archive, and
@@ -247,6 +249,7 @@ func uploadFolderArchived(
 	env *config.Env,
 	prof *folder.Profile,
 	cleanupAfter bool,
+	message string,
 	uploads *[]uploadedItem,
 ) error {
 	stdin := cmd.InOrStdin()
@@ -306,7 +309,7 @@ func uploadFolderArchived(
 		Size:     res.Size,
 		Sha256:   res.Sha256,
 	}
-	if err := finalizeFolderSidecar(cmd, srcAbs, remotePath, env, prof, archive, client, ctx, uploads, "archive"); err != nil {
+	if err := finalizeFolderSidecar(cmd, srcAbs, remotePath, env, prof, archive, client, ctx, uploads, "archive", message); err != nil {
 		return err
 	}
 
@@ -340,6 +343,7 @@ func finalizeFolderSidecar(
 	ctx context.Context,
 	uploads *[]uploadedItem,
 	itemKind string,
+	message string,
 ) error {
 	stdout := cmd.OutOrStdout()
 
@@ -379,6 +383,7 @@ func finalizeFolderSidecar(
 		doc.IRODS = &sidecar.IRODS{}
 	}
 	doc.IRODS.Path = remotePath
+	doc.IRODS.Message = message
 	doc.IRODS.Status = "uploaded"
 	doc.IRODS.UploadedAt = time.Now().UTC().Truncate(time.Second)
 

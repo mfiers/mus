@@ -357,12 +357,19 @@ the richer the AVU metadata stamped on the iRODS object.
 
 ## 8. Pack & upload
 
+Every `mus irods upload` requires a **`-m / --message`** describing
+what / why — like a git commit message. The message is stamped on
+the sidecar (`irods_message`), on the iRODS object as a
+`mus_upload_message` AVU triplet, and prepended to the ELN comment.
+No silent uploads.
+
 ### Single file
 
 ```bash
 cd ~/projects/microglia_pilot
 mus h5ad check final/microglia_clusters.h5ad    # validates structure + vocab
-mus irods upload final/microglia_clusters.h5ad
+mus irods upload -m "post-QC clustering for figure 3" \
+    final/microglia_clusters.h5ad
 ```
 
 `.h5ad` files are gated: `mus h5ad check` must have validated them
@@ -372,7 +379,7 @@ into the sidecar. `--force-h5ad-upload` bypasses; you'll regret it.
 ### Folder with many small files
 
 ```bash
-mus irods upload scripts/
+mus irods upload -m "analysis scripts as of 2026-06-04" scripts/
 # scripts/ — 3 files, total 8 KB, median 2 KB
 # Many small files — pack into scripts.tar.gz? [t/a/c]
 ```
@@ -390,12 +397,13 @@ Non-interactive callers (CI, scripts) must pass `--pack tar.gz` or
 
 ```bash
 cd ~/projects/microglia_pilot
-mus irods upload scripts/ raw/ final/
+mus irods upload -m "initial deposit of microglia pilot" \
+    scripts/ raw/ final/
 ```
 
-Three uploads, one inherited annotation set, one ELN comment per
-folder. The `intermediate/` subfolder is simply not in the argument
-list — it's not backed up.
+One message applies to all three; one ELN comment lists everything.
+The `intermediate/` subfolder is simply not in the argument list —
+it's not backed up.
 
 ---
 
@@ -560,9 +568,10 @@ mus -C final config set doi 10.1234/microglia.2025
 # Validate, then back up -------------------------------------------
 mus h5ad check final/microglia_clusters.h5ad
 
-mus irods upload scripts/                           # pack? → t
-mus irods upload raw/sample01.fastq.gz raw/sample02.fastq.gz
-mus irods upload final/microglia_clusters.h5ad final/figure_data.csv
+mus irods upload -m "scripts snapshot" scripts/                           # pack? → t
+mus irods upload -m "raw fastq from VIB seq core" raw/sample01.fastq.gz raw/sample02.fastq.gz
+mus irods upload -m "post-QC final h5ad + figure-3 source data" \
+    final/microglia_clusters.h5ad final/figure_data.csv
 
 # Free local disk after a clean check ------------------------------
 mus rm -y final/microglia_clusters.h5ad

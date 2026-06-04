@@ -142,6 +142,9 @@ func avuFromDoc(doc *sidecar.Doc) map[string][]string {
 		put("mus_uploaded_at",
 			doc.IRODS.UploadedAt.UTC().Format("2006-01-02T15:04:05Z"))
 	}
+	if doc.IRODS != nil {
+		put("mus_upload_message", doc.IRODS.Message)
+	}
 	return out
 }
 
@@ -227,6 +230,15 @@ func mergeAVUIntoDoc(doc *sidecar.Doc, avu map[string][]string, stderr io.Writer
 		ctx.scalar(&doc.ELN.ExperimentName, "mus_eln_experiment_name")
 		ctx.scalar(&doc.ELN.ProjectName, "mus_eln_project_name")
 		ctx.scalar(&doc.ELN.StudyName, "mus_eln_study_name")
+	}
+
+	// Upload message lives on the IRODS block; lazy-allocate if needed.
+	if _, ok := avu["mus_upload_message"]; ok {
+		if doc.IRODS == nil {
+			doc.IRODS = &sidecar.IRODS{}
+			ctx.mutated = true
+		}
+		ctx.scalar(&doc.IRODS.Message, "mus_upload_message")
 	}
 
 	// Folder/Archive: only the COUNT fields are metadata-like and worth

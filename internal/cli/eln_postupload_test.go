@@ -62,7 +62,7 @@ func TestBuildELNCommentHTML_PURLLinkedPath(t *testing.T) {
 		Sha256:     "abcdef0123456789abcdef0123456789",
 		Size:       2048,
 	}}
-	out := buildELNCommentHTML(emptyEnv(t), items)
+	out := buildELNCommentHTML(emptyEnv(t), items, "")
 
 	// Basename is the link text; PURL is the href; full path lives in title=.
 	wantAnchor := `<a href="https://example/PID/zone/12345/" title="/zone/home/lab/project/Fiers2025/exp/sample.csv"><code>sample.csv</code></a>`
@@ -92,7 +92,7 @@ func TestBuildELNCommentHTML_PathFallbackMarker(t *testing.T) {
 		URL:        "https://example/browse",
 		PURL:       "",
 	}}
-	out := buildELNCommentHTML(emptyEnv(t), items)
+	out := buildELNCommentHTML(emptyEnv(t), items, "")
 	if !strings.Contains(out, `<a href="https://example/browse" title="/zone/home/lab/folder"><code>folder</code></a> *`) {
 		t.Errorf("expected URL-fallback basename anchor with ` *` marker, got:\n%s", out)
 	}
@@ -103,7 +103,7 @@ func TestBuildELNCommentHTML_PathFallbackMarker(t *testing.T) {
 
 func TestBuildELNCommentHTML_NoFallbackFootnoteWhenAllPURL(t *testing.T) {
 	items := []uploadedItem{{Kind: "file", RemotePath: "/r", PURL: "https://example/PID/x/1/"}}
-	out := buildELNCommentHTML(emptyEnv(t), items)
+	out := buildELNCommentHTML(emptyEnv(t), items, "")
 	if strings.Contains(out, "path-based link only") {
 		t.Errorf("fallback footnote should be absent when every item has a PURL:\n%s", out)
 	}
@@ -111,7 +111,7 @@ func TestBuildELNCommentHTML_NoFallbackFootnoteWhenAllPURL(t *testing.T) {
 
 func TestBuildELNCommentHTML_EscapesAngleBrackets(t *testing.T) {
 	items := []uploadedItem{{Kind: "file", RemotePath: "/x/<script>alert(1)</script>", PURL: "https://example/PID/x/1/"}}
-	out := buildELNCommentHTML(emptyEnv(t), items)
+	out := buildELNCommentHTML(emptyEnv(t), items, "")
 	if strings.Contains(out, "<script>alert(1)</script>") {
 		t.Fatalf("HTML did not escape user-supplied angle brackets:\n%s", out)
 	}
@@ -126,7 +126,7 @@ func TestBuildELNCommentHTML_ContentsColumnFolderArchive(t *testing.T) {
 		{Kind: "folder", RemotePath: "/r/scripts", PURL: "https://example/PID/x/2/", FileCount: 23, DirCount: 4},
 		{Kind: "archive", RemotePath: "/r/data.tar.gz", PURL: "https://example/PID/x/3/", FileCount: 1000, DirCount: 0},
 	}
-	out := buildELNCommentHTML(emptyEnv(t), items)
+	out := buildELNCommentHTML(emptyEnv(t), items, "")
 	if !strings.Contains(out, "<th>Contents</th>") {
 		t.Errorf("expected Contents column header, got:\n%s", out)
 	}
@@ -148,7 +148,7 @@ func TestBuildELNCommentHTML_NoContentsColumnForFileOnly(t *testing.T) {
 		{Kind: "file", RemotePath: "/r/a.csv", PURL: "https://example/PID/x/1/"},
 		{Kind: "file", RemotePath: "/r/b.csv", PURL: "https://example/PID/x/2/"},
 	}
-	out := buildELNCommentHTML(emptyEnv(t), items)
+	out := buildELNCommentHTML(emptyEnv(t), items, "")
 	if strings.Contains(out, "Contents") {
 		t.Errorf("Contents column should be omitted on file-only batch:\n%s", out)
 	}
@@ -168,7 +168,7 @@ func TestBuildELNCommentHTML_SummaryIncludesContextWhenSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := buildELNCommentHTML(env, []uploadedItem{{Kind: "file", RemotePath: "/r", PURL: "https://example/PID/x/1/"}})
+	out := buildELNCommentHTML(env, []uploadedItem{{Kind: "file", RemotePath: "/r", PURL: "https://example/PID/x/1/"}}, "")
 	// data_project must appear; experiment must NOT (it's obvious from the
 	// experiment page the comment lives on).
 	for _, want := range []string{"data_project=", "Fiers2025"} {
@@ -180,5 +180,32 @@ func TestBuildELNCommentHTML_SummaryIncludesContextWhenSet(t *testing.T) {
 		if strings.Contains(out, banned) {
 			t.Errorf("summary should not mention experiment name (it's obvious from context); found %q in:\n%s", banned, out)
 		}
+	}
+}
+
+func TestBuildELNCommentHTML_MessageAppearsAtTop(t *testing.T) {
+	out := buildELNCommentHTML(emptyEnv(t),
+		[]uploadedItem{{Kind: "file", RemotePath: "/r"}},
+		"post-QC drop of microglia clusters for figure 3")
+	if !strings.Contains(out, "Upload message:") {
+		t.Errorf("missing label: %s", out)
+	}
+	if !strings.Contains(out, "post-QC drop of microglia clusters for figure 3") {
+		t.Errorf("missing message verbatim: %s", out)
+	}
+	// Message block must precede the summary line so it's the first
+	// thing readers see.
+	msgIdx := strings.Index(out, "Upload message:")
+	sumIdx := strings.Index(out, "Uploaded via")
+	if msgIdx < 0 || sumIdx < 0 || msgIdx > sumIdx {
+		t.Errorf("message should appear before summary; got msg=%d sum=%d", msgIdx, sumIdx)
+	}
+}
+
+func TestBuildELNCommentHTML_EmptyMessageOmitsBlock(t *testing.T) {
+	out := buildELNCommentHTML(emptyEnv(t),
+		[]uploadedItem{{Kind: "file", RemotePath: "/r"}}, "")
+	if strings.Contains(out, "Upload message:") {
+		t.Errorf("empty message should produce no message block:\n%s", out)
 	}
 }

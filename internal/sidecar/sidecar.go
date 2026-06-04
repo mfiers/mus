@@ -55,6 +55,10 @@ type IRODS struct {
 	Status     string // ok, mismatch, pending, uploaded, ...
 	UploadedAt time.Time
 	UploadedBy string
+	// Message is the depositor's `-m` upload note from the most recent
+	// `mus irods upload`. Like a git commit message — describes WHY this
+	// upload happened. Last-write-wins per file across multiple uploads.
+	Message string
 }
 
 // ELN captures eLabJournal experiment context.
@@ -365,6 +369,7 @@ func docToMap(d *Doc) map[string]any {
 		putStr(out, "irods_status", d.IRODS.Status)
 		putTime(out, "irods_uploaded_at", d.IRODS.UploadedAt)
 		putStr(out, "irods_uploaded_by", d.IRODS.UploadedBy)
+		putStr(out, "irods_message", d.IRODS.Message)
 	}
 	if d.ELN != nil {
 		putStr(out, "eln_experiment_id", d.ELN.ExperimentID)
@@ -483,6 +488,7 @@ func docFromMap(in map[string]any) (*Doc, error) {
 			Status:     getStr(in, "irods_status"),
 			UploadedAt: parseTime(getStr(in, "irods_uploaded_at")),
 			UploadedBy: getStr(in, "irods_uploaded_by"),
+			Message:    getStr(in, "irods_message"),
 		}
 	}
 	if hasPrefix(in, "eln_") {

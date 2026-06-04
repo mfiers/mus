@@ -151,16 +151,20 @@ func newIRODSUploadCmd() *cobra.Command {
 	// IRON's upload is idempotent by default: matching size+modtime → skip;
 	// different → overwrite. There is no "force" concept to expose.
 	var exclusive, newer, dryRun, noELNComment, forceH5adUpload bool
-	var dataProject, remoteName, packRaw string
+	var dataProject, remoteName, packRaw, message string
 	verify := true // verify-checksum on by default; opt-out below
 	cmd := &cobra.Command{
-		Use:   "upload FILE_OR_FOLDER [FILE_OR_FOLDER...]",
+		Use:   "upload -m MESSAGE FILE_OR_FOLDER [FILE_OR_FOLDER...]",
 		Short: "upload via IRON; writes/refreshes *.mus sidecars",
 		Long: "Uploads land at <irods_home>/project/<data_project>/<exp_name>/.\n" +
 			"data_project and a non-empty experiment-name are MANDATORY.\n" +
 			"data_project comes from .env (set via `mus config set` or `mus eln tag`);\n" +
 			"the experiment-name component is a sanitised eln_experiment_name unless\n" +
 			"overridden with --remote-name.\n\n" +
+			"A -m / --message is REQUIRED. Like a git commit message — describes\n" +
+			"why this upload is happening. The message is stamped on the local\n" +
+			"sidecar (irods_message), on the iRODS object as a mus_upload_message\n" +
+			"AVU, and prepended to the post-upload ELN comment.\n\n" +
 			"Folder uploads: each folder gets ONE sidecar at <folder>.mus (sibling of\n" +
 			"the folder) — no per-file sidecars are written inside the folder. mus\n" +
 			"profiles the folder and, if it has too many small files (density check),\n" +
@@ -172,6 +176,10 @@ func newIRODSUploadCmd() *cobra.Command {
 			"on) re-hashes both sides after transfer.",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			msg := strings.TrimSpace(message)
+			if msg == "" {
+				return fmt.Errorf("`mus irods upload` requires a -m / --message describing why this upload is happening")
+			}
 			pack, err := resolvePackMode(packRaw)
 			if err != nil {
 				return err
@@ -181,9 +189,12 @@ func newIRODSUploadCmd() *cobra.Command {
 				Exclusive:      exclusive,
 				Newer:          newer,
 				DryRun:         dryRun,
-			}, dataProject, remoteName, pack, !noELNComment, forceH5adUpload)
+			}, dataProject, remoteName, pack, !noELNComment, forceH5adUpload, msg)
 		},
 	}
+	cmd.Flags().StringVarP(&message, "message", "m", "",
+		"upload message describing what / why (REQUIRED)")
+	_ = cmd.MarkFlagRequired("message")
 	cmd.Flags().BoolVar(&verify, "verify-checksum", true, "re-hash both sides after upload (default: on)")
 	cmd.Flags().BoolVar(&exclusive, "exclusive", false, "refuse to overwrite existing remote objects")
 	cmd.Flags().BoolVar(&newer, "newer", false, "only upload files newer than the remote copy")
@@ -205,7 +216,7 @@ func newIRODSUploadCmd() *cobra.Command {
 	return cmd
 }
 
-func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, overrideDataProject, overrideRemoteName string, pack packMode, postELNComment, forceH5adUpload bool) error {
+func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, overrideDataProject, overrideRemoteName string, pack packMode, postELNComment, forceH5adUpload bool, message string) error {
 	dir, err := workingDir(cmd)
 	if err != nil {
 		return err
@@ -273,7 +284,7 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 		// Folder args go through the dedicated folder-upload path
 		// (density check + optional tar.gz + folder sidecar).
 		if st.IsDir() {
-			if err := runIRODSUploadFolder(cmd, abs, opts, remoteCollection, env, pack, &uploads); err != nil {
+			if err := runIRODSUploadFolder(cmd, abs, opts, remoteCollection, env, pack, message, &uploads); err != nil {
 				return err
 			}
 			continue
@@ -317,6 +328,7 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 		doc.IRODS.Path = remote
 		doc.IRODS.Status = "uploaded"
 		doc.IRODS.UploadedAt = time.Now().UTC().Truncate(time.Second)
+		doc.IRODS.Message = message
 
 		// Path-based browse URL (`irods_url`). Convenient but does NOT
 		// survive moves — see irods_purl for the location-independent one.
@@ -410,7 +422,7 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 		})
 	}
 
-	postUploadCommentToELN(env, uploads, opts.DryRun, postELNComment, cmd.ErrOrStderr())
+	postUploadCommentToELN(env, uploads, opts.DryRun, postELNComment, message, cmd.ErrOrStderr())
 	return nil
 }
 
