@@ -1,13 +1,16 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
 	"codeberg.org/mfiers/mus/internal/config"
 	"codeberg.org/mfiers/mus/internal/dataproject"
+	"codeberg.org/mfiers/mus/internal/vocab"
 	"github.com/spf13/cobra"
 )
 
@@ -79,26 +82,125 @@ func newConfigSetCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			key, value := args[0], args[1]
-			if err := validateConfigValue(key, value); err != nil {
+			if err := validateConfigKey(key, value); err != nil {
+				return err
+			}
+			resolved, err := resolveConfigValue(cmd.Context(), key, value, cmd.ErrOrStderr())
+			if err != nil {
 				return err
 			}
 			dir, err := workingDir(cmd)
 			if err != nil {
 				return err
 			}
-			return config.Save(dir, map[string]string{key: value})
+			return config.Save(dir, map[string]string{key: resolved})
 		},
 	}
 }
 
-// validateConfigValue applies key-specific validation when writing to .env.
-// Keys without a registered validator are accepted as-is.
-func validateConfigValue(key, value string) error {
+// validateConfigKey applies key-specific hard validation when writing
+// to .env. Returns an error for malformed values that should NOT be
+// written under any circumstance.
+func validateConfigKey(key, value string) error {
 	switch key {
 	case "data_project":
 		return dataproject.ValidateName(value)
 	}
 	return nil
+}
+
+// resolveConfigValue runs `value` through the joint vocabulary for
+// fields that have a controlled-value list. Behaviour:
+//
+//   - Field not in the vocabulary at all (e.g. `note`, `irods_home`)
+//     → returned verbatim, silent.
+//   - Value matches a vocab entry modulo case / `_`-`-`-space
+//     → rewritten to the canonical form. Tells the user on stderr
+//     if the input differed from canonical.
+//   - Value doesn't match any vocab entry
+//     → kept verbatim; prints a stderr warning so the typo is
+//     visible. The save still proceeds — the controlled vocabulary
+//     is a guidance layer, not a hard schema, and the depositor may
+//     have a legitimate reason to use a not-yet-listed term.
+//
+// List-valued keys (tissue, cell_type, …) are split on commas and
+// each item processed individually. The returned string is the
+// canonicalised comma-joined form.
+//
+// Vocab load failures are non-fatal — set proceeds without
+// validation. (mus's other vocab consumers do the same.)
+func resolveConfigValue(ctx context.Context, key, value string, stderr io.Writer) (string, error) {
+	if !isVocabConfigKey(key) {
+		return value, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	res, err := vocab.Load(ctx, vocab.LoadOptions{})
+	if err != nil {
+		fmt.Fprintf(stderr,
+			"  note: vocabulary unavailable (%v) — saving %s=%q verbatim\n",
+			err, key, value)
+		return value, nil
+	}
+	if isVocabListKey(key) {
+		return resolveVocabList(res.Vocabulary, key, value, stderr), nil
+	}
+	return resolveVocabScalar(res.Vocabulary, key, value, stderr), nil
+}
+
+// isVocabListKey reports whether a vocab-controlled key is also a
+// comma-separated list-valued key. Subset of isVocabConfigKey.
+func isVocabListKey(key string) bool {
+	switch key {
+	case "tissue", "cell_type", "disease":
+		return true
+	}
+	return false
+}
+
+// isVocabConfigKey reports whether a .env key has a controlled
+// vocabulary. Hard-coded list mirrors the joint-vocab top-level keys
+// — kept in sync with vocabulary/main.yaml.
+func isVocabConfigKey(key string) bool {
+	switch key {
+	case "organism", "technology", "suspension_type", "sex",
+		"access", "source", "license",
+		"tissue", "cell_type", "disease":
+		return true
+	}
+	return false
+}
+
+func resolveVocabScalar(v *vocab.Vocabulary, key, value string, stderr io.Writer) string {
+	canon, ok := v.Canonical(key, value)
+	if !ok {
+		fmt.Fprintf(stderr,
+			"  ⚠ %s=%q is not in the controlled vocabulary — saving anyway.\n"+
+				"    See `mus vocab show %s` or %s\n",
+			key, value, key,
+			"https://codeberg.org/mfiers/mus/src/branch/main/vocabulary/main.yaml")
+		return value
+	}
+	if canon != value {
+		fmt.Fprintf(stderr,
+			"  note: normalised %s=%q → %q (canonical form)\n",
+			key, value, canon)
+	}
+	return canon
+}
+
+func resolveVocabList(v *vocab.Vocabulary, key, value string, stderr io.Writer) string {
+	items := strings.Split(value, ",")
+	out := make([]string, 0, len(items))
+	for _, raw := range items {
+		item := strings.TrimSpace(raw)
+		if item == "" {
+			continue
+		}
+		out = append(out, resolveVocabScalar(v, key, item, stderr))
+	}
+	return strings.Join(out, ",")
 }
 
 func newConfigUnsetCmd() *cobra.Command {

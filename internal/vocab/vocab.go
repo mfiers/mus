@@ -95,17 +95,42 @@ func (v *Vocabulary) AllowedValues(field string) []string {
 // is friction without payoff. The ontology-ID companion (when set)
 // is the strict-match backstop.
 func (v *Vocabulary) ValueAllowed(field, value string) bool {
+	_, ok := v.Canonical(field, value)
+	return ok
+}
+
+// Canonical returns the canonical (as-listed) form of `value` for
+// `field` if a match exists modulo the case / `_`-`-`-space rules.
+// The bool is false when:
+//   - the field has no controlled vocabulary (any value is allowed)
+//     — in which case the verbatim `value` is returned along with
+//     true to signal "no normalisation needed"
+//   - the field IS controlled but `value` doesn't match any entry
+//     — empty string + false
+//
+// Lets callers auto-normalise depositor input ("HuMaN" → "human")
+// before writing it to disk, instead of carrying a stylistic mess
+// across sidecars.
+func (v *Vocabulary) Canonical(field, value string) (string, bool) {
 	allowed := v.AllowedValues(field)
 	if allowed == nil {
-		return true
+		// Freeform field — no canonical form to enforce.
+		return value, true
 	}
-	value = normalizeForMatch(value)
+	normalized := normalizeForMatch(value)
 	for _, a := range allowed {
-		if normalizeForMatch(a) == value {
-			return true
+		if normalizeForMatch(a) == normalized {
+			return a, true
 		}
 	}
-	return false
+	return "", false
+}
+
+// IsControlled reports whether `field` has a controlled vocabulary
+// — i.e. whether Canonical / ValueAllowed will reject unknown values
+// for it.
+func (v *Vocabulary) IsControlled(field string) bool {
+	return v.AllowedValues(field) != nil
 }
 
 // normalizeForMatch lower-cases s, trims surrounding whitespace, and
