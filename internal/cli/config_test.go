@@ -43,7 +43,7 @@ func TestResolveConfigValue_CanonicalCasingNormalisesSilently(t *testing.T) {
 	// "human" returned, with a "note:" line on stderr.
 	seedEmbeddedVocab(t)
 	var stderr bytes.Buffer
-	got, err := resolveConfigValue(context.Background(), "organism", "HuMaN", &stderr)
+	got, err := resolveConfigValue(context.Background(), "organism", "HuMaN", false, &stderr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestResolveConfigValue_CanonicalCasingNormalisesSilently(t *testing.T) {
 func TestResolveConfigValue_AlreadyCanonicalIsSilent(t *testing.T) {
 	seedEmbeddedVocab(t)
 	var stderr bytes.Buffer
-	got, _ := resolveConfigValue(context.Background(), "organism", "human", &stderr)
+	got, _ := resolveConfigValue(context.Background(), "organism", "human", false, &stderr)
 	if got != "human" {
 		t.Errorf("got %q", got)
 	}
@@ -70,20 +70,40 @@ func TestResolveConfigValue_AlreadyCanonicalIsSilent(t *testing.T) {
 	}
 }
 
-func TestResolveConfigValue_UnknownValueWarnsButSaves(t *testing.T) {
-	// "hooman" — clearly off-vocab. Should warn (⚠) but still return
-	// the value verbatim so `mus config set` writes it.
+func TestResolveConfigValue_OffVocabRejectsByDefault(t *testing.T) {
+	// "hooman" — clearly off-vocab. Without --force, must return an
+	// error so the value never reaches config.Save.
 	seedEmbeddedVocab(t)
 	var stderr bytes.Buffer
-	got, err := resolveConfigValue(context.Background(), "organism", "hooman", &stderr)
+	got, err := resolveConfigValue(context.Background(), "organism", "hooman", false, &stderr)
+	if err == nil {
+		t.Fatalf("expected error for off-vocab value, got value=%q", got)
+	}
+	if !strings.Contains(err.Error(), "controlled vocabulary") {
+		t.Errorf("expected vocab-rejection message, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "--force") {
+		t.Errorf("error must mention --force as the escape hatch: %v", err)
+	}
+}
+
+func TestResolveConfigValue_OffVocabSavesWithForce(t *testing.T) {
+	// Same off-vocab value, but with force=true → returns verbatim
+	// + visible ⚠ warning on stderr so the override is auditable.
+	seedEmbeddedVocab(t)
+	var stderr bytes.Buffer
+	got, err := resolveConfigValue(context.Background(), "organism", "hooman", true, &stderr)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != "hooman" {
-		t.Errorf("unknown value should pass through verbatim, got %q", got)
+		t.Errorf("forced off-vocab should pass through verbatim, got %q", got)
 	}
 	if !strings.Contains(stderr.String(), "⚠") || !strings.Contains(stderr.String(), "hooman") {
-		t.Errorf("expected warning mentioning the value, got: %q", stderr.String())
+		t.Errorf("expected ⚠ warning mentioning the value, got: %q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "--force") {
+		t.Errorf("warning should acknowledge --force, got: %q", stderr.String())
 	}
 }
 
@@ -91,8 +111,8 @@ func TestResolveConfigValue_FreeformKeyUntouched(t *testing.T) {
 	// `note` has no controlled vocabulary — should pass straight
 	// through with no stderr at all (no vocab even loaded).
 	var stderr bytes.Buffer
-	got, err := resolveConfigValue(context.Background(), "note", "Some Mixed CASE Text",
-		&stderr)
+	got, err := resolveConfigValue(context.Background(), "note",
+		"Some Mixed CASE Text", false, &stderr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,43 +124,68 @@ func TestResolveConfigValue_FreeformKeyUntouched(t *testing.T) {
 	}
 }
 
-func TestResolveConfigValue_ListNormalisesEachItem(t *testing.T) {
-	// tissue is list-valued. Mix one canonical, one needs-normalising,
-	// one unknown. Result is comma-joined canonical forms; unknown
-	// preserved with its warning.
+func TestResolveConfigValue_ListAllInVocabSavesCanonical(t *testing.T) {
+	// All items match (modulo case / underscore) → comma-joined
+	// canonical forms returned.
 	seedEmbeddedVocab(t)
 	var stderr bytes.Buffer
-	got, _ := resolveConfigValue(context.Background(), "tissue",
-		"hippocampus,PREFRONTAL_CORTEX,squidgyland", &stderr)
-
-	// Expect canonical "hippocampus", "prefrontal cortex" (the vocab
-	// stores the spaced form; the input was case+underscore variant),
-	// and the unknown "squidgyland" passed through verbatim.
+	got, err := resolveConfigValue(context.Background(), "tissue",
+		"hippocampus,PREFRONTAL_CORTEX", false, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
 	parts := strings.Split(got, ",")
-	if len(parts) != 3 {
-		t.Fatalf("expected 3 items, got %d (%q)", len(parts), got)
+	if len(parts) != 2 || parts[0] != "hippocampus" || parts[1] != "prefrontal cortex" {
+		t.Errorf("got %v, want [hippocampus, prefrontal cortex]", parts)
 	}
-	if parts[0] != "hippocampus" {
-		t.Errorf("first item: %q", parts[0])
+	if !strings.Contains(stderr.String(), "PREFRONTAL_CORTEX") {
+		t.Errorf("expected per-item normalisation note, got: %q", stderr.String())
 	}
-	if parts[1] != "prefrontal cortex" {
-		t.Errorf("second item should canonicalise to 'prefrontal cortex', got %q", parts[1])
+}
+
+func TestResolveConfigValue_ListOffVocabRejectsAtomically(t *testing.T) {
+	// One bad item → error mentions ALL bad items, nothing is saved.
+	seedEmbeddedVocab(t)
+	var stderr bytes.Buffer
+	_, err := resolveConfigValue(context.Background(), "tissue",
+		"hippocampus,squidgyland,otherland", false, &stderr)
+	if err == nil {
+		t.Fatal("expected error for off-vocab list items")
 	}
-	if parts[2] != "squidgyland" {
-		t.Errorf("unknown item should pass through, got %q", parts[2])
+	if !strings.Contains(err.Error(), "squidgyland") || !strings.Contains(err.Error(), "otherland") {
+		t.Errorf("error should list BOTH bad items, got: %v", err)
 	}
-	if !strings.Contains(stderr.String(), "squidgyland") {
-		t.Errorf("expected warning mentioning the unknown item: %q", stderr.String())
+	if !strings.Contains(err.Error(), "--force") {
+		t.Errorf("error should mention --force: %v", err)
+	}
+}
+
+func TestResolveConfigValue_ListWithForceSavesEverything(t *testing.T) {
+	seedEmbeddedVocab(t)
+	var stderr bytes.Buffer
+	got, err := resolveConfigValue(context.Background(), "tissue",
+		"hippocampus,squidgyland", true, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := strings.Split(got, ",")
+	if len(parts) != 2 || parts[0] != "hippocampus" || parts[1] != "squidgyland" {
+		t.Errorf("got %v, want [hippocampus, squidgyland] under --force", parts)
 	}
 }
 
 func TestResolveConfigValue_AccessAndSourceAreVocabControlled(t *testing.T) {
-	// Make sure the lab-specific scalars (access/source) are checked.
+	// Lab-specific scalars (access/source) — case-only fix must work.
 	seedEmbeddedVocab(t)
 	var stderr bytes.Buffer
-
-	_, _ = resolveConfigValue(context.Background(), "access", "Public", &stderr)
+	got, err := resolveConfigValue(context.Background(), "access", "Public", false, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "public" {
+		t.Errorf("got %q, want canonical 'public'", got)
+	}
 	if !strings.Contains(stderr.String(), "normalised") {
-		t.Errorf("expected 'Public' to normalise to 'public' with note, got: %q", stderr.String())
+		t.Errorf("expected normalisation note, got: %q", stderr.String())
 	}
 }

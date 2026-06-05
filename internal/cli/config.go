@@ -76,16 +76,25 @@ func newConfigShowCmd() *cobra.Command {
 }
 
 func newConfigSetCmd() *cobra.Command {
-	return &cobra.Command{
+	var force bool
+	cmd := &cobra.Command{
 		Use:   "set KEY VALUE",
 		Short: "set a key in the local .env",
-		Args:  cobra.ExactArgs(2),
+		Long: "Writes KEY=VALUE to the local folder's .env.\n\n" +
+			"For keys with a controlled vocabulary (organism, tissue, technology, " +
+			"cell_type, disease, suspension_type, sex, access, source, license):\n" +
+			"  - case-only differences are silently canonicalised\n" +
+			"    (e.g. `HuMaN` → `human`)\n" +
+			"  - values that don't match any vocab entry are REJECTED;\n" +
+			"    use --force to save them anyway (extends the vocab on disk,\n" +
+			"    not in the source — file an issue to make the term canonical).",
+		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			key, value := args[0], args[1]
 			if err := validateConfigKey(key, value); err != nil {
 				return err
 			}
-			resolved, err := resolveConfigValue(cmd.Context(), key, value, cmd.ErrOrStderr())
+			resolved, err := resolveConfigValue(cmd.Context(), key, value, force, cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}
@@ -96,6 +105,9 @@ func newConfigSetCmd() *cobra.Command {
 			return config.Save(dir, map[string]string{key: resolved})
 		},
 	}
+	cmd.Flags().BoolVar(&force, "force", false,
+		"save even if the value is not in the controlled vocabulary")
+	return cmd
 }
 
 // validateConfigKey applies key-specific hard validation when writing
@@ -118,18 +130,18 @@ func validateConfigKey(key, value string) error {
 //     → rewritten to the canonical form. Tells the user on stderr
 //     if the input differed from canonical.
 //   - Value doesn't match any vocab entry
-//     → kept verbatim; prints a stderr warning so the typo is
-//     visible. The save still proceeds — the controlled vocabulary
-//     is a guidance layer, not a hard schema, and the depositor may
-//     have a legitimate reason to use a not-yet-listed term.
+//     → REJECTED with an error pointing at the vocab + the --force
+//     escape hatch. If `force` is true, kept verbatim with a stderr
+//     warning so the off-vocab term stays visible.
 //
 // List-valued keys (tissue, cell_type, …) are split on commas and
-// each item processed individually. The returned string is the
-// canonicalised comma-joined form.
+// each item processed individually. A single off-vocab item rejects
+// the whole save (atomic — never persist a partial list).
 //
 // Vocab load failures are non-fatal — set proceeds without
-// validation. (mus's other vocab consumers do the same.)
-func resolveConfigValue(ctx context.Context, key, value string, stderr io.Writer) (string, error) {
+// validation (with a stderr note). Same posture as mus's other
+// vocab consumers.
+func resolveConfigValue(ctx context.Context, key, value string, force bool, stderr io.Writer) (string, error) {
 	if !isVocabConfigKey(key) {
 		return value, nil
 	}
@@ -144,9 +156,9 @@ func resolveConfigValue(ctx context.Context, key, value string, stderr io.Writer
 		return value, nil
 	}
 	if isVocabListKey(key) {
-		return resolveVocabList(res.Vocabulary, key, value, stderr), nil
+		return resolveVocabList(res.Vocabulary, key, value, force, stderr)
 	}
-	return resolveVocabScalar(res.Vocabulary, key, value, stderr), nil
+	return resolveVocabScalar(res.Vocabulary, key, value, force, stderr)
 }
 
 // isVocabListKey reports whether a vocab-controlled key is also a
@@ -172,35 +184,65 @@ func isVocabConfigKey(key string) bool {
 	return false
 }
 
-func resolveVocabScalar(v *vocab.Vocabulary, key, value string, stderr io.Writer) string {
+// offVocabError is the user-facing error for a value that doesn't
+// match any vocab entry. Names the key + value, points at the live
+// vocab + the local `mus vocab show`, and surfaces --force.
+func offVocabError(key, value string) error {
+	return fmt.Errorf(
+		"%s=%q is not in the controlled vocabulary — refusing to save.\n"+
+			"  See allowed values: `mus vocab show %s`\n"+
+			"  Or browse: https://codeberg.org/mfiers/mus/src/branch/main/vocabulary/main.yaml\n"+
+			"  Pass --force to save anyway (then please file an issue to extend the vocab).",
+		key, value, key)
+}
+
+func resolveVocabScalar(v *vocab.Vocabulary, key, value string, force bool, stderr io.Writer) (string, error) {
 	canon, ok := v.Canonical(key, value)
 	if !ok {
+		if !force {
+			return "", offVocabError(key, value)
+		}
 		fmt.Fprintf(stderr,
-			"  ⚠ %s=%q is not in the controlled vocabulary — saving anyway.\n"+
-				"    See `mus vocab show %s` or %s\n",
-			key, value, key,
-			"https://codeberg.org/mfiers/mus/src/branch/main/vocabulary/main.yaml")
-		return value
+			"  ⚠ %s=%q is not in the controlled vocabulary — saving anyway (--force).\n",
+			key, value)
+		return value, nil
 	}
 	if canon != value {
 		fmt.Fprintf(stderr,
 			"  note: normalised %s=%q → %q (canonical form)\n",
 			key, value, canon)
 	}
-	return canon
+	return canon, nil
 }
 
-func resolveVocabList(v *vocab.Vocabulary, key, value string, stderr io.Writer) string {
+func resolveVocabList(v *vocab.Vocabulary, key, value string, force bool, stderr io.Writer) (string, error) {
 	items := strings.Split(value, ",")
 	out := make([]string, 0, len(items))
+	var rejected []string
 	for _, raw := range items {
 		item := strings.TrimSpace(raw)
 		if item == "" {
 			continue
 		}
-		out = append(out, resolveVocabScalar(v, key, item, stderr))
+		resolved, err := resolveVocabScalar(v, key, item, force, stderr)
+		if err != nil {
+			// Don't bail on the first rejection — collect every off-vocab
+			// item so the user sees the full list in one re-run.
+			rejected = append(rejected, item)
+			continue
+		}
+		out = append(out, resolved)
 	}
-	return strings.Join(out, ",")
+	if len(rejected) > 0 {
+		// Re-report all rejections in one error message.
+		return "", fmt.Errorf(
+			"%d list item(s) not in the controlled vocabulary for %s: %s — refusing to save.\n"+
+				"  See allowed values: `mus vocab show %s`\n"+
+				"  Or browse: https://codeberg.org/mfiers/mus/src/branch/main/vocabulary/main.yaml\n"+
+				"  Pass --force to save anyway (then please file an issue to extend the vocab).",
+			len(rejected), key, strings.Join(rejected, ", "), key)
+	}
+	return strings.Join(out, ","), nil
 }
 
 func newConfigUnsetCmd() *cobra.Command {
