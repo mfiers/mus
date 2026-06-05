@@ -181,6 +181,14 @@ func validateKey(k string) error {
 	return nil
 }
 
+// SplitList is the exported entry point — same semantics as the
+// internal splitListValue, used by callers outside envformat (e.g.
+// `mus config set` parsing the comma-separated list it was handed
+// on the command line).
+func SplitList(value string) ([]string, error) {
+	return splitListValue(value)
+}
+
 // splitListValue tokenises a list value into items, respecting
 // double-quoted segments (which may contain commas). Inside a quoted
 // segment, `\"` is a literal `"` and `\\` is a literal `\`.

@@ -210,9 +210,16 @@ func LoadLocal(dir string) (*Env, error) {
 	return &Env{values: values, files: []string{path}}, nil
 }
 
-// Save writes the given key/value pairs into `dir`/.env, merging with whatever
-// is already there. For list keys the values are appended (with `-prefix`
-// removal semantics).
+// Save writes the given key/value pairs into `dir`/.env, REPLACING
+// whatever was there for those keys.
+//
+// For list-valued keys (tissue, cell_type, …) the value is parsed as
+// a comma-separated list (with double-quote escaping for items that
+// contain commas) and the whole list is REPLACED. This matches
+// shell-style `set` semantics — `mus config set tissue a,b,c` makes
+// tissue == [a, b, c], not "append (a,b,c) to whatever was there".
+//
+// Other keys in the local .env are left untouched.
 func Save(dir string, kv map[string]string) error {
 	local, err := LoadLocal(dir)
 	if err != nil {
@@ -220,12 +227,11 @@ func Save(dir string, kv map[string]string) error {
 	}
 	for k, v := range kv {
 		if listKeys[k] {
-			cur := local.List(k)
-			// Append the new value and resolve via Resolve so any `-prefix`
-			// in the new value takes effect against cur.
-			tmp := map[string]any{k: append(cur, v)}
-			envformat.Resolve(tmp, parseOpts())
-			local.values[k] = tmp[k]
+			items, err := envformat.SplitList(v)
+			if err != nil {
+				return fmt.Errorf("split list value for %s: %w", k, err)
+			}
+			local.values[k] = items
 		} else {
 			local.values[k] = v
 		}

@@ -81,7 +81,10 @@ func TestSaveRoundtrip(t *testing.T) {
 	}
 }
 
-func TestSaveAppendsToList(t *testing.T) {
+func TestSaveReplacesListKey(t *testing.T) {
+	// `mus config set` uses shell-style set semantics: a new value for
+	// a list-valued key REPLACES the existing list, not appends to it.
+	// (Older mus appended; this is the behaviour change in 0.2.6.)
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ".env"), "tag=existing\n")
 	if err := Save(dir, map[string]string{"tag": "added"}); err != nil {
@@ -92,10 +95,47 @@ func TestSaveAppendsToList(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := env.List("tag")
-	sort.Strings(got)
-	want := []string{"added", "existing"}
+	want := []string{"added"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("tag = %v, want %v (REPLACE semantics)", got, want)
+	}
+}
+
+func TestSaveListKeyParsesCommaSeparated(t *testing.T) {
+	// A comma-separated string passed to Save for a list-key should be
+	// split into items, not stored as one quoted blob.
+	dir := t.TempDir()
+	if err := Save(dir, map[string]string{"tag": "a,b,c"}); err != nil {
+		t.Fatal(err)
+	}
+	env, err := LoadLocal(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := env.List("tag")
+	want := []string{"a", "b", "c"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("tag = %v, want %v", got, want)
+	}
+}
+
+func TestSaveListKeyOtherKeysSurvive(t *testing.T) {
+	// Replacing one list-key does NOT clear unrelated keys.
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, ".env"),
+		"tag=old1,old2\nirods_home=/some/place\norganism=human\n")
+	if err := Save(dir, map[string]string{"tag": "new"}); err != nil {
+		t.Fatal(err)
+	}
+	env, _ := LoadLocal(dir)
+	if !reflect.DeepEqual(env.List("tag"), []string{"new"}) {
+		t.Errorf("tag = %v, want [new]", env.List("tag"))
+	}
+	if env.String("irods_home") != "/some/place" {
+		t.Errorf("irods_home lost: %q", env.String("irods_home"))
+	}
+	if env.String("organism") != "human" {
+		t.Errorf("organism lost: %q", env.String("organism"))
 	}
 }
 
