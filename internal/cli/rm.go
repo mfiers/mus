@@ -36,6 +36,7 @@ import (
 	"codeberg.org/mfiers/mus/internal/folder"
 	"codeberg.org/mfiers/mus/internal/hashcache"
 	"codeberg.org/mfiers/mus/internal/iron"
+	"codeberg.org/mfiers/mus/internal/pikahook"
 	"codeberg.org/mfiers/mus/internal/sidecar"
 )
 
@@ -153,9 +154,20 @@ func runRm(cmd *cobra.Command, args []string, opts rmOptions) error {
 			// later ones tripped on a permissions issue. Surface every
 			// problem so the user knows the exact state.
 			fmt.Fprintf(stderr, "  ✘ delete %s: %v\n", t.dataPath, err)
+			pikahook.EmitFireAndForget("rm", map[string]string{
+				"path":  t.dataPath,
+				"kind":  t.kind,
+				"error": err.Error(),
+			})
 			continue
 		}
 		fmt.Fprintf(stdout, "  ✓ deleted %s\n", t.dataPath)
+		pikahook.EmitFireAndForget("rm", map[string]string{
+			"path":   t.dataPath,
+			"kind":   t.kind,
+			"remote": t.doc.IRODS.Path,
+			"purl":   t.doc.IRODS.PURL,
+		})
 	}
 	return nil
 }

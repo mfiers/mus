@@ -36,6 +36,7 @@ import (
 	"codeberg.org/mfiers/mus/internal/folder"
 	"codeberg.org/mfiers/mus/internal/hashcache"
 	"codeberg.org/mfiers/mus/internal/iron"
+	"codeberg.org/mfiers/mus/internal/pikahook"
 	"codeberg.org/mfiers/mus/internal/sidecar"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -483,6 +484,17 @@ func finalizeFolderSidecar(
 			Size:       size,
 			FileCount:  prof.FileCount,
 			DirCount:   prof.DirCount,
+		})
+		// Pika audit-trail entry for the folder upload as a whole.
+		pikahook.EmitFireAndForget("irods-upload", map[string]string{
+			"kind":    itemKind, // "folder" or "archive"
+			"path":    srcAbs,
+			"remote":  remotePath,
+			"purl":    doc.IRODS.PURL,
+			"sha256":  sha,
+			"size":    fmt.Sprintf("%d", size),
+			"files":   fmt.Sprintf("%d", prof.FileCount),
+			"message": message,
 		})
 	}
 	return nil

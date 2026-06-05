@@ -16,6 +16,7 @@ import (
 	"codeberg.org/mfiers/mus/internal/folder"
 	"codeberg.org/mfiers/mus/internal/hashcache"
 	"codeberg.org/mfiers/mus/internal/iron"
+	"codeberg.org/mfiers/mus/internal/pikahook"
 	"codeberg.org/mfiers/mus/internal/sidecar"
 	"github.com/spf13/cobra"
 )
@@ -419,6 +420,16 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 			PURL:       doc.IRODS.PURL,
 			Sha256:     sum,
 			Size:       st.Size(),
+		})
+		// Pika audit-trail entry per upload. Opt-in + best-effort —
+		// see pikahook docs.
+		pikahook.EmitFireAndForget("irods-upload", map[string]string{
+			"path":    abs,
+			"remote":  remote,
+			"purl":    doc.IRODS.PURL,
+			"sha256":  sum,
+			"size":    fmt.Sprintf("%d", st.Size()),
+			"message": message,
 		})
 	}
 
@@ -866,6 +877,12 @@ func downloadOne(ctx context.Context, client *iron.Client,
 	// overwrite the sidecar. Failures here are non-fatal — bytes are
 	// already on disk; metadata refresh is a bonus.
 	refreshSidecarFromAVU(ctx, client, arg, doc, stderr)
+	pikahook.EmitFireAndForget("irods-get", map[string]string{
+		"path":   local,
+		"remote": doc.IRODS.Path,
+		"purl":   doc.IRODS.PURL,
+		"sha256": doc.File.Sha256,
+	})
 	return nil
 }
 

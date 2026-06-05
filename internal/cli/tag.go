@@ -9,6 +9,7 @@ import (
 
 	"codeberg.org/mfiers/mus/internal/config"
 	"codeberg.org/mfiers/mus/internal/hashcache"
+	"codeberg.org/mfiers/mus/internal/pikahook"
 	"codeberg.org/mfiers/mus/internal/sidecar"
 	"github.com/spf13/cobra"
 )
@@ -126,6 +127,13 @@ func runTag(cmd *cobra.Command, args []string, note string, tags []string, force
 			return err
 		}
 		fmt.Printf("%s  %s\n", short(sum), filepath.Base(path))
+
+		// Best-effort pika audit-trail entry. No-op when pika isn't
+		// installed or pika_log_enabled isn't set — see pikahook docs.
+		pikahook.EmitFireAndForget("tag", map[string]string{
+			"path":   path,
+			"sha256": sum,
+		})
 	}
 	return nil
 }
