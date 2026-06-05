@@ -91,10 +91,14 @@ func newConfigSetCmd() *cobra.Command {
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			key, value := args[0], args[1]
-			if err := validateConfigKey(key, value); err != nil {
+			resolvedKey, err := resolveConfigKey(key, force, cmd.ErrOrStderr())
+			if err != nil {
 				return err
 			}
-			resolved, err := resolveConfigValue(cmd.Context(), key, value, force, cmd.ErrOrStderr())
+			if err := validateConfigKey(resolvedKey, value); err != nil {
+				return err
+			}
+			resolved, err := resolveConfigValue(cmd.Context(), resolvedKey, value, force, cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}
@@ -102,7 +106,7 @@ func newConfigSetCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return config.Save(dir, map[string]string{key: resolved})
+			return config.Save(dir, map[string]string{resolvedKey: resolved})
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false,
@@ -185,26 +189,39 @@ func isVocabConfigKey(key string) bool {
 }
 
 // offVocabError is the user-facing error for a value that doesn't
-// match any vocab entry. Names the key + value, points at the live
-// vocab + the local `mus vocab show`, and surfaces --force.
-func offVocabError(key, value string) error {
-	return fmt.Errorf(
-		"%s=%q is not in the controlled vocabulary — refusing to save.\n"+
-			"  See allowed values: `mus vocab show %s`\n"+
-			"  Or browse: https://codeberg.org/mfiers/mus/src/branch/main/vocabulary/main.yaml\n"+
-			"  Pass --force to save anyway (then please file an issue to extend the vocab).",
-		key, value, key)
+// match any vocab entry. Names the key + value, suggests the
+// closest allowed value (with the exact corrected command), points
+// at the live vocab + local `mus vocab show`, and surfaces --force.
+func offVocabError(v *vocab.Vocabulary, key, value string) error {
+	msg := fmt.Sprintf(
+		"%s=%q is not in the controlled vocabulary — refusing to save.\n",
+		key, value)
+	if suggested := nearestVocabValue(v, key, value); suggested != "" {
+		msg += fmt.Sprintf(
+			"  Did you mean %q?\n"+
+				"  Try: mus config set %s %s\n",
+			suggested, key, shellQuote(suggested))
+	}
+	msg += fmt.Sprintf("  See allowed values: `mus vocab show %s`\n", key)
+	msg += "  Or browse: https://codeberg.org/mfiers/mus/src/branch/main/vocabulary/main.yaml\n"
+	msg += "  Pass --force to save anyway (then please file an issue to extend the vocab)."
+	return fmt.Errorf("%s", msg)
 }
 
 func resolveVocabScalar(v *vocab.Vocabulary, key, value string, force bool, stderr io.Writer) (string, error) {
 	canon, ok := v.Canonical(key, value)
 	if !ok {
 		if !force {
-			return "", offVocabError(key, value)
+			return "", offVocabError(v, key, value)
 		}
 		fmt.Fprintf(stderr,
 			"  ⚠ %s=%q is not in the controlled vocabulary — saving anyway (--force).\n",
 			key, value)
+		if suggested := nearestVocabValue(v, key, value); suggested != "" {
+			fmt.Fprintf(stderr,
+				"    (closest known value: %q — `mus config set %s %s`)\n",
+				suggested, key, shellQuote(suggested))
+		}
 		return value, nil
 	}
 	if canon != value {
@@ -215,10 +232,123 @@ func resolveVocabScalar(v *vocab.Vocabulary, key, value string, force bool, stde
 	return canon, nil
 }
 
+// nearestVocabValue returns the closest allowed value for `key` to
+// `value`. Two passes:
+//
+//  1. Whole-string Levenshtein distance, threshold-bounded. Catches
+//     simple typos: "huamn" → "human", "kortex" → "cortex".
+//  2. Token-level fallback: input tokens vs each token of each
+//     allowed value, threshold 2. Catches incomplete pastes that
+//     match one word of a multi-word vocab entry: "microglias" →
+//     "microglial cell" (1 edit on the first token).
+//
+// Whole-string hits always rank above token hits. Within each pass
+// lower edit distance wins; ties broken alphabetically for
+// determinism.
+func nearestVocabValue(v *vocab.Vocabulary, key, value string) string {
+	allowed := v.AllowedValues(key)
+	if allowed == nil {
+		return ""
+	}
+	normalizedInput := strings.ToLower(strings.TrimSpace(value))
+	if normalizedInput == "" {
+		return ""
+	}
+	// Whole-string threshold: scales with length so single-letter
+	// typos in 4-char terms (human) and longer typos in 15-char terms
+	// (dorsolateral …) both get caught, without `x` → `a` false hits.
+	wholeThreshold := 3
+	if alt := len(normalizedInput) * 2 / 5; alt > wholeThreshold {
+		wholeThreshold = alt
+	}
+	// Hard upper bound at half the input length — beyond that it's a
+	// different word, not a typo.
+	if cap := len(normalizedInput) / 2; cap < wholeThreshold {
+		wholeThreshold = cap
+	}
+	if wholeThreshold < 1 {
+		wholeThreshold = 1
+	}
+
+	type cand struct {
+		val  string
+		dist int  // bucket: <100 whole-string, 100+ token-level
+	}
+	var hits []cand
+	inputTokens := strings.Fields(normalizedInput)
+	for _, a := range allowed {
+		aLower := strings.ToLower(a)
+
+		// Pass 1: whole string.
+		if d := levenshtein(normalizedInput, aLower); d <= wholeThreshold {
+			hits = append(hits, cand{a, d})
+			continue
+		}
+
+		// Pass 2: token vs token. Tight threshold (2) per pairing.
+		allowedTokens := strings.Fields(aLower)
+		bestTok := -1
+		for _, it := range inputTokens {
+			if len(it) < 4 {
+				continue // skip very short tokens — too many false positives
+			}
+			for _, at := range allowedTokens {
+				if len(at) < 4 {
+					continue
+				}
+				d := levenshtein(it, at)
+				if d <= 2 && (bestTok == -1 || d < bestTok) {
+					bestTok = d
+				}
+			}
+		}
+		if bestTok >= 0 {
+			// Offset so token hits rank below all whole-string hits.
+			hits = append(hits, cand{a, bestTok + 100})
+		}
+	}
+	if len(hits) == 0 {
+		return ""
+	}
+	sort.Slice(hits, func(i, j int) bool {
+		if hits[i].dist != hits[j].dist {
+			return hits[i].dist < hits[j].dist
+		}
+		return hits[i].val < hits[j].val
+	})
+	return hits[0].val
+}
+
+// shellQuote wraps a value in single quotes when it contains
+// whitespace, commas, or shell metacharacters. So a suggestion like
+// `microglial cell` renders as `'microglial cell'` — pasteable as-is
+// into a shell.
+func shellQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	if strings.ContainsAny(s, " \t,'\"\\$`*?[]{}()<>|&;!#~") {
+		// Single-quote it; escape any embedded single quotes the
+		// standard POSIX way (close-quote, escaped-quote, re-open).
+		return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+	}
+	return s
+}
+
 func resolveVocabList(v *vocab.Vocabulary, key, value string, force bool, stderr io.Writer) (string, error) {
 	items := strings.Split(value, ",")
 	out := make([]string, 0, len(items))
-	var rejected []string
+	// For each rejected item we keep the raw value AND a suggestion
+	// (possibly empty) so the error message can show per-item hints
+	// + the corrected command.
+	type rej struct {
+		raw       string
+		suggested string
+	}
+	var rejected []rej
+	// Track the canonicalised items (suggestions or originals) for the
+	// "try this" command line at the bottom of the error.
+	corrected := make([]string, 0, len(items))
 	for _, raw := range items {
 		item := strings.TrimSpace(raw)
 		if item == "" {
@@ -226,21 +356,48 @@ func resolveVocabList(v *vocab.Vocabulary, key, value string, force bool, stderr
 		}
 		resolved, err := resolveVocabScalar(v, key, item, force, stderr)
 		if err != nil {
-			// Don't bail on the first rejection — collect every off-vocab
-			// item so the user sees the full list in one re-run.
-			rejected = append(rejected, item)
+			s := nearestVocabValue(v, key, item)
+			rejected = append(rejected, rej{raw: item, suggested: s})
+			if s != "" {
+				corrected = append(corrected, s)
+			} else {
+				corrected = append(corrected, item)
+			}
 			continue
 		}
 		out = append(out, resolved)
+		corrected = append(corrected, resolved)
 	}
 	if len(rejected) > 0 {
-		// Re-report all rejections in one error message.
-		return "", fmt.Errorf(
-			"%d list item(s) not in the controlled vocabulary for %s: %s — refusing to save.\n"+
-				"  See allowed values: `mus vocab show %s`\n"+
-				"  Or browse: https://codeberg.org/mfiers/mus/src/branch/main/vocabulary/main.yaml\n"+
-				"  Pass --force to save anyway (then please file an issue to extend the vocab).",
-			len(rejected), key, strings.Join(rejected, ", "), key)
+		var msg strings.Builder
+		fmt.Fprintf(&msg,
+			"%d list item(s) not in the controlled vocabulary for %s — refusing to save.\n",
+			len(rejected), key)
+		for _, r := range rejected {
+			if r.suggested != "" {
+				fmt.Fprintf(&msg, "  - %q → did you mean %q?\n", r.raw, r.suggested)
+			} else {
+				fmt.Fprintf(&msg, "  - %q (no near match in the vocabulary)\n", r.raw)
+			}
+		}
+		// Build the corrected one-liner. Only show it if at least one
+		// suggestion was meaningful (otherwise we'd just be parroting
+		// the user's input).
+		anySuggested := false
+		for _, r := range rejected {
+			if r.suggested != "" {
+				anySuggested = true
+				break
+			}
+		}
+		if anySuggested {
+			fmt.Fprintf(&msg, "  Try: mus config set %s %s\n",
+				key, shellQuote(strings.Join(corrected, ",")))
+		}
+		fmt.Fprintf(&msg, "  See allowed values: `mus vocab show %s`\n", key)
+		msg.WriteString("  Or browse: https://codeberg.org/mfiers/mus/src/branch/main/vocabulary/main.yaml\n")
+		msg.WriteString("  Pass --force to save anyway (then please file an issue to extend the vocab).")
+		return "", fmt.Errorf("%s", msg.String())
 	}
 	return strings.Join(out, ","), nil
 }

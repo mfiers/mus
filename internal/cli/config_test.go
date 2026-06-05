@@ -174,6 +174,95 @@ func TestResolveConfigValue_ListWithForceSavesEverything(t *testing.T) {
 	}
 }
 
+func TestResolveConfigKey_ExactMatchSilent(t *testing.T) {
+	var stderr bytes.Buffer
+	got, err := resolveConfigKey("cell_type", false, &stderr)
+	if err != nil || got != "cell_type" {
+		t.Errorf("got (%q, %v), want (cell_type, nil)", got, err)
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("exact match should be silent: %q", stderr.String())
+	}
+}
+
+func TestResolveConfigKey_CaseAndUnderscoreNormalises(t *testing.T) {
+	cases := []string{"CellType", "cell-type", "Cell_Type", "celltype", "cell type"}
+	for _, in := range cases {
+		var stderr bytes.Buffer
+		got, err := resolveConfigKey(in, false, &stderr)
+		if err != nil {
+			t.Errorf("%q: unexpected error %v", in, err)
+			continue
+		}
+		if got != "cell_type" {
+			t.Errorf("%q → %q, want cell_type", in, got)
+		}
+		if !strings.Contains(stderr.String(), "normalised key") {
+			t.Errorf("%q: expected normalisation note, got %q", in, stderr.String())
+		}
+	}
+}
+
+func TestResolveConfigKey_UnknownRejectsWithSuggestion(t *testing.T) {
+	var stderr bytes.Buffer
+	_, err := resolveConfigKey("organisme", false, &stderr) // French typo
+	if err == nil {
+		t.Fatal("expected rejection")
+	}
+	if !strings.Contains(err.Error(), "Did you mean") || !strings.Contains(err.Error(), "organism") {
+		t.Errorf("expected 'Did you mean organism?', got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "--force") {
+		t.Errorf("error should mention --force: %v", err)
+	}
+}
+
+func TestResolveConfigKey_TrulyUnknownRejectsCleanly(t *testing.T) {
+	// Far-from-anything key — no suggestion expected, still rejected.
+	var stderr bytes.Buffer
+	_, err := resolveConfigKey("my_lab_thing", false, &stderr)
+	if err == nil {
+		t.Fatal("expected rejection")
+	}
+	// Should still mention --force.
+	if !strings.Contains(err.Error(), "--force") {
+		t.Errorf("error should mention --force: %v", err)
+	}
+}
+
+func TestResolveConfigKey_ForceSavesUnknownVerbatim(t *testing.T) {
+	var stderr bytes.Buffer
+	got, err := resolveConfigKey("my_lab_thing", true, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "my_lab_thing" {
+		t.Errorf("forced unknown key should pass verbatim, got %q", got)
+	}
+	if !strings.Contains(stderr.String(), "⚠") {
+		t.Errorf("expected ⚠ warning under --force, got %q", stderr.String())
+	}
+}
+
+func TestResolveConfigValue_OffVocabErrorIncludesSuggestion(t *testing.T) {
+	seedEmbeddedVocab(t)
+	var stderr bytes.Buffer
+	_, err := resolveConfigValue(context.Background(), "cell_type", "microglias", false, &stderr)
+	if err == nil {
+		t.Fatal("expected rejection")
+	}
+	msg := strings.ToLower(err.Error())
+	if !strings.Contains(msg, "did you mean") {
+		t.Errorf("error must include 'did you mean': %v", err)
+	}
+	if !strings.Contains(msg, "microglial cell") {
+		t.Errorf("expected suggestion 'microglial cell', got: %v", err)
+	}
+	if !strings.Contains(msg, "mus config set cell_type 'microglial cell'") {
+		t.Errorf("error should print the corrected shell-safe command, got: %v", err)
+	}
+}
+
 func TestResolveConfigValue_AccessAndSourceAreVocabControlled(t *testing.T) {
 	// Lab-specific scalars (access/source) — case-only fix must work.
 	seedEmbeddedVocab(t)
