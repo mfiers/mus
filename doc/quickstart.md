@@ -35,26 +35,34 @@ mus upgrade --tag v0.1.5
 
 ## 2. First-run setup
 
-Three short interactive commands.
+Three short commands — let mus drive each one.
 
 ### 2a. iRODS auth
 
-Authenticate against the BADS Mango zone with `iron auth` (one
-command — it prompts for password / SSO and writes the environment
-file itself):
-
 ```bash
-iron auth <u-or-r-number> gbiomed gbiomed.irods.icts.kuleuven.be
+mus irods login
 ```
 
-Substitute your KU Leuven account number (`u0123456` for staff,
-`r0123456` for students). Credentials are cached under `~/.irods/`
-(TTL is whatever iron is configured for, often a week).
+Outcomes:
 
-`mus irods login` is a verify-or-nudge helper around this: it runs
-`iron pwd` and either prints ✓ or prints the exact `iron auth`
-command above. mus does NOT bootstrap auth itself; `iron auth`
-already handles it in one shot.
+- **Already authenticated** → prints ✓ and the next-step hint.
+- **Not authenticated** → prints the exact `iron auth` command you
+  need to run (with the gbiomed zone + host filled in). It looks
+  like:
+
+  ```
+  iron auth <u-or-r-number> gbiomed gbiomed.irods.icts.kuleuven.be
+  ```
+
+  Substitute your KU Leuven account number (`u0123456` for staff,
+  `r0123456` for students). `iron auth` prompts for password / SSO,
+  writes the environment file, and caches the credential under
+  `~/.irods/` (TTL is whatever iron is configured for, often a week).
+  Then re-run `mus irods login` to confirm ✓.
+
+mus does NOT bootstrap iRODS auth itself — `iron auth` handles it
+in one shot, including writing the environment file. `mus irods
+login` is a verify-or-nudge wrapper.
 
 ### 2b. ELN auth
 

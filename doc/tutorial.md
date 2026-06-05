@@ -11,28 +11,35 @@ A short, opinionated walkthrough for BADS depositors. Companion to
 curl -sSL https://codeberg.org/mfiers/mus/raw/branch/main/install.sh | bash
 ```
 
-**iRODS auth.** Authenticate against the KU Leuven Mango `gbiomed`
-zone:
+Then let mus walk you through each login.
+
+**iRODS auth:**
+
+```bash
+mus irods login
+```
+
+If you're already authenticated, it prints ✓ and exits. Otherwise it
+prints the exact command to run — for the BADS Mango zone that's:
 
 ```bash
 iron auth <u-or-r-number> gbiomed gbiomed.irods.icts.kuleuven.be
 ```
 
-Replace `<u-or-r-number>` with your KU Leuven account number
-(`u0123456` for staff, `r0123456` for students). `iron auth` prompts
-for your password / SSO credential and caches the result under
-`~/.irods/`.
+(`u0123456` for staff, `r0123456` for students.) `iron auth` prompts
+for password / SSO, writes the environment file, and caches the
+credential under `~/.irods/`. Re-run `mus irods login` to confirm ✓.
 
-`mus irods login` is an optional thin wrapper that re-runs `iron
-auth` only if `iron pwd` already fails, then verifies — use it for a
-quick "am I still authenticated?" check.
-
-**ELN auth.** Get a token in eLab (Apps & Connections → Manage
-authentication → Generate access token), then:
+**ELN auth:**
 
 ```bash
 mus eln login
 ```
+
+Interactive wizard — it tells you how to get a token from the eLab
+UI (Apps & Connections → Manage authentication → Generate access
+token), verifies it works, then stores it via mus's secret backend
+(OS keyring on a desktop, age-encrypted file on headless hosts).
 
 No ELN access? Run `mus eln disable --global` once and skip this.
 

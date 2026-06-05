@@ -239,21 +239,20 @@ main() {
 
     cat <<EOF
 
-Next steps:
-  1. Store your ELN credentials:
-       mus secret set eln_url    https://your-eln-server/api/v1
-       mus secret set eln_apikey <your-key>
+Next steps — let mus walk you through:
 
-  2. Configure iRODS home + web base (writes to .mus in the current dir):
-       mus config set irods_home /zone/home/your_lab
-       mus config set irods_web  https://mango.kuleuven.be/data-object/view
+  1. Authenticate against iRODS:
+       mus irods login
+     (verifies; if you're not authenticated yet it prints the exact
+      \`iron auth\` command to run.)
 
-  3. Link a working directory to an ELN experiment:
-       mus eln tag-folder -x <experimentID>
+  2. Authenticate against eLabJournal:
+       mus eln login
+     (interactive token wizard. No ELN access? Run
+      \`mus eln disable --global\` once instead.)
 
-  4. Try it:
-       mus tag data.csv -m "raw data"
-       mus check
+  3. Read the tutorial:
+       https://codeberg.org/$REPO/src/branch/main/doc/tutorial.md
 
   Docs: https://codeberg.org/$REPO
 EOF

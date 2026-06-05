@@ -32,13 +32,15 @@ mus upgrade
 
 ## First-run setup (≈ 2 minutes)
 
-Three commands. Each is interactive and tells you exactly what to do.
+Three commands. Each one tells you exactly what to do next.
 
 ```bash
-mus irods login        # checks iron, points at the Mango portal if missing, runs `iron auth`
+mus irods login        # verifies iRODS auth; prints the `iron auth` command to run if you're not yet authenticated
+mus eln login          # interactive eLabJournal token wizard; skip if you don't have ELN access
 mus completion install # tab-completion in bash/zsh/fish
-mus eln login          # only if you have eLabJournal API access — see below if you don't
 ```
+
+No ELN access? Run **`mus eln disable --global`** once instead of `mus eln login` — it writes `eln_disabled=true` to `~/.config/mus/.env` and mus stops asking from any working directory.
 
 After this, every command is keyring-backed and shell-aware. You'll likely never run these again on this machine.
 
