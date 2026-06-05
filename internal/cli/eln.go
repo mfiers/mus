@@ -189,15 +189,14 @@ func parseELNToken(raw string) (host string, key string, err error) {
 	return host, key, nil
 }
 
-// readSecretLine reads a single line of input, hiding it from the terminal
-// when stdin is a TTY. Falls back to a plain ReadString when stdin is piped
-// (scripts, CI).
+// readSecretLine reads a single line of input from `stdin`. On a TTY
+// it puts the terminal in raw mode and echoes a `*` per typed rune
+// (so you can tell whether your paste actually arrived) — handling
+// backspace, Ctrl-C, Ctrl-U, and Enter. Falls back to a plain
+// ReadString when stdin is piped (scripts, CI).
 func readSecretLine(stdin io.Reader, stdout io.Writer, prompt string) (string, error) {
 	if f, ok := stdin.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
-		fmt.Fprint(stdout, prompt)
-		raw, err := term.ReadPassword(int(f.Fd()))
-		fmt.Fprintln(stdout)
-		return string(raw), err
+		return readMaskedTTY(f, stdout, prompt)
 	}
 	// No TTY — read a line straight off stdin without echoing prompt as
 	// the caller probably piped a token in.
@@ -207,6 +206,78 @@ func readSecretLine(stdin io.Reader, stdout io.Writer, prompt string) (string, e
 		return "", err
 	}
 	return strings.TrimRight(line, "\r\n"), nil
+}
+
+// readMaskedTTY reads a line in raw mode, masking each input rune
+// with a `*` and supporting basic line editing (backspace, Ctrl-U,
+// Ctrl-C, Enter). The terminal state is always restored before
+// return — even on error. `*` mask is one per rune, not per byte,
+// so a multibyte paste doesn't visually over-count.
+//
+// Caller MUST be on a TTY; we assume term.IsTerminal(fd) was already
+// checked.
+func readMaskedTTY(stdin *os.File, stdout io.Writer, prompt string) (string, error) {
+	fd := int(stdin.Fd())
+	oldState, err := term.MakeRaw(fd)
+	if err != nil {
+		// Raw mode failed (e.g. /dev/null masquerading as a TTY).
+		// Fall back to silent ReadPassword rather than echoing.
+		fmt.Fprint(stdout, prompt)
+		raw, err := term.ReadPassword(fd)
+		fmt.Fprintln(stdout)
+		return string(raw), err
+	}
+
+	// Helpers that always emit DOS-style line endings while raw mode
+	// is in effect (cooked-mode \n → \n + CR is disabled in raw).
+	finish := func() {
+		_ = term.Restore(fd, oldState)
+		fmt.Fprintln(stdout)
+	}
+
+	fmt.Fprint(stdout, prompt)
+	reader := bufio.NewReader(stdin)
+	var buf []rune
+	for {
+		r, _, err := reader.ReadRune()
+		if err != nil {
+			finish()
+			if err == io.EOF && len(buf) > 0 {
+				return string(buf), nil
+			}
+			return "", err
+		}
+		switch r {
+		case '\r', '\n':
+			finish()
+			return string(buf), nil
+		case 0x03: // Ctrl-C
+			finish()
+			return "", errors.New("interrupted")
+		case 0x04: // Ctrl-D — only meaningful on an empty line
+			if len(buf) == 0 {
+				finish()
+				return "", io.EOF
+			}
+		case 0x15: // Ctrl-U: clear the line
+			for range buf {
+				fmt.Fprint(stdout, "\b \b")
+			}
+			buf = buf[:0]
+		case 0x7f, 0x08: // DEL or BS
+			if len(buf) > 0 {
+				buf = buf[:len(buf)-1]
+				fmt.Fprint(stdout, "\b \b")
+			}
+		default:
+			// Mask any printable rune. Skip remaining control chars
+			// (< 0x20 except tab); tab is rare in tokens but harmless.
+			if r >= 0x20 || r == '\t' {
+				buf = append(buf, r)
+				fmt.Fprint(stdout, "*")
+			}
+		}
+	}
 }
 
 // --- link + tag-folder (deprecated) -----------------------------------------
