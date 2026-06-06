@@ -19,9 +19,15 @@ The installer:
 4. Calls the just-downloaded binary's `mus _verify` to confirm the ed25519 signature against the embedded pubkey.
 5. Places it in the first writable PATH directory (`~/bin` → `~/.local/bin` → `/usr/local/bin`).
 
-If verification fails, the install aborts and no binary is left on disk. If your platform isn't published (e.g. Windows, macOS Intel), build from source instead.
+If verification fails, the install aborts and no binary is left on disk.
 
-Re-run the same `curl … | bash` any time to upgrade.
+### Windows
+
+`install.sh` is POSIX-only. Windows users download `mus-windows-amd64.exe` directly from the [Releases page](https://codeberg.org/mfiers/mus/releases/latest), place it somewhere on `PATH` (e.g. `%USERPROFILE%\bin\mus.exe`), and run `mus version` to confirm. Subsequent upgrades go through `mus upgrade` like any other platform.
+
+macOS on Intel (`Darwin/x86_64`) isn't currently published — build from source.
+
+Re-run the same `curl … | bash` any time to upgrade on Linux / macOS.
 
 Once installed, future upgrades can also go through `mus upgrade`:
 
@@ -345,4 +351,5 @@ Caches an `iron tree --json` snapshot to a local SQLite DB (`~/.local/share/mus/
 - Pure-Go build, no CGO. Binaries cross-compile cleanly.
 - The Linux ELF binaries are statically linked — no glibc dependency.
 - The darwin/arm64 binary is for Apple Silicon Macs (M-series).
-- Tested on RHEL/Rocky/Ubuntu (HPC nodes), macOS Sonoma+.
+- The Windows binary (`mus-windows-amd64.exe`) targets Windows 10+. `mus upgrade` uses a `.exe → .exe.old` swap dance because Windows locks running executables; the `.old` file is cleaned up at the next launch.
+- Tested on RHEL/Rocky/Ubuntu (HPC nodes), macOS Sonoma+. Windows binary cross-compiled and ed25519-signed; full runtime smoke-test pending — please report issues if you hit any.

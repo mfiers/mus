@@ -65,10 +65,12 @@ PREFIX ?= $(shell \
 
 # Binaries that get signed by `pika _sign`. Must match what `make build-all`
 # emits in dist/. Update both lists together if a platform is added/dropped.
+# Windows ships an .exe; ed25519 signs the bytes regardless of extension.
 RELEASE_BINARIES := \
     dist/mus-linux-amd64 \
     dist/mus-linux-arm64 \
-    dist/mus-darwin-arm64
+    dist/mus-darwin-arm64 \
+    dist/mus-windows-amd64.exe
 
 build:
 	@mkdir -p bin
@@ -89,9 +91,10 @@ install: build
 
 build-all:
 	@mkdir -p dist
-	@for target in linux/amd64 linux/arm64 darwin/arm64; do \
+	@for target in linux/amd64 linux/arm64 darwin/arm64 windows/amd64; do \
 	  os=$${target%/*}; arch=$${target#*/}; \
 	  out=dist/mus-$$os-$$arch; \
+	  if [ "$$os" = "windows" ]; then out=$$out.exe; fi; \
 	  echo "==> $$out"; \
 	  CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch \
 	    $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o $$out $(PKG) || exit 1; \

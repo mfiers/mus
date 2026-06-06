@@ -170,7 +170,7 @@ make install            # build and place bin/mus on your PATH
 
 Or just `make build` to get `./bin/mus` without installing.
 
-Other targets: `make test` (no network), `make build-all` (cross-compile darwin/arm64 + linux/{amd64,arm64}), `make show-version`, `make bump LEVEL=minor`, `make ship` (maintainer-only — interactive, signs + tags + publishes).
+Other targets: `make test` (no network), `make build-all` (cross-compile darwin/arm64 + linux/{amd64,arm64} + windows/amd64), `make show-version`, `make bump LEVEL=minor`, `make ship` (maintainer-only — interactive, signs + tags + publishes).
 
 Site defaults (`irods_home`, `irods_web`, `irods_pid_base`) live in `internal/defaults/`. To ship a binary for a different lab, override at build time:
 

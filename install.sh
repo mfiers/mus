@@ -60,6 +60,13 @@ detect_asset() {
         Darwin/x86_64)
             die "macOS on Intel (x86_64) is not currently published. Build from source: see https://codeberg.org/$REPO"
             ;;
+        MINGW*|MSYS*|CYGWIN*)
+            die "Detected a Windows shell (Git Bash / MSYS / Cygwin). This installer is POSIX-only.
+  On Windows, download mus-windows-amd64.exe from the Releases page directly:
+    https://codeberg.org/$REPO/releases/latest
+  Place it somewhere on your PATH (e.g. %USERPROFILE%\\\\bin\\\\mus.exe) and run \`mus version\`.
+  Subsequent upgrades work via \`mus upgrade\`."
+            ;;
         *)
             die "Unsupported platform: $os/$arch"
             ;;

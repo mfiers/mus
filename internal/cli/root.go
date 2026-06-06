@@ -78,6 +78,9 @@ func NewRootCmd() *cobra.Command {
 
 // Run executes the CLI with os.Args. Returns a process exit code.
 func Run() int {
+	// Windows-only: clean up the .old backup left by a previous
+	// `mus upgrade` (no-op everywhere else).
+	sweepStaleUpgradeBackup()
 	if err := NewRootCmd().Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "mus: "+err.Error())
 		return 1

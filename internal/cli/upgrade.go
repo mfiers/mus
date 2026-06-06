@@ -169,6 +169,8 @@ func upgradeAssetName() (string, error) {
 		return "mus-linux-arm64", nil
 	case "darwin/arm64":
 		return "mus-darwin-arm64", nil
+	case "windows/amd64":
+		return "mus-windows-amd64.exe", nil
 	default:
 		return "", fmt.Errorf("no published binary for %s/%s — build from source",
 			runtime.GOOS, runtime.GOARCH)
@@ -232,11 +234,53 @@ func upgradeDownload(url, dest string, verbose bool) error {
 	return nil
 }
 
-// upgradeReplace swaps the new binary into place. On Linux/macOS, os.Rename
-// works fine even with the binary running — the kernel keeps the old inode
-// mapped for the current process. (Windows isn't a supported target for mus.)
+// upgradeReplace swaps the new binary into place.
+//
+// On Linux/macOS, os.Rename works fine even with the binary running — the
+// kernel keeps the old inode mapped for the current process.
+//
+// On Windows, the running .exe is typically locked: a direct Rename over it
+// fails with "file in use" depending on the OS version and any antivirus.
+// We do the safe two-step instead:
+//
+//   1. current → current+".old"   (works on Windows because we're renaming
+//                                   the running file within its own dir,
+//                                   which the OS permits even when locked)
+//   2. newPath → current          (no destination in the way now)
+//
+// The ".old" file remains on disk until the user re-launches mus and we
+// can sweep it (see sweepStaleUpgradeBackup). On Linux/macOS the .old
+// file is also a useful rollback option but not strictly required.
 func upgradeReplace(current, newPath string) error {
+	if runtime.GOOS == "windows" {
+		oldBackup := current + ".old"
+		_ = os.Remove(oldBackup) // clear any leftover from a previous upgrade
+		if err := os.Rename(current, oldBackup); err != nil {
+			return fmt.Errorf("move running binary aside: %w", err)
+		}
+		if err := os.Rename(newPath, current); err != nil {
+			// Roll back so the user isn't left without a mus.exe.
+			_ = os.Rename(oldBackup, current)
+			return fmt.Errorf("install new binary: %w", err)
+		}
+		return nil
+	}
 	return os.Rename(newPath, current)
+}
+
+// sweepStaleUpgradeBackup removes a leftover `<self>.old` file from a
+// previous `mus upgrade` on Windows. Called once at process startup
+// (best-effort, silent on failure). On Linux/macOS this is a no-op
+// because upgradeReplace doesn't create a .old there.
+func sweepStaleUpgradeBackup() {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return
+	}
+	_ = os.Remove(self + ".old")
 }
 
 func versionEqual(current, target string) bool {
