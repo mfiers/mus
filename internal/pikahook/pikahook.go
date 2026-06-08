@@ -153,17 +153,20 @@ func composeFallbackMessage(action string, fields map[string]string) string {
 	return strings.Join(parts, " ")
 }
 
-// EmitFireAndForget runs Emit in a goroutine with no caller wait.
-// Use this from hot paths (per-file upload loops, large folder
-// walks) where even the 3-second timeout would aggregate uncomfortably.
-// The trade-off: if the process exits immediately the goroutine may
-// be torn down before pika receives the request. Acceptable for
-// audit-trail entries — losing the occasional record is fine, but
-// blocking the user's interactive `mus rm` for 3s × N items isn't.
+// EmitFireAndForget runs Emit synchronously with a short timeout.
+//
+// The "fire and forget" name is historical — the original
+// implementation was async, but mus's short-lived CLI invocations
+// killed in-flight goroutines before pika's HTTP request landed, so
+// notes were silently dropped. Synchronous with a 3-second cap is
+// more reliable: ~10-100ms per emission against a healthy LAN pika
+// server, capped at 3s if pika is slow or unreachable.
+//
+// Net cost for a heavy batch (e.g. `mus rm` over 50 files): ~5s
+// worst case on a stuck server, ~5s typical against a real one.
+// Compared to the iron checksums each `mus rm` does anyway,
+// pika emission is in the noise. The 3s timeout still applies per
+// call, so a wedged pika can't lock the user out indefinitely.
 func EmitFireAndForget(action string, fields map[string]string) {
-	go func() {
-		// Use a fresh context, since the caller's might be cancelled
-		// by the time we run.
-		_ = Emit(context.Background(), "", action, fields)
-	}()
+	_ = Emit(context.Background(), "", action, fields)
 }
