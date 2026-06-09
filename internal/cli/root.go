@@ -4,10 +4,13 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
+	"codeberg.org/mfiers/mus/internal/config"
 	"codeberg.org/mfiers/mus/internal/upgradecheck"
 )
 
@@ -45,6 +48,15 @@ func NewRootCmd() *cobra.Command {
 		// errors are absorbed silently — see upgradecheck.Notify.
 		if shouldRunUpgradeCheck(cmd) {
 			upgradecheck.Notify(context.Background(), Version, cmd.ErrOrStderr())
+		}
+		// Walk the cascade and auto-migrate any legacy `.env` that
+		// contains mus-recognised keys → `mus.cfg`. Silent for dirs
+		// where there's nothing to migrate; loud on stderr for each
+		// dir that did get migrated (with secret/unknown warnings).
+		if shouldAutoMigrate(cmd) {
+			if cwd, err := os.Getwd(); err == nil {
+				autoMigrateCascade(cwd, cmd.ErrOrStderr())
+			}
 		}
 		return nil
 	}
@@ -105,4 +117,68 @@ func shouldRunUpgradeCheck(cmd *cobra.Command) bool {
 		}
 	}
 	return true
+}
+
+// shouldAutoMigrate returns true unless cmd is one of the read-only
+// / housekeeping subcommands where we don't want a side effect of
+// rewriting files on the filesystem. Also opts out when
+// MUS_NO_MIGRATE is set in the environment.
+func shouldAutoMigrate(cmd *cobra.Command) bool {
+	if os.Getenv("MUS_NO_MIGRATE") != "" {
+		return false
+	}
+	for c := cmd; c != nil; c = c.Parent() {
+		switch c.Name() {
+		case "version", "verify", "completion", "upgrade", "migrate":
+			return false
+		}
+	}
+	return true
+}
+
+// autoMigrateCascade walks from startDir up to /, calling
+// config.Migrate on every directory that has a legacy .env with
+// mus-recognised keys (and no mus.cfg yet). Also covers the global
+// ~/.config/mus/.env if present. All file IO is best-effort: errors
+// on individual directories don't block the user's primary command.
+func autoMigrateCascade(startDir string, stderr io.Writer) {
+	cur := startDir
+	for {
+		runMigrateIfNeeded(cur, stderr)
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			break
+		}
+		cur = parent
+	}
+	// Global config dir.
+	if gp := config.GlobalPathLegacy(); gp != "" {
+		runMigrateIfNeeded(filepath.Dir(gp), stderr)
+	}
+}
+
+// runMigrateIfNeeded is one cycle of the auto-migrate scan: stat
+// for both files (cheap), then call Migrate only when there's a
+// legacy file to consider AND no mus.cfg yet. Prints a report iff
+// keys were actually moved.
+func runMigrateIfNeeded(dir string, stderr io.Writer) {
+	legacy := filepath.Join(dir, config.LegacyFileName)
+	if _, err := os.Stat(legacy); err != nil {
+		return
+	}
+	target := filepath.Join(dir, config.FileName)
+	if _, err := os.Stat(target); err == nil {
+		return // mus.cfg already exists
+	}
+	report, err := config.Migrate(dir, isKnownConfigKey, false)
+	if err != nil {
+		fmt.Fprintf(stderr, "  note: legacy .env auto-migrate failed for %s: %v\n", dir, err)
+		return
+	}
+	if report == nil || len(report.Migrated) == 0 {
+		// Nothing mus-recognisable in this .env — leave it alone
+		// silently. It's someone else's file.
+		return
+	}
+	config.PrintMigrationReport(stderr, report)
 }
