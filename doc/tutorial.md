@@ -69,27 +69,27 @@ For the rest of the tutorial we'll use a toy single-cell pilot. Layout:
 
 ```
 ~/projects/microglia_pilot/
-  .env                        ← project-level annotation
+  mus.cfg                     ← project-level annotation
   README.md
   scripts/
     01_qc.py
     02_normalize.py
     03_cluster.py
   raw/
-    .env                      ← override: raw-specific annotation
+    mus.cfg                   ← override: raw-specific annotation
     sample01.fastq.gz
     sample02.fastq.gz
   intermediate/               ← NOT backed up (regeneratable from raw)
     sample01.bam
     sample01.counts
   final/
-    .env                      ← override: published-ready annotation
+    mus.cfg                   ← override: published-ready annotation
     microglia_clusters.h5ad
     figure_data.csv
 ```
 
 Adapt the directory names to your own conventions — mus doesn't care
-about the layout, only about which `.env` files it finds and which
+about the layout, only about which `mus.cfg` files it finds and which
 files you ask it to upload.
 
 ---
@@ -98,10 +98,10 @@ files you ask it to upload.
 
 Two places annotation lives:
 
-- A **`.env`** file inside a folder. It applies to **that folder
+- A **`mus.cfg`** file inside a folder. It applies to **that folder
   AND every file and subfolder beneath it, recursively** — set it
   once at the project root and it covers the entire tree. Subfolders
-  can add their own `.env` to refine the parent's values for just
+  can add their own `mus.cfg` to refine the parent's values for just
   that branch.
 - A **`*.mus` sidecar** sitting next to one specific data file
   (`foo.h5ad` → `foo.h5ad.mus`). It applies to **only that one
@@ -112,7 +112,7 @@ Don't edit either by hand — mus has commands for both.
 ### Folder annotation — set with `mus config set`
 
 The primary command. Each call writes one key into the local folder's
-`.env` (creating the file if needed):
+`mus.cfg` (creating the file if needed):
 
 ```bash
 cd ~/projects/microglia_pilot
@@ -132,7 +132,7 @@ safer — it validates `data_project` against the `NameYear` pattern
 and uses atomic writes so a Ctrl-C can't leave a half-written file):
 
 ```
-# ~/projects/microglia_pilot/.env
+# ~/projects/microglia_pilot/mus.cfg
 access=internal
 data_project=Fiers2025
 eln_experiment_id=12345
@@ -147,13 +147,29 @@ Inspect what's effective at any point in the tree:
 
 ```bash
 mus config show              # merged cascade
-mus config show --local      # just this folder's .env
-mus config files             # paths of every .env that contributes
+mus config show --local      # just this folder's mus.cfg
+mus config files             # paths of every mus.cfg that contributes
 ```
 
-**Cascade rule:** mus collects every `.env` from `/` down to your
+**Legacy `.env` support.** Before 0.2.12 mus used `.env` as the
+folder-config file. That name collided with the dotenv ecosystem
+(direnv, docker-compose, python-dotenv, …). `mus.cfg` is the new
+canonical name; `.env` is still read for backwards compatibility.
+Move existing projects over with:
+
+```bash
+mus config migrate            # run once per project root
+```
+
+Mus-recognised keys move to `mus.cfg`. Anything that looks like a
+secret (`DATABASE_URL`, `AWS_*`, `*_TOKEN`, …) or that mus doesn't
+recognise stays in `.env` with a loud warning so you can review it.
+Running `mus config set` in a folder with a legacy `.env` triggers
+this migration automatically the first time, with the same report.
+
+**Cascade rule:** mus collects every `mus.cfg` from `/` down to your
 working directory and merges them in that order; closer-to-cwd
-`.env` files override shallower ones. Every file under
+`mus.cfg` files override shallower ones. Every file under
 `microglia_pilot/` inherits the values above without you having to
 repeat them in `raw/` or `final/`.
 
@@ -166,7 +182,7 @@ mus -C final config set doi 10.1234/microglia.2025
 ```
 
 The `-C DIR` flag works like `git -C` — run mus as if it were
-invoked from `DIR`. The resulting `final/.env` overrides
+invoked from `DIR`. The resulting `final/mus.cfg` overrides
 `access=internal` from the parent; `organism`, `tissue`, …
 cascade through unchanged.
 
@@ -183,7 +199,7 @@ Remove a key:
 mus config unset access
 ```
 
-`unset` preserves any comments in the `.env` and only deletes the
+`unset` preserves any comments in the `mus.cfg` and only deletes the
 file if it ends up truly empty (no keys, no comments).
 
 ### File annotation — set with `mus tag` (and auto by upload)
@@ -237,15 +253,15 @@ cascade):
 For a per-file annotation that isn't a note or tag (a single sample
 with a different `tissue`, one file you want `access=public` while
 the rest are `internal`), today the cleanest path is a per-subfolder
-`.env` + move the file there. A future `mus tag --set key=value`
+`mus.cfg` + move the file there. A future `mus tag --set key=value`
 flag is on the roadmap.
 
-Rule of thumb: **the .env is your recipe; the `*.mus` sidecar is what
+Rule of thumb: **the mus.cfg is your recipe; the `*.mus` sidecar is what
 actually happened.**
 
 ### Where they live in version control
 
-- `.env` files at the project root SHOULD be committed to git — they
+- `mus.cfg` files at the project root SHOULD be committed to git — they
   describe the dataset.
 - `*.mus` sidecars SHOULD be committed too. They're tiny (~1 KB), plain
   text, and after `mus rm` they're the only handle that can restore
@@ -277,7 +293,7 @@ This:
    the one your colleagues already used for this experiment if mus
    can find it in the lab's iRODS catalog).
 3. Writes `eln_experiment_id`, `eln_experiment_name`, `data_project`,
-   and the rest into `~/projects/microglia_pilot/.env`.
+   and the rest into `~/projects/microglia_pilot/mus.cfg`.
 
 No ELN access? Set them by hand:
 
@@ -442,8 +458,8 @@ sha256, …) is also attached to the iRODS object as **AVU triplets** —
 visible in `iron meta ls` and queryable via `iron query`. AVU is iRODS
 jargon for "attribute-value-unit" key-value metadata.
 
-**Note:** `.mus` sidecars and `.env` files **stay local** — they're
-not uploaded. mus passes `--ignore=*.mus,.env` to iron on folder
+**Note:** `.mus` sidecars and `mus.cfg` files **stay local** — they're
+not uploaded. mus passes `--ignore=*.mus,.env,mus.cfg` to iron on folder
 uploads so they can't slip in. The iRODS catalog carries the
 metadata as AVU; the local sidecar carries the same metadata plus
 the path / URL / PURL pointers.

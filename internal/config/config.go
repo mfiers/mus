@@ -19,25 +19,57 @@ import (
 	"codeberg.org/mfiers/mus/internal/envformat"
 )
 
-// FileName is the cascading folder-config file mus looks for.
-const FileName = ".env"
+// FileName is the cascading folder-config file mus looks for. The
+// canonical name as of 0.2.12 is "mus.cfg". The legacy ".env"
+// remains supported on READS (so older projects continue to work
+// without breakage), but every new WRITE goes to mus.cfg.
+//
+// We moved off ".env" because that name collides with the dotenv
+// ecosystem (direnv, docker-compose, python-dotenv, …): tools
+// reading those files for shell environment variables can leak
+// mus's structured metadata into their process environment, or
+// choke on multi-word values like `tissue=middle temporal gyrus`.
+// "mus.cfg" is visibly mus-branded, doesn't collide with anything,
+// and isn't on the default-`.gitignore` exclude lists that hide
+// .env from version control.
+const (
+	FileName       = "mus.cfg"
+	LegacyFileName = ".env"
+)
+
+// candidateNames lists, in priority order, the filenames mus
+// considers when walking a directory for cascade entries. The first
+// hit per directory wins. Exposed so the migration tool can iterate
+// over the same set.
+var candidateNames = []string{FileName, LegacyFileName}
 
 // GlobalPath returns the user-level mus config file path:
-// $XDG_CONFIG_HOME/mus/.env, defaulting to ~/.config/mus/.env. Returns "" if
-// no home directory can be determined.
+// $XDG_CONFIG_HOME/mus/mus.cfg, defaulting to ~/.config/mus/mus.cfg.
+// Returns "" if no home directory can be determined.
 //
 // This file is injected as the root-most entry of the cascade by Load() so a
 // `mus eln disable --global` decision survives no matter where you run mus
 // from (working dirs outside $HOME are common on HPC).
 func GlobalPath() string {
+	return globalPathFor(FileName)
+}
+
+// GlobalPathLegacy returns the user-level ".env" path. Used during
+// cascade discovery so users who set the global preference before
+// the rename keep being heard until they migrate.
+func GlobalPathLegacy() string {
+	return globalPathFor(LegacyFileName)
+}
+
+func globalPathFor(name string) string {
 	if x := os.Getenv("XDG_CONFIG_HOME"); x != "" {
-		return filepath.Join(x, "mus", FileName)
+		return filepath.Join(x, "mus", name)
 	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return ""
 	}
-	return filepath.Join(home, ".config", "mus", FileName)
+	return filepath.Join(home, ".config", "mus", name)
 }
 
 // listKeys are the keys treated as merged string lists across the cascade.
@@ -187,19 +219,19 @@ func Load(dir string) (*Env, error) {
 	return &Env{values: merged, files: files}, nil
 }
 
-// LoadLocal reads only the `.env` in `dir` itself (no cascade). Returns an
-// empty Env if the file does not exist.
+// LoadLocal reads only the mus.cfg (or legacy .env) in `dir` itself,
+// without walking the cascade. Returns an empty Env if neither file
+// exists in `dir`.
+//
+// When both files exist, mus.cfg wins — see the discover() comment.
 func LoadLocal(dir string) (*Env, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
 	}
-	path := filepath.Join(abs, FileName)
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
-			return &Env{values: map[string]any{}}, nil
-		}
-		return nil, err
+	path := firstHit(abs, candidateNames)
+	if path == "" {
+		return &Env{values: map[string]any{}}, nil
 	}
 	values, err := loadSingle(path)
 	if err != nil {
@@ -381,9 +413,12 @@ func discover(dir string) ([]string, error) {
 	var paths []string
 	cur := dir
 	for {
-		candidate := filepath.Join(cur, FileName)
-		if st, err := os.Stat(candidate); err == nil && !st.IsDir() {
-			paths = append(paths, candidate)
+		// Per-directory: prefer mus.cfg if present; fall back to
+		// legacy .env. We deliberately don't merge both — once a dir
+		// has a mus.cfg, the .env in the same dir is "someone else's
+		// file" and we don't even peek at it.
+		if hit := firstHit(cur, candidateNames); hit != "" {
+			paths = append(paths, hit)
 		}
 		parent := filepath.Dir(cur)
 		if parent == cur {
@@ -396,22 +431,47 @@ func discover(dir string) ([]string, error) {
 		paths[i], paths[j] = paths[j], paths[i]
 	}
 	// Prepend the global config if present. Skip if its path is already in
-	// the walk (i.e. ~/.config/mus/.env happens to be on the walked-up path).
-	if gp := GlobalPath(); gp != "" {
-		if st, err := os.Stat(gp); err == nil && !st.IsDir() {
-			already := false
-			for _, p := range paths {
-				if p == gp {
-					already = true
-					break
-				}
+	// the walk (i.e. ~/.config/mus/mus.cfg happens to be on the walked-up path).
+	// Try mus.cfg first, then legacy .env.
+	if gp := globalCascadeEntry(); gp != "" {
+		already := false
+		for _, p := range paths {
+			if p == gp {
+				already = true
+				break
 			}
-			if !already {
-				paths = append([]string{gp}, paths...)
-			}
+		}
+		if !already {
+			paths = append([]string{gp}, paths...)
 		}
 	}
 	return paths, nil
+}
+
+// firstHit returns the first existing candidate file in dir, in the
+// order given, or "" if none match.
+func firstHit(dir string, names []string) string {
+	for _, name := range names {
+		p := filepath.Join(dir, name)
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			return p
+		}
+	}
+	return ""
+}
+
+// globalCascadeEntry returns the global mus.cfg path if it exists,
+// else the legacy ~/.config/mus/.env path if it exists, else "".
+func globalCascadeEntry() string {
+	for _, p := range []string{GlobalPath(), GlobalPathLegacy()} {
+		if p == "" {
+			continue
+		}
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			return p
+		}
+	}
+	return ""
 }
 
 func loadSingle(path string) (map[string]any, error) {

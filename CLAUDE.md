@@ -4,7 +4,7 @@
 
 `mus` is a fast, cross-platform CLI for research data management at the BADS lab. It:
 
-- Reads cascading `.env` files (flat KEY=VALUE) to discover project/study/experiment metadata for the working directory. Format intentionally matches the legacy Python `mus`.
+- Reads cascading `mus.cfg` files (flat KEY=VALUE) to discover project/study/experiment metadata for the working directory. Legacy `.env` is still read for backwards compatibility; `mus config migrate` moves mus-recognised keys to `mus.cfg`, leaving secrets/unknowns in `.env` with loud warnings. Format matches the legacy Python `mus`.
 - Writes `*.mus` sidecar files (same KEY=VALUE grammar) next to each data file, holding sha256 + size + mtime + upload status.
 - Maintains a local SQLite hash cache so repeated checksum checks are stat-fast.
 - Uploads / downloads / verifies files on the KU Leuven Mango iRODS instance via the `iron` CLI.
@@ -24,12 +24,12 @@ Bootstrap: 2026-05-22. See task list / `report/` for current state.
 | Language | Go 1.24, pure-Go (no CGO) so cross-compile works for darwin/arm64, linux/amd64, linux/arm64 |
 | CLI | `spf13/cobra`, git-style subcommands |
 | iRODS | Shell out to `iron` (KU Leuven RDM CLI); no native iRODS client |
-| Folder config | `.env` (flat KEY=VALUE), cascading up the directory tree — same grammar as legacy Python mus |
+| Folder config | `mus.cfg` (flat KEY=VALUE), cascading up the directory tree — same grammar as legacy Python mus. Legacy `.env` still read; `mus config migrate` moves mus-recognised keys to `mus.cfg`. |
 | Per-file metadata | `foo.h5ad.mus` (same KEY=VALUE grammar; flat keys with prefix conventions: `irods_*`, `eln_*`, `s3_*`) |
 | Hash cache | SQLite via `modernc.org/sqlite` at `~/.local/share/mus/hashcache.db` |
 | Secrets | `zalando/go-keyring` with `filippo.io/age` encrypted-file fallback for HPC nodes |
 | ELN | eLabJournal REST API |
-| ELN enforcement | every folder declares status: `mus eln link <id>` OR `mus eln disable [--global]`. `mus irods upload` refuses while undecided. Global state at `$XDG_CONFIG_HOME/mus/.env` (default `~/.config/mus/.env`), injected as root-most cascade entry. |
+| ELN enforcement | every folder declares status: `mus eln link <id>` OR `mus eln disable [--global]`. `mus irods upload` refuses while undecided. Global state at `$XDG_CONFIG_HOME/mus/mus.cfg` (default `~/.config/mus/mus.cfg`; legacy `~/.config/mus/.env` still read), injected as root-most cascade entry. |
 | Activity log | **removed** — not part of the new tool |
 
 ## Layout
@@ -44,7 +44,7 @@ mus/
   cmd/mus/             main.go entrypoint (cobra root)
   internal/
     envformat/         KEY=VALUE parser used by both config and sidecar
-    config/            .env cascade reader (folder-level)
+    config/            mus.cfg / legacy .env cascade reader (folder-level)
     secret/            keyring + age fallback
     hashcache/         SQLite-backed sha256 cache (file-level)
     sidecar/           *.mus reader / writer (file + folder variants)

@@ -233,7 +233,7 @@ func uploadFolderDirect(
 	// Exclude mus's working-state files from the recursive copy —
 	// the metadata is on the iRODS AVU, not in these files.
 	folderOpts := opts
-	folderOpts.Ignore = append(folderOpts.Ignore, "*.mus", ".env")
+	folderOpts.Ignore = append(folderOpts.Ignore, "*.mus", ".env", "mus.cfg")
 	if err := client.Upload(ctx, srcAbs, remoteTarget, folderOpts); err != nil {
 		return err
 	}

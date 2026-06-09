@@ -33,9 +33,15 @@ import (
 // Suffix is the sidecar filename suffix.
 const Suffix = ".mus"
 
-// FolderConfig is the folder-level config filename. Handled by package
-// config; named here only so IsSidecar can correctly reject it.
-const FolderConfig = ".env"
+// FolderConfig is the canonical folder-level config filename
+// (handled by package config). FolderConfigLegacy is the pre-0.2.12
+// name we still recognise until every project has run
+// `mus config migrate`. Named here only so IsSidecar can reject
+// them when scanning a folder.
+const (
+	FolderConfig       = "mus.cfg"
+	FolderConfigLegacy = ".env"
+)
 
 // FileInfo is the data-file metadata.
 type FileInfo struct {
@@ -222,11 +228,12 @@ func DataPath(sidecar string) string {
 	return sidecar[:len(sidecar)-len(Suffix)]
 }
 
-// IsSidecar reports whether `path` looks like a sidecar (ends in .mus) AND has
-// a non-empty base name (i.e. is not the folder config `.env`).
+// IsSidecar reports whether `path` looks like a sidecar (ends in
+// .mus) AND has a non-empty base name (i.e. is neither the folder
+// config `mus.cfg` nor its legacy alias `.env`).
 func IsSidecar(path string) bool {
 	base := filepath.Base(path)
-	if base == FolderConfig {
+	if base == FolderConfig || base == FolderConfigLegacy {
 		return false
 	}
 	return strings.HasSuffix(base, Suffix) && len(base) > len(Suffix)

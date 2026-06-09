@@ -110,7 +110,7 @@ Override with `--shell` or `--dest`. Bash users may need to `source` the file in
 
 Three kinds of files:
 
-- **`.env`** — cascading folder config. Format: flat `KEY=VALUE`, one per line, `#` for comments, blank lines ignored. `mus` walks from the working directory up to `/`, merging every `.env` it finds; deeper files override shallower ones.
+- **`mus.cfg`** — cascading folder config. Format: flat `KEY=VALUE`, one per line, `#` for comments, blank lines ignored. `mus` walks from `/` down to the working directory, merging every `mus.cfg` it finds; deeper files override shallower ones. Legacy `.env` files from older mus versions are still read; run `mus config migrate` once per project to move mus-recognised keys to `mus.cfg` (secrets in `.env` are detected and left in place with a loud warning).
 
   List-valued keys (`tag`, `collaborator`) accept comma-separated values. A value prefixed with `-` (e.g. `tag=-lab`) removes a previously-added entry from the cumulative list.
 
@@ -118,14 +118,14 @@ Three kinds of files:
 
 - **`*.mus` folder-level sidecar** — for `mus irods upload <folder>/`. Sits next to the folder (e.g. `scripts/` → `scripts.mus`), NOT inside it. Carries a Merkle-style `recursive_sha256` of the folder's contents plus all the iRODS/ELN bookkeeping, but only ONE sidecar per folder — not per file inside.
 
-The `*.mus` extension is unambiguous because a folder-config `.env` is always literally `.env` (the dot file) while sidecars always have a non-empty basename.
+The `*.mus` extension is unambiguous because folder-config files are always literally `mus.cfg` (or the legacy `.env`) while sidecars always have a non-empty basename before `.mus`.
 
 ---
 
 ## 4. Example folder layout
 
 ```sh
-# /lab/projects/.env  — lab-wide defaults
+# /lab/projects/mus.cfg  — lab-wide defaults
 # (For BADS users these three match the baked-in defaults, so this section
 #  is usually empty unless you're at a different institution.)
 # irods_home=/gbiomed/home/BADS
@@ -133,7 +133,7 @@ The `*.mus` extension is unambiguous because a folder-config `.env` is always li
 # irods_pid_base=https://mango.kuleuven.be/PID
 tag=lab,shared
 
-# /lab/projects/project_alpha/exp_42/.env  — per-experiment override
+# /lab/projects/project_alpha/exp_42/mus.cfg  — per-experiment override
 tag=exp42,-lab                  # adds exp42; drops the inherited "lab"
 data_project=Fiers2025          # mandatory for iRODS upload (NameYear)
 eln_experiment_id=12345         # `mus eln link 12345` writes this
@@ -144,9 +144,10 @@ Inspect:
 
 ```bash
 mus config show          # effective cascade
-mus config show --local  # only this folder's .env
-mus config files         # paths of every .env contributing
-mus config set tag exp42 # writes to local .env (validates if data_project)
+mus config show --local  # only this folder's mus.cfg (or legacy .env)
+mus config files         # paths of every mus.cfg contributing
+mus config set tag exp42 # writes to local mus.cfg (validates keys + values)
+mus config migrate       # move legacy .env to mus.cfg, flagging secrets
 ```
 
 ---
@@ -210,7 +211,7 @@ Pass that number to `mus eln link`.
    - A pull from the shared iRODS file (`<irods_home>/project/eln_mappings.json`) so a teammate's previous choice for this experiment is reused automatically — best-effort, no failure if iRODS is unreachable.
    - The first collaborator's surname + current year (e.g. `Fiers2025`) as the fallback derivation.
 3. Persists your choice locally + pushes it back to the shared iRODS file for your teammates.
-4. Writes all six `eln_*` keys + `data_project` into the folder's `.env`.
+4. Writes all six `eln_*` keys + `data_project` into the folder's `mus.cfg`.
 
 Refuses to overwrite an existing linkage; use `mus eln update` to refresh, or `mus eln link NEW_ID --force` to relink.
 
@@ -275,7 +276,7 @@ Each upload:
 4. Stamps `mus_*` AVU metadata on the iRODS object (so the object stays self-describing without the local sidecar).
 
 CLI overrides:
-- `--data-project NAME` — override the .env value (one-off).
+- `--data-project NAME` — override the mus.cfg value (one-off).
 - `--remote-name NAME` — override the experiment-name path component.
 - `--no-metadata` — skip AVU stamping.
 - `--verify-checksum=false` — skip iron's transport-checksum verification.

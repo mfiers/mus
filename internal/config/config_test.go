@@ -285,7 +285,7 @@ func TestGlobalCascadeInjection(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", xdg)
 
 	gp := GlobalPath()
-	want := filepath.Join(xdg, "mus", ".env")
+	want := filepath.Join(xdg, "mus", "mus.cfg")
 	if gp != want {
 		t.Fatalf("GlobalPath = %q, want %q", gp, want)
 	}

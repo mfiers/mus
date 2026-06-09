@@ -24,6 +24,7 @@ func newConfigCmd() *cobra.Command {
 		newConfigSetCmd(),
 		newConfigUnsetCmd(),
 		newConfigFilesCmd(),
+		newConfigMigrateCmd(),
 	)
 	return cmd
 }
@@ -106,6 +107,11 @@ func newConfigSetCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// Implicit migration: if this dir has a legacy .env but no
+			// mus.cfg yet, move the mus-recognised keys over first so
+			// the upcoming Save call doesn't write a half-empty mus.cfg
+			// next to a still-authoritative .env.
+			maybeMigrateLegacyEnv(dir, cmd.ErrOrStderr())
 			return config.Save(dir, map[string]string{resolvedKey: resolved})
 		},
 	}
@@ -400,6 +406,90 @@ func resolveVocabList(v *vocab.Vocabulary, key, value string, force bool, stderr
 		return "", fmt.Errorf("%s", msg.String())
 	}
 	return strings.Join(out, ","), nil
+}
+
+func newConfigMigrateCmd() *cobra.Command {
+	var dryRun bool
+	cmd := &cobra.Command{
+		Use:   "migrate",
+		Short: "move mus-recognised keys from a legacy .env to mus.cfg",
+		Long: "Pre-0.2.12 mus stored folder config in `.env`. That name collides\n" +
+			"with the dotenv ecosystem (direnv, docker-compose, python-dotenv,\n" +
+			"…) and risks mus's structured metadata being eval'd into a shell\n" +
+			"environment. `mus.cfg` is the new canonical name.\n\n" +
+			"This command rewrites the local .env: mus-recognised keys\n" +
+			"(organism, tissue, data_project, …) move to mus.cfg; anything\n" +
+			"that looks like a secret (DATABASE_URL, AWS_*, *_TOKEN, …) or\n" +
+			"that mus doesn't recognise stays in .env, with a warning so you\n" +
+			"can review it. If .env ends up empty after the move it gets\n" +
+			"deleted; otherwise it stays in place for whatever other tool\n" +
+			"was using it.\n\n" +
+			"Idempotent: a folder that already has mus.cfg is left alone.\n" +
+			"Cascade-aware mus calls already read both filenames; migration\n" +
+			"is opt-in but recommended.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dir, err := workingDir(cmd)
+			if err != nil {
+				return err
+			}
+			report, err := config.Migrate(dir, isKnownConfigKey, dryRun)
+			if err != nil {
+				return err
+			}
+			if report == nil {
+				fmt.Fprintln(cmd.OutOrStdout(), "nothing to migrate (no .env, or mus.cfg already exists)")
+				return nil
+			}
+			config.PrintMigrationReport(cmd.ErrOrStderr(), report)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false,
+		"classify and report what would be migrated; don't touch any files")
+	return cmd
+}
+
+// maybeMigrateLegacyEnv runs the per-directory .env → mus.cfg
+// migration silently when both conditions hold:
+//   - there's a `.env` in `dir`
+//   - there's no `mus.cfg` in `dir`
+//
+// Errors from the migration are reported but NOT fatal — `mus config set`
+// proceeds either way so the user's primary action isn't blocked by
+// migration trouble. Idempotent.
+func maybeMigrateLegacyEnv(dir string, stderr io.Writer) {
+	report, err := config.Migrate(dir, isKnownConfigKey, false)
+	if err != nil {
+		fmt.Fprintf(stderr, "  note: legacy .env migration failed: %v\n", err)
+		return
+	}
+	if report == nil {
+		return
+	}
+	config.PrintMigrationReport(stderr, report)
+}
+
+// isKnownConfigKey is the predicate the config.Migrate classifier
+// uses to decide whether a legacy .env key is a mus field worth
+// moving to mus.cfg.
+func isKnownConfigKey(key string) bool {
+	// Exact match against the master list.
+	for _, k := range knownConfigKeys {
+		if k == key {
+			return true
+		}
+	}
+	// Case / underscore / dash / space variants — same fuzz the
+	// `mus config set` key resolver uses. This catches `CellType` /
+	// `cell-type` / `celltype` flavours of mus keys in legacy .env
+	// files written by hand.
+	normalized := normalizeConfigKey(key)
+	for _, k := range knownConfigKeys {
+		if normalizeConfigKey(k) == normalized {
+			return true
+		}
+	}
+	return false
 }
 
 func newConfigUnsetCmd() *cobra.Command {
