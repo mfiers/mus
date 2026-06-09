@@ -156,12 +156,13 @@ func TestMigrate_DeletesEnvWhenEverythingMoved(t *testing.T) {
 
 func TestMigrate_DryRunTouchesNoFiles(t *testing.T) {
 	dir := t.TempDir()
-	writeEnv(t, dir, "organism=human\nDATABASE_URL=x\n")
+	// data_project + organism = 2 mus keys → passes safety gate.
+	writeEnv(t, dir, "data_project=Fiers2025\norganism=human\nDATABASE_URL=x\n")
 	rep, err := Migrate(dir, musKeyAllowlist, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep == nil || len(rep.Migrated) != 1 || len(rep.Secrets) != 1 {
+	if rep == nil || len(rep.Migrated) != 2 || len(rep.Secrets) != 1 {
 		t.Errorf("classification wrong: %+v", rep)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "mus.cfg")); !os.IsNotExist(err) {
@@ -171,6 +172,91 @@ func TestMigrate_DryRunTouchesNoFiles(t *testing.T) {
 	envRaw, _ := os.ReadFile(filepath.Join(dir, ".env"))
 	if !strings.Contains(string(envRaw), "organism=human") {
 		t.Errorf("dry-run modified .env: %q", envRaw)
+	}
+}
+
+func TestMigrate_SafetyGate_SingleMusNameKey(t *testing.T) {
+	// A docker-style .env where ONE key name happens to collide with
+	// a mus field name. The gate must refuse to touch it — silent
+	// no-op, no mus.cfg created.
+	dir := t.TempDir()
+	writeEnv(t, dir, strings.Join([]string{
+		"DATABASE_URL=postgres://x",
+		"PORT=3000",
+		"source=git@github:org/repo", // collides with mus's `source`
+		"NODE_ENV=production",
+	}, "\n")+"\n")
+	rep, err := Migrate(dir, musKeyAllowlist, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep != nil {
+		t.Errorf("safety gate failed — should be silent no-op, got: %+v", rep)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "mus.cfg")); !os.IsNotExist(err) {
+		t.Errorf("mus.cfg created from a non-mus .env — DANGEROUS")
+	}
+}
+
+func TestMigrate_SafetyGate_TwoMusKeysPasses(t *testing.T) {
+	// Two mus-recognised keys is enough to trip the gate.
+	dir := t.TempDir()
+	writeEnv(t, dir, "organism=human\ntissue=hippocampus\n")
+	rep, err := Migrate(dir, musKeyAllowlist, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep == nil || len(rep.Migrated) != 2 {
+		t.Errorf("2 mus keys should pass safety gate; got %+v", rep)
+	}
+}
+
+func TestMigrate_SafetyGate_DataProjectPassesEvenAlone(t *testing.T) {
+	// data_project is a mus-specific key name (no other tool uses
+	// it). Its presence alone is enough to act on.
+	dir := t.TempDir()
+	writeEnv(t, dir, "data_project=Fiers2025\nDATABASE_URL=x\n")
+	rep, err := Migrate(dir, musKeyAllowlist, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep == nil || len(rep.Migrated) != 1 {
+		t.Errorf("data_project alone should pass safety gate; got %+v", rep)
+	}
+}
+
+func TestMigrate_ForceBypassesSafetyGate(t *testing.T) {
+	// --force migrates a sparse .env that wouldn't otherwise pass.
+	dir := t.TempDir()
+	writeEnv(t, dir, "organism=human\nDATABASE_URL=x\n")
+	rep, err := MigrateWithOptions(dir, musKeyAllowlist,
+		MigrateOptions{Force: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep == nil || len(rep.Migrated) != 1 {
+		t.Errorf("--force should migrate single-key .env; got %+v", rep)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "mus.cfg")); err != nil {
+		t.Errorf("mus.cfg should exist after --force: %v", err)
+	}
+}
+
+func TestLooksLikeMusEnv(t *testing.T) {
+	if !looksLikeMusEnv([]string{"data_project"}) {
+		t.Error("data_project alone should pass")
+	}
+	if !looksLikeMusEnv([]string{"organism", "tissue"}) {
+		t.Error("2 mus keys should pass")
+	}
+	if looksLikeMusEnv([]string{"source"}) {
+		t.Error("single non-data_project key should NOT pass")
+	}
+	if looksLikeMusEnv([]string{"organism"}) {
+		t.Error("single mus key (not data_project) should NOT pass")
+	}
+	if looksLikeMusEnv(nil) {
+		t.Error("empty should not pass")
 	}
 }
 

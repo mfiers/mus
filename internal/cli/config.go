@@ -409,7 +409,7 @@ func resolveVocabList(v *vocab.Vocabulary, key, value string, force bool, stderr
 }
 
 func newConfigMigrateCmd() *cobra.Command {
-	var dryRun bool
+	var dryRun, force bool
 	cmd := &cobra.Command{
 		Use:   "migrate",
 		Short: "move mus-recognised keys from a legacy .env to mus.cfg",
@@ -424,20 +424,28 @@ func newConfigMigrateCmd() *cobra.Command {
 			"can review it. If .env ends up empty after the move it gets\n" +
 			"deleted; otherwise it stays in place for whatever other tool\n" +
 			"was using it.\n\n" +
+			"Safety gate: by default mus only migrates a .env that LOOKS\n" +
+			"confidently mus-shaped (contains data_project= OR ≥2 mus keys).\n" +
+			"A single coincidental mus-name key in a docker / direnv .env\n" +
+			"does NOT trigger migration. Pass --force to override the gate\n" +
+			"when you know the .env is mus's.\n\n" +
 			"Idempotent: a folder that already has mus.cfg is left alone.\n" +
 			"Cascade-aware mus calls already read both filenames; migration\n" +
-			"is opt-in but recommended.",
+			"is recommended but not required.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir, err := workingDir(cmd)
 			if err != nil {
 				return err
 			}
-			report, err := config.Migrate(dir, isKnownConfigKey, dryRun)
+			report, err := config.MigrateWithOptions(dir, isKnownConfigKey,
+				config.MigrateOptions{DryRun: dryRun, Force: force})
 			if err != nil {
 				return err
 			}
 			if report == nil {
-				fmt.Fprintln(cmd.OutOrStdout(), "nothing to migrate (no .env, or mus.cfg already exists)")
+				fmt.Fprintln(cmd.OutOrStdout(),
+					"nothing to migrate (no .env, mus.cfg already exists, "+
+						"or .env doesn't look mus-shaped — use --force to override)")
 				return nil
 			}
 			config.PrintMigrationReport(cmd.ErrOrStderr(), report)
@@ -446,6 +454,8 @@ func newConfigMigrateCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false,
 		"classify and report what would be migrated; don't touch any files")
+	cmd.Flags().BoolVar(&force, "force", false,
+		"skip the safety gate; migrate any .env with at least one mus key")
 	return cmd
 }
 

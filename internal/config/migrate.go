@@ -65,7 +65,45 @@ type MigrationReport struct {
 // field. We take it as a parameter rather than baking it in because
 // the canonical list lives in internal/cli/config_keys.go (which
 // imports this package, not the other way around).
+//
+// Wraps MigrateWithOptions with the SAFE-default policy: only act
+// when the .env looks confidently mus-shaped. Callers that need the
+// "act regardless" behaviour (e.g. `mus config migrate --force`)
+// should call MigrateWithOptions directly.
 func Migrate(dir string, knownMusKey func(string) bool, dryRun bool) (*MigrationReport, error) {
+	return MigrateWithOptions(dir, knownMusKey, MigrateOptions{DryRun: dryRun})
+}
+
+// MigrateOptions configures Migrate's safety policy.
+type MigrateOptions struct {
+	// DryRun: classify + report but never write.
+	DryRun bool
+	// Force: skip the "looks confidently mus-shaped" guard and
+	// migrate any .env that has at least one mus-recognised key.
+	// Use only for the explicit `mus config migrate --force` path.
+	Force bool
+}
+
+// MigrateWithOptions is the configurable form of Migrate. See
+// MigrateOptions for the available knobs.
+//
+// Safety policy (when Force is false): migrate only when the file
+// looks like a mus config, defined as either
+//
+//   - the file contains `data_project=<value>` (a key name no other
+//     tool uses), OR
+//   - the file contains TWO OR MORE keys that mus recognises
+//
+// A single coincidental mus-name key (e.g. a docker `.env` that
+// happens to use `source=` for its own purposes) does NOT trip the
+// migration. The user can always force it via the explicit
+// command if they want to.
+//
+// When the guard refuses, the call is a silent no-op: returns nil
+// rather than a report. That's the right contract for auto-migrate
+// in PersistentPreRunE — we never want to print a "would have
+// migrated, didn't" notice for someone else's file.
+func MigrateWithOptions(dir string, knownMusKey func(string) bool, opts MigrateOptions) (*MigrationReport, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
@@ -92,7 +130,7 @@ func Migrate(dir string, knownMusKey func(string) bool, dryRun bool) (*Migration
 		Dir:        abs,
 		LegacyPath: legacy,
 		NewCfgPath: target,
-		DryRun:     dryRun,
+		DryRun:     opts.DryRun,
 	}
 
 	// Walk the file line-by-line so we can preserve comments + blank
@@ -144,9 +182,20 @@ func Migrate(dir string, knownMusKey func(string) bool, dryRun bool) (*Migration
 		report.LegacyKept = true
 		return report, nil
 	}
+
+	// Safety gate: refuse to touch the .env unless it looks
+	// confidently mus-shaped. See MigrateWithOptions docstring. The
+	// explicit `mus config migrate --force` path passes opts.Force
+	// and bypasses this.
+	if !opts.Force && !looksLikeMusEnv(report.Migrated) {
+		// Treat as "not actually a mus file" — silent no-op.
+		// Caller gets nil so they don't print a confusing report.
+		return nil, nil
+	}
+
 	report.LegacyKept = !isEffectivelyEmpty(leftover.String())
 
-	if dryRun {
+	if opts.DryRun {
 		return report, nil
 	}
 
@@ -171,6 +220,26 @@ func Migrate(dir string, knownMusKey func(string) bool, dryRun bool) (*Migration
 		}
 	}
 	return report, nil
+}
+
+// looksLikeMusEnv returns true when the set of mus-recognised keys
+// found in the .env meets the "confidently mus-shaped" bar:
+//
+//   - data_project is in the set, OR
+//   - 2 or more keys are in the set
+//
+// A single coincidental key — e.g. a docker .env that happens to
+// use `source=` for its own thing — does NOT trip the bar.
+func looksLikeMusEnv(musKeysPresent []string) bool {
+	if len(musKeysPresent) >= 2 {
+		return true
+	}
+	for _, k := range musKeysPresent {
+		if k == "data_project" {
+			return true
+		}
+	}
+	return false
 }
 
 // PrintMigrationReport writes a human-readable summary of `r` to
