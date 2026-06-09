@@ -40,7 +40,7 @@ mus eln login          # interactive eLabJournal token wizard; skip if you don't
 mus completion install # tab-completion in bash/zsh/fish
 ```
 
-No ELN access? Run **`mus eln disable --global`** once instead of `mus eln login` — it writes `eln_disabled=true` to `~/.config/mus/.env` and mus stops asking from any working directory.
+No ELN access? Run **`mus eln disable --global`** once instead of `mus eln login` — it writes `eln_disabled=true` to `~/.config/mus/mus.cfg` and mus stops asking from any working directory.
 
 After this, every command is keyring-backed and shell-aware. You'll likely never run these again on this machine.
 
@@ -53,7 +53,7 @@ After this, every command is keyring-backed and shell-aware. You'll likely never
 | **linked** | `mus eln link <EXPERIMENT_ID>` | folder ↔ ELN experiment; uploads stamp ELN metadata and post a comment |
 | **disabled** | `mus eln disable` (folder) or `mus eln disable --global` (user-wide) | upload proceeds without ELN; choose this once and never be asked again |
 
-If you simply don't have ELN access, run **`mus eln disable --global`** once after installing — that writes `eln_disabled=true` to `~/.config/mus/.env` and mus stops nagging from any working directory.
+If you simply don't have ELN access, run **`mus eln disable --global`** once after installing — that writes `eln_disabled=true` to `~/.config/mus/mus.cfg` and mus stops nagging from any working directory.
 
 ### Finding your eLab experiment ID
 
@@ -118,7 +118,8 @@ If the folder is linked to an ELN experiment (`eln_experiment_id` in the cascade
 |---|---|
 | `mus version` | Print version + commit + build date |
 | `mus upgrade [--check] [--tag vX.Y.Z]` | Self-update from the latest signed Codeberg release |
-| `mus config show/set/files` | Inspect or write `.env` (cascading folder config) |
+| `mus config show/set/unset/files` | Inspect or write `mus.cfg` (cascading folder config) |
+| `mus config migrate [--dry-run] [--force]` | Move mus-recognised keys from a legacy `.env` to `mus.cfg`; flags secrets and unknowns |
 | `mus secret set/get/list/delete/backend` | Manage credentials (OS keyring or age-encrypted file) |
 | `mus tag FILE [-m NOTE] [-t TAG]` | Write/refresh a sidecar with sha256, size, mtime, ELN context |
 | `mus check [FILE / DIR] [-r]` | Verify sidecars against current file/folder contents |
@@ -142,13 +143,13 @@ If the folder is linked to an ELN experiment (`eln_experiment_id` in the cascade
 
 ## How it works (1-minute tour)
 
-**`.env` files cascade.** Walk up from your working directory; every `.env` is merged top-down so deeper files override shallower ones. List-valued keys (`tag`, `collaborator`) accept comma-separated values; a `-foo` entry removes a previously-added `foo`. Grammar matches the legacy Python `mus` — one `KEY=VALUE` per line, `#` for comments, blank lines ignored.
+**`mus.cfg` files cascade.** Walk up from your working directory; every `mus.cfg` is merged top-down so deeper files override shallower ones. List-valued keys (`tag`, `collaborator`, `tissue`, `cell_type`, …) accept comma-separated values; a `-foo` entry removes a previously-added `foo`. Grammar matches the legacy Python `mus` — one `KEY=VALUE` per line, `#` for comments, blank lines ignored. **Legacy `.env`** files from older mus versions are still read; mus auto-migrates them on first use (with a safety gate so unrelated docker / direnv `.env` files are never touched), or you can run `mus config migrate` explicitly. Secrets in legacy `.env` are detected and left in place with a loud warning.
 
 **Per-file sidecars.** `mus tag data.csv` writes `data.csv.mus` next to the data. Same flat `KEY=VALUE` format. Fields include sha256, size, mtime, host, data_project, eln_*, and (after `mus irods upload`) irods_path / irods_url / irods_purl / irods_status.
 
 **Folder sidecars.** `mus irods upload scripts/` writes one `scripts.mus` next to the folder (not per-file). Carries a Merkle-style `recursive_sha256` so `mus check scripts.mus` can detect drift later. If the folder has too many small files (`median / N² < 10`), `mus` offers to pack it into `scripts.tar.gz` and upload the archive instead.
 
-**iRODS layout.** Uploads land at `<irods_home>/project/<data_project>/<safe_experiment_name>/`. Three baked-in defaults make BADS uploads zero-config: `irods_home=/gbiomed/home/BADS`, `irods_web=https://mango.kuleuven.be/data-object/view`, `irods_pid_base=https://mango.kuleuven.be/PID`. Override any of them via `.env` or build with custom `-ldflags`.
+**iRODS layout.** Uploads land at `<irods_home>/project/<data_project>/<safe_experiment_name>/`. Three baked-in defaults make BADS uploads zero-config: `irods_home=/gbiomed/home/BADS`, `irods_web=https://mango.kuleuven.be/data-object/view`, `irods_pid_base=https://mango.kuleuven.be/PID`. Override any of them via `mus.cfg` or build with custom `-ldflags`.
 
 **Persistent URLs.** Every successful upload calls `iron stat -j` to grab the iRODS catalog ID, then builds `irods_purl=https://mango.kuleuven.be/PID/<zone>/<id>/` — keyed on the stable ID, so the URL survives renames + moves.
 

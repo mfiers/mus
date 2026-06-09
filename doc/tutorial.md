@@ -573,7 +573,7 @@ A few teammate-facing properties of tombstones:
 # Setup ------------------------------------------------------------
 cd ~/projects/microglia_pilot
 
-mus eln link 12345                                  # writes .env
+mus eln link 12345                                  # writes mus.cfg
 
 mus config set source internal
 mus config set access internal
@@ -602,7 +602,7 @@ ls final/
 # microglia_clusters.h5ad.mus    ← tombstone
 # figure_data.csv
 # figure_data.csv.mus
-# .env
+# mus.cfg
 
 # Restore months later when you need the h5ad back -----------------
 mus irods get final/microglia_clusters.h5ad.mus
