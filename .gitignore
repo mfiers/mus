@@ -22,10 +22,13 @@ Thumbs.db
 *.local
 .env.local
 
-# `.env` at the REPO ROOT is ignored — that's where `mus eln tag` writes
-# personal workspace state when run inside the mus checkout for testing.
-# `.env` files in subdirs (examples, fixtures, …) stay trackable.
+# `.env` and `mus.cfg` at the REPO ROOT are ignored — that's where
+# `mus eln link` / `mus config set` write personal workspace state when
+# run inside the mus checkout for testing (and where the auto-migrator
+# lands `mus.cfg` after touching the legacy `.env`). Subdir copies stay
+# trackable (examples, fixtures, …).
 /.env
+/mus.cfg
 
 # Sidecars generated when testing `mus irods upload` inside the repo
 # (e.g. `mus irods upload scripts/` writes scripts.mus at the root).
