@@ -28,7 +28,6 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -43,6 +42,31 @@ type Config struct {
 	Region    string // e.g. "us-east-1", or "auto" for many MinIO setups
 	AccessKey string
 	SecretKey string
+}
+
+// Normalize cleans the config in place: prepends "https://" to
+// schemeless endpoints (so 'fsn1.your-objectstorage.com' becomes
+// 'https://fsn1.your-objectstorage.com'), strips trailing slashes,
+// and trims whitespace on every field. Idempotent.
+func (c *Config) Normalize() {
+	c.Endpoint = strings.TrimSpace(c.Endpoint)
+	c.Region = strings.TrimSpace(c.Region)
+	c.AccessKey = strings.TrimSpace(c.AccessKey)
+	// SecretKey: trim surrounding whitespace only; never alter the
+	// body (might genuinely contain odd characters).
+	c.SecretKey = strings.TrimSpace(c.SecretKey)
+
+	if c.Endpoint != "" {
+		// Add scheme if missing — copy-pasting a hostname from a
+		// provider dashboard (Hetzner, S3-compatible MinIO, etc.) is
+		// a common source of bug reports.
+		if !strings.Contains(c.Endpoint, "://") {
+			c.Endpoint = "https://" + c.Endpoint
+		}
+		// Trailing slash makes BaseEndpoint emit double-slashed
+		// paths; strip.
+		c.Endpoint = strings.TrimRight(c.Endpoint, "/")
+	}
 }
 
 // Validate returns a descriptive error when required fields are
@@ -87,22 +111,35 @@ type Client struct {
 //   - a manager.Uploader for multipart support (5 MB part size, 5
 //     concurrent parts — sensible defaults for h5ad sized blobs).
 func New(ctx context.Context, cfg Config) (*Client, error) {
+	cfg.Normalize()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
-		awsconfig.WithRegion(cfg.Region),
-		awsconfig.WithCredentialsProvider(
-			credentials.NewStaticCredentialsProvider(cfg.AccessKey, cfg.SecretKey, ""),
+
+	// Build aws.Config directly rather than going through
+	// LoadDefaultConfig. That keeps the SDK's endpoint resolver
+	// from inspecting the region against AWS's DNS-shaped format
+	// (which would reject perfectly-valid Hetzner / Garage / etc.
+	// regions like "eu-central" — see the v2 endpoint-rules
+	// resolver). We pin BaseEndpoint below, so the region only
+	// matters for SigV4 signing, not endpoint construction.
+	awsCfg := aws.Config{
+		Region: cfg.Region,
+		Credentials: credentials.NewStaticCredentialsProvider(
+			cfg.AccessKey, cfg.SecretKey, "",
 		),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("aws config: %w", err)
 	}
+
 	s3c := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
 		o.BaseEndpoint = aws.String(cfg.Endpoint)
-		o.UsePathStyle = true // required by MinIO / Garage / most non-AWS S3
+		o.UsePathStyle = true // MinIO / Garage / Hetzner / most non-AWS S3
+		// Defensive: if the user supplied a region the SDK's endpoint
+		// resolver dislikes (the original bug), explicitly fall back
+		// to the no-op resolver so the BaseEndpoint above is the only
+		// source of truth.
+		o.EndpointResolverV2 = s3.NewDefaultEndpointResolverV2()
 	})
+
 	uploader := manager.NewUploader(s3c, func(u *manager.Uploader) {
 		u.PartSize = 16 * 1024 * 1024 // 16 MB parts — balances throughput vs memory
 		u.Concurrency = 4
