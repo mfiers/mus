@@ -100,35 +100,89 @@ the catalog (anthive) accepts only files that pass it.
    - title            (freeform)
    - source_description (freeform — e.g. "from CELLxGENE 2026-04-12")
 
-4. HOW TO SET METADATA
-   --------------------
-   Two places metadata lives:
+4. HOW TO SET METADATA — FOLDER vs FILE
+   ---------------------------------------
+   Mus has TWO independent annotation layers. Use both. They serve
+   different purposes:
 
-   FOLDER-LEVEL cascade (applies to that folder + every subfolder):
+   4a) FOLDER-LEVEL ANNOTATION — 'mus.cfg' in a directory.
+       Applies to THAT directory AND every file and subdirectory
+       beneath it, recursively. Set it ONCE at the project root
+       and every file under the tree inherits the values.
 
-       cd ~/projects/your_project
+       Walks the cascade root-down: deeper 'mus.cfg' files override
+       shallower ones, per key. So you can refine in a subfolder
+       (e.g. 'access=public' in 'final/mus.cfg' while the parent
+       has 'access=internal').
 
-       mus config set data_project NameYear      # e.g. Fiers2025
-       mus config set eln_experiment_id 12345    # or: mus eln link 12345
-       mus config set organism human
-       mus config set tissue 'middle temporal gyrus,hippocampus'
-       mus config set cell_type 'microglial cell'
-       mus config set technology 10x_chromium_3p_v3
-       mus config set suspension_type nucleus
-       mus config set access internal
-       mus config set source internal
+       Where to put what:
+         - data_project           ← project root
+         - eln_experiment_id      ← project root
+         - organism / source      ← project root (rarely changes)
+         - technology             ← project root (or per-prep subfolder)
+         - tissue / suspension_type → wherever it varies
 
-   Values that aren't in the controlled vocabulary are REJECTED with
-   a "did you mean?" suggestion. --force saves anyway (and asks you
-   to file an issue to extend the vocab). Case-only differences are
-   silently normalised to the canonical form.
+       Set via 'mus config set' from inside the folder:
 
-   FILE-LEVEL sidecar (overrides cascade for one specific file):
+           cd ~/projects/your_project
 
-       mus tag mydata.h5ad -m "post-QC final" -t qc-pass
+           mus eln link 12345                        # writes data_project + eln_*
+           mus config set organism human
+           mus config set tissue 'middle temporal gyrus,hippocampus'
+           mus config set cell_type 'microglial cell'
+           mus config set technology 10x_chromium_3p_v3
+           mus config set suspension_type nucleus
+           mus config set access internal
+           mus config set source internal
 
-       # Per-file scalar overrides: not yet a flag; for now
-       # use a per-subfolder mus.cfg + move the file there.
+       Subfolder overrides — use '-C SUBDIR' to write the
+       subfolder's mus.cfg from anywhere:
+
+           mus -C final config set access public
+           mus -C final config set doi 10.1234/microglia.2025
+
+       Values are validated against the joint vocabulary on write:
+       case differences (HuMaN → human) are silently canonicalised;
+       off-vocabulary values are REJECTED with a "did you mean?"
+       suggestion. --force saves anyway and asks you to file an
+       issue to extend the vocab.
+
+       Inspect:
+           mus config show                   # effective cascade (merged)
+           mus config show --local           # just this folder's mus.cfg
+           mus config files                  # paths of every mus.cfg that contributes
+
+   4b) FILE-LEVEL ANNOTATION — '<basename>.h5ad.mus' sidecar.
+       Sits next to ONE specific data file (foo.h5ad → foo.h5ad.mus).
+       Applies to ONLY THAT FILE — never spreads, never inherits to
+       siblings.
+
+       Per-key precedence: file sidecar > deepest mus.cfg > shallower
+       mus.cfg > … > root. So a sidecar field wins for that one file
+       even when the folder cascade said something different.
+
+       Created automatically by 'mus tag' / 'mus irods upload' /
+       'mus h5ad check'. Each invocation refreshes content without
+       clobbering fields it doesn't touch — diff-friendly, safe to
+       commit to git.
+
+       Free-text fields you can write with 'mus tag':
+           mus tag mydata.h5ad -m "post-QC final" -t qc-pass
+
+       Per-file overrides on biology fields don't have a flag yet —
+       for one-off exceptions, create a per-subfolder mus.cfg and
+       move the file there. The cascade picks it up automatically.
+
+       Do NOT hand-edit '*.h5ad.mus' files — they carry a sha256
+       paired with the file content; the mus commands keep that
+       in sync.
+
+   4c) RULE OF THUMB.
+       'mus.cfg' is your RECIPE (what you intend).
+       '.h5ad.mus' is the RECEIPT (what mus actually stamped on
+       this specific file).
+       Set the recipe once at the project root; let the receipts
+       fall out per file via the standard commands.
 
 5. VALIDATE BEFORE DEPOSIT
    -----------------------

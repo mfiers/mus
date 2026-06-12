@@ -157,6 +157,11 @@ func runUpgrade(tag string, force, checkOnly, verbose bool) error {
 	tmpPath = ""
 
 	fmt.Printf("Installed %s at %s\n", rel.TagName, self)
+
+	// Refresh bundled Claude skills, but only for users who actually
+	// have Claude installed. Silent skip otherwise — see
+	// InstallClaudeSkills docs for the no-crash contract.
+	_ = InstallClaudeSkills(os.Stderr)
 	return nil
 }
 

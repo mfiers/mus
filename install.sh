@@ -232,6 +232,12 @@ main() {
         warn "Binary installed but '$BIN_NAME version' did not exit cleanly"
     fi
 
+    # Drop bundled Claude skills if Claude is installed. Silent no-op
+    # otherwise — see `internal/cli/skills.go`. Suppress non-essential
+    # output so the install log stays terse on the typical no-Claude
+    # path.
+    "$target" _install-skills 2>&1 | grep -v "no Claude install detected" || true
+
     # PATH advice
     case ":$PATH:" in
         *":$target_dir:"*)
