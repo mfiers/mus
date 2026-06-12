@@ -162,12 +162,16 @@ var bundledSkills = []bundledSkill{
 		Name: "mus-h5ad-deposit",
 		Description: "Use this skill when the user asks how to annotate, prepare, " +
 			"validate, deposit, or extract an .h5ad file for the lab catalog " +
-			"(anthive) or for mus / iRODS upload. Triggers on questions about " +
+			"(anthive) or for mus / iRODS / S3 upload. Triggers on questions about " +
 			"folder vs file annotation (mus.cfg / *.h5ad.mus), the seven " +
 			"hard-required vocabulary fields (organism, tissue, cell_type, " +
 			"technology, suspension_type, access, source), the joint vocabulary, " +
-			"`mus h5ad check`, `mus irods upload`, `mus irods find`, " +
-			"`mus irods get`, or the deposit / extract workflow generally.",
+			"`mus h5ad check`, `mus irods upload`, `mus s3 upload`, " +
+			"`mus irods find`, `mus irods get`, the deposit / extract workflow " +
+			"generally, OR how to write the catalog documentation files " +
+			"(per-file <basename>.md and folder-level index.md with YAML " +
+			"frontmatter — title, sha256, obsnum_include, top_cat, group, " +
+			"group_id, default_dataset, etc.).",
 		Body: h5adHowtoText,
 	},
 }
