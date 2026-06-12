@@ -269,6 +269,10 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 	}
 
 	var uploads []uploadedItem
+	// Track folder-level companions (mus.cfg, index.md) we've
+	// already uploaded this invocation so a batch of N files from
+	// the same dir doesn't re-PUT them N times.
+	uploadedFolderLevel := map[string]bool{}
 
 	for _, raw := range args {
 		if sidecar.IsSidecar(raw) {
@@ -408,10 +412,15 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 			}
 		}
 
-		// Metadata travels as AVU on the iRODS object itself
-		// (applyMetadataToIRODS above), not as separate .mus / .env
-		// files. The depositor's local sidecar + cascade .env stay
-		// local — they're working-state, not part of the deposit.
+		// Companion files (sidecar, *.h5ad.md, folder mus.cfg,
+		// folder index.md) travel with the data file so a remote
+		// reader gets the complete documented deposit. AVU still
+		// carries the strict-vocab metadata on the object itself —
+		// the companions are the human-readable layer.
+		if !opts.DryRun {
+			uploadIRODSCompanions(ctx, client, abs, remoteCollection,
+				opts, uploadedFolderLevel, cmd.OutOrStdout(), cmd.ErrOrStderr())
+		}
 
 		uploads = append(uploads, uploadedItem{
 			Kind:       "file",
@@ -1056,6 +1065,36 @@ func localDestForBarePath(remotePath string) string {
 // downloadFromMango handles the legacy *.mango sidecar files emitted by the
 // Python mus. Delegates the actual parsing to parseMangoFile so the URL
 // extraction is unit-testable without spinning up an iron client.
+// uploadIRODSCompanions pushes the depositor-side documentation
+// files (per-file *.h5ad.mus sidecar + *.h5ad.md, folder mus.cfg
+// + index.md) into the same iRODS collection as the primary data
+// file. Folder-level companions are deduped via `seen` so a batch
+// of N files from one folder doesn't re-PUT them N times.
+//
+// Failures here are LOGGED, not fatal — the primary data + AVU
+// metadata have already landed and the user shouldn't have an
+// otherwise-successful upload undone by a companion miss.
+func uploadIRODSCompanions(ctx context.Context, client *iron.Client,
+	primaryAbs, remoteCollection string, opts iron.UploadOpts,
+	seen map[string]bool, stdout, stderr io.Writer) {
+
+	for _, comp := range companionsForFile(primaryAbs) {
+		remotePath := remoteCollection + "/" + comp.RemoteName
+		if isFolderLevel(comp.RemoteName) {
+			if seen[remotePath] {
+				continue
+			}
+			seen[remotePath] = true
+		}
+		fmt.Fprintf(stdout, "  + %s\n", remotePath)
+		if err := client.Upload(ctx, comp.LocalPath, remotePath, opts); err != nil {
+			fmt.Fprintf(stderr,
+				"  ⚠ companion upload failed (%s): %v — primary already uploaded\n",
+				comp.LocalPath, err)
+		}
+	}
+}
+
 func downloadFromMango(ctx context.Context, client *iron.Client,
 	mangoPath string, force, verify bool) error {
 

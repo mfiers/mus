@@ -233,7 +233,13 @@ func uploadFolderDirect(
 	// Exclude mus's working-state files from the recursive copy —
 	// the metadata is on the iRODS AVU, not in these files.
 	folderOpts := opts
-	folderOpts.Ignore = append(folderOpts.Ignore, "*.mus", ".env", "mus.cfg")
+	// Include sidecars (*.mus), markdown documentation (*.md),
+	// and mus.cfg in the upload — they form the deposit's
+	// self-describing documentation layer alongside the AVU on the
+	// collection itself. Legacy `.env` is still excluded because
+	// (a) every project should have migrated to mus.cfg by now and
+	// (b) any remaining .env may carry direnv-style shell secrets.
+	folderOpts.Ignore = append(folderOpts.Ignore, ".env")
 	if err := client.Upload(ctx, srcAbs, remoteTarget, folderOpts); err != nil {
 		return err
 	}

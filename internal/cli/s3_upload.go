@@ -152,6 +152,11 @@ func runS3Upload(cmd *cobra.Command, args []string, message string, forceH5adGat
 			cfg.Bucket, cfg.Endpoint)
 	}
 
+	// Track folder-level companions (mus.cfg, index.md) we've
+	// already uploaded this invocation, so a batch of N files
+	// from the same directory doesn't re-PUT them N times.
+	uploadedFolderLevel := map[string]bool{}
+
 	// Upload loop.
 	for _, raw := range args {
 		abs, err := filepath.Abs(raw)
@@ -197,6 +202,25 @@ func runS3Upload(cmd *cobra.Command, args []string, message string, forceH5adGat
 		doc.S3.UploadedAt = time.Now().UTC().Truncate(time.Second)
 		if err := sidecar.Write(scPath, doc); err != nil {
 			return fmt.Errorf("update sidecar %s: %w", scPath, err)
+		}
+
+		// Companion files: sidecar, per-file *.md, folder mus.cfg,
+		// folder index.md. The sidecar was just rewritten above so
+		// the upload below picks up the freshly-stamped s3_* block.
+		for _, comp := range companionsForFile(abs) {
+			// Dedupe folder-level companions within this invocation.
+			compKey := dataProject + "/" + comp.RemoteName
+			if isFolderLevel(comp.RemoteName) {
+				if uploadedFolderLevel[compKey] {
+					continue
+				}
+				uploadedFolderLevel[compKey] = true
+			}
+			fmt.Fprintf(stdout, "  + s3://%s/%s\n", cfg.Bucket, compKey)
+			if _, err := client.Upload(ctx, cfg.Bucket, compKey, comp.LocalPath, nil); err != nil {
+				fmt.Fprintf(stderr, "  ⚠ companion upload failed (%s): %v — primary already uploaded\n",
+					comp.LocalPath, err)
+			}
 		}
 	}
 	return nil

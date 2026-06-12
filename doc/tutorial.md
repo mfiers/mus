@@ -458,11 +458,14 @@ sha256, …) is also attached to the iRODS object as **AVU triplets** —
 visible in `iron meta ls` and queryable via `iron query`. AVU is iRODS
 jargon for "attribute-value-unit" key-value metadata.
 
-**Note:** `.mus` sidecars and `mus.cfg` files **stay local** — they're
-not uploaded. mus passes `--ignore=*.mus,.env,mus.cfg` to iron on folder
-uploads so they can't slip in. The iRODS catalog carries the
-metadata as AVU; the local sidecar carries the same metadata plus
-the path / URL / PURL pointers.
+**What travels with the upload:**
+- `<file>.h5ad` — the data
+- `<file>.h5ad.mus` — the sidecar (sha256 + iRODS path / URL / PURL + cascade snapshot)
+- `<file>.h5ad.md` — your prose description of this file (if present)
+- The folder's own `mus.cfg` and `index.md` — the immediate-folder config + folder-level prose (parent cascade entries stay local)
+- AVU on the iRODS object itself — the strict-vocab metadata, queryable via `iron query` and `mus irods find`
+
+The legacy `.env` file is the one thing mus does NOT upload — it can carry direnv-style shell secrets that don't belong on the catalog.
 
 ### Leave the `*.mus` sidecars in place
 

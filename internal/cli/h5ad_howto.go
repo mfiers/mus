@@ -184,121 +184,65 @@ the catalog (anthive) accepts only files that pass it.
        Set the recipe once at the project root; let the receipts
        fall out per file via the standard commands.
 
-5. CATALOG DOCUMENTATION (.md FILES — NOT mus-managed)
+5. DOCUMENTING THE DATA (.md FILES — depositor-written)
    ----------------------------------------------------
-   The downstream catalog (anthive) expects each deposit to ship
-   with two HUMAN-WRITTEN documentation files alongside the data.
-   Mus does NOT generate, validate, or upload these — they're for
-   human eyes and for anthive's catalog reader. The convention
-   follows the h5adstore layout. Maintain them by hand.
+   Two human-written markdown files complement each deposit. They
+   exist for HUMAN READERS — colleagues browsing the iRODS / S3
+   collection before any catalog gets involved. Anthive ingest can
+   also use them as a starting point, but they're just regular
+   markdown — no required schema, no YAML frontmatter mus cares
+   about, no fields mus validates.
 
-   Each h5ad file gets its own '<basename>.md'. Each group folder
-   gets one 'index.md'. Both are markdown with a YAML frontmatter
-   header.
+   Mus does NOT generate them. Mus DOES upload them alongside the
+   data when present (see §7).
 
-   5a) PER-FILE: '<basename>.md' next to each .h5ad
+   5a) FOLDER-LEVEL: 'index.md'
+       One per project folder. Describes the project as a whole:
+       what's in the folder, who put it together, what each dataset
+       is for, why it exists. Free prose. Examples of what to write:
 
-       Lives next to the .h5ad and .h5ad.mus. Example:
+           # Microglia pilot (Fiers2025)
 
-           ---
-           title: Seattle_MTG_MG
-           sha256: 2cb4a92dfcfc29cc8e4f8389d6e9d7937e710693759f5c0ffc0b74df4ede907c
-           year: 2026
-           date: '2026-03-08'
-           obsnum_include:
-             - n_genes
-             - n_counts
-             - pct_counts_mt
-             - doublet_score
-           obscat_include:
-             - cell_type
-             - donor_id
-             - condition
-           top_cat:
-             - cell_type
-             - donor_id
-           top_num:
-             - n_counts
-             - pct_counts_mt
-           default_layer: counts
-           ---
+           snRNA-seq of human prefrontal cortex microglia from the
+           Sun lab, sorted PU.1+ nuclei, 10x Multiome v2.
+           Datasets in this folder:
 
-           # Seattle MTG — microglia subset
+           - mydata.h5ad       full 10x snRNA-seq output
+           - mydata_qc.h5ad    after doublet removal + filtering
+           - mydata_atlas.h5ad mapped to the CellxGene reference
 
-           Microglia subset from the Seattle MTG cohort (Gabitto
-           et al. 2024). Single-nucleus, 10x Multiome. …
+           Acquired 2025-Q3. Manuscript in prep (Fiers, et al.).
 
-       Commonly-used frontmatter fields:
-         - title              required, human-readable label
-         - sha256             paste from the .h5ad.mus sidecar after
-                              'mus h5ad check' passes
-         - year, date         dataset year + ISO export date
-         - obsnum_include     numeric obs columns the catalog should
-                              expose (per-cell metrics, scores, …)
-         - obscat_include     categorical obs columns to expose
-                              (cell_type, donor, condition, …)
-         - top_cat            categoricals the UI should feature
-                              prominently (e.g. as the default
-                              colouring on UMAP)
-         - top_num            numerics to feature
-         - default_layer      "counts" or "X" — which expression
-                              matrix the viewer defaults to
+   5b) FILE-LEVEL: '<basename>.md'
+       Sits next to each .h5ad as 'mydata.h5ad.md'. Describes that
+       ONE file: what's special about it, what processing produced
+       it, known caveats. Free prose:
 
-       Body: free-prose dataset description, lineage, citation,
-       known caveats. Anything a human reader needs to know that
-       isn't in the structured fields.
+           # mydata.h5ad
 
-   5b) FOLDER-LEVEL: 'index.md' at the root of each project folder
+           Microglia-only subset of the full PFC cohort. PU.1+
+           sorted nuclei, n=73888 cells across 7 donors.
+           Normalised with scanpy.pp.normalize_total → log1p.
+           UMAP from PCA(30) + Harmony on donor.
 
-       One per project / group. Same YAML-frontmatter + prose
-       pattern. Example:
+           Caveats:
+             - donor 4 has high mito% — consider filtering.
+             - clusters 8 and 9 are likely doublets — see notebook
+               on the pika project page.
 
-           ---
-           group: Gabitto2024
-           experiment: na
-           authors:
-             - Gabitto, M.I.
-             - et al.
-           year: 2024
-           group_id: G24
-           default_dataset: Seattle_MTG_MG.h5ad
-           cellxgene_collection_id: 1234-5678-...
-           ---
+   5c) RELATIONSHIP TO MUS'S OWN FILES
 
-           # Gabitto2024
+       - mus.cfg + *.h5ad.mus — structured, vocab-validated,
+         auto-stamped. Mus owns them.
+       - index.md + *.md — free prose. Depositor owns them. Mus
+         does NOT regenerate, validate, or schema-check them —
+         they're just markdown.
 
-           SEA-AD multimodal atlas of middle temporal gyrus and
-           prefrontal cortex in Alzheimer disease. …
-
-       Commonly-used frontmatter fields:
-         - group               short identifier (often matches
-                               data_project)
-         - experiment          freeform; "na" if not applicable
-         - authors             paper authors / contributors (list)
-         - year                publication / dataset year
-         - group_id            short tag for the catalog
-         - default_dataset     which .h5ad to feature first
-         - cellxgene_collection_id   if mirrored on CellxGene
-
-   5c) Relationship to mus's files
-
-       - mus.cfg / *.h5ad.mus / iRODS AVU — MUS owns these. They
-         carry the seven hard-required vocab fields (organism,
-         tissue, cell_type, technology, suspension_type, access,
-         source) plus structural h5ad shape. Strict-vocabulary
-         validated. Auto-stamped by 'mus h5ad check' /
-         'mus irods upload' / etc.
-       - *.md / index.md — the DEPOSITOR owns these. Catalog
-         documentation: prose body + YAML frontmatter for
-         catalog-specific fields not in mus's vocab (default_layer,
-         top_cat, obsnum_include, …). Edit by hand. Mus does NOT
-         regenerate them; mus does NOT upload them to iRODS/S3.
-       - The 'sha256' in '<basename>.md' MUST match the sidecar's.
-         Copy it from .h5ad.mus after 'mus h5ad check' passes; the
-         sidecar is the source of truth.
-       - If you change a .h5ad and re-run 'mus h5ad check', the
-         sidecar's sha256 updates; remember to copy the new value
-         into <basename>.md.
+       Both layers travel together: when mus uploads to S3 / iRODS,
+       it bundles the .h5ad, its sidecar, its sibling .md, and the
+       folder's own mus.cfg + index.md as a single self-describing
+       deposit. So a colleague pulling from the catalog sees both
+       the strict metadata (sidecar / AVU) AND your prose notes.
 
 6. VALIDATE BEFORE DEPOSIT
    -----------------------
