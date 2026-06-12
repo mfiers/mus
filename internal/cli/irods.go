@@ -33,6 +33,7 @@ func newIRODSCmd() *cobra.Command {
 		newIRODSCheckCmd(),
 		newIRODSGetCmd(),
 		newIRODSScanCmd(),
+		newIRODSFindCmd(),
 	)
 	return cmd
 }
@@ -787,8 +788,16 @@ func downloadOne(ctx context.Context, client *iron.Client,
 		return downloadFromMango(ctx, client, arg, force, verify)
 	}
 
+	// Bare iRODS path? `mus irods get /zone/.../foo.h5ad` is the
+	// catalog-discovery flow (paired with `mus irods find`). We
+	// synthesise a sidecar locally from the remote AVU + sha so
+	// the rest of the get logic works unchanged.
+	if looksLikeIRODSPath(arg) {
+		return downloadFromBareIRODSPath(ctx, client, arg, force, verify, stderr)
+	}
+
 	if !sidecar.IsSidecar(arg) {
-		return fmt.Errorf("%s is not a *.mus sidecar or *.mango file", arg)
+		return fmt.Errorf("%s is not a *.mus sidecar, *.mango file, or iRODS path", arg)
 	}
 	doc, err := sidecar.Read(arg)
 	if err != nil {
@@ -965,6 +974,83 @@ func verifyDownloadedSidecar(sidecarPath string, doc *sidecar.Doc, stderr io.Wri
 			res.path, res.detail)
 	}
 	return fmt.Errorf("verify %s: %s (%s)", res.path, res.status, res.detail)
+}
+
+// looksLikeIRODSPath returns true when arg is shaped like an iRODS
+// absolute path (`/zone/...`). The check is deliberately
+// conservative — the caller has already ruled out *.mus sidecars
+// and *.mango files; if it then walks like an iRODS path we treat
+// it as one and let the subsequent iron.Stat fail loudly if it's
+// not actually addressable on the catalog.
+func looksLikeIRODSPath(arg string) bool {
+	return strings.HasPrefix(arg, "/") && !strings.HasSuffix(arg, ".mus")
+}
+
+// downloadFromBareIRODSPath is the catalog-discovery entrypoint.
+// User passes an iRODS path directly (typically piped in from
+// `mus irods find`); mus synthesises a local sidecar from the
+// remote AVU + sha and then runs the standard download path.
+//
+// The synthesised sidecar lands next to the downloaded file, so a
+// subsequent `mus irods get <local.mus>` is fully idempotent —
+// no different from how a sidecar-driven fetch behaves.
+func downloadFromBareIRODSPath(ctx context.Context, client *iron.Client,
+	remotePath string, force, verify bool, stderr io.Writer) error {
+
+	info, err := client.Stat(ctx, remotePath)
+	if err != nil {
+		return fmt.Errorf("iron stat %s: %w", remotePath, err)
+	}
+	remoteSum, err := client.Checksum(ctx, remotePath)
+	if err != nil {
+		// Non-fatal — sidecar without sha still drives a download
+		// + sha will be computed on the fresh local file.
+		fmt.Fprintf(stderr, "  note: remote checksum unavailable for %s (%v)\n", remotePath, err)
+	}
+
+	// Build a sidecar from the remote AVU.
+	doc := &sidecar.Doc{
+		File: sidecar.FileInfo{
+			Sha256:  remoteSum,
+			Size:    info.Size,
+			AbsPath: localDestForBarePath(remotePath),
+		},
+		IRODS: &sidecar.IRODS{
+			Path:   remotePath,
+			Status: "uploaded",
+		},
+	}
+	mergeAVUIntoDoc(doc, info.MetadataMap(), stderr)
+
+	// Local destination: cwd / basename.
+	local := localDestForBarePath(remotePath)
+	scPath := sidecar.SidecarPath(local)
+
+	// Don't clobber an existing sidecar in cwd — if one exists, the
+	// user is in a tree that already knows about this object and
+	// should use the sidecar-driven flow instead.
+	if _, err := os.Stat(scPath); err == nil && !force {
+		return fmt.Errorf("%s already exists; re-run with --force, or use `mus irods get %s` to refresh",
+			scPath, scPath)
+	}
+
+	// Write the synthesised sidecar so the standard download path
+	// can reuse the localStateVsSidecar / verify / refresh code.
+	if err := sidecar.Write(scPath, doc); err != nil {
+		return fmt.Errorf("write synthesised sidecar: %w", err)
+	}
+	fmt.Fprintf(stderr, "  ↻ synthesised %s from iRODS AVU\n", scPath)
+
+	return downloadOne(ctx, client, scPath, force, verify, stderr)
+}
+
+func localDestForBarePath(remotePath string) string {
+	base := filepath.Base(remotePath)
+	cwd, err := os.Getwd()
+	if err != nil {
+		return base
+	}
+	return filepath.Join(cwd, base)
 }
 
 // downloadFromMango handles the legacy *.mango sidecar files emitted by the

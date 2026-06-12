@@ -34,9 +34,9 @@ import (
 func newH5adCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "h5ad",
-		Short: "h5ad ingestion sanity-checks (one command today: `check`)",
+		Short: "h5ad ingestion sanity-checks + annotation guidance",
 	}
-	cmd.AddCommand(newH5adCheckCmd())
+	cmd.AddCommand(newH5adCheckCmd(), newH5adHowtoCmd())
 	return cmd
 }
 

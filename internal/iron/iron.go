@@ -321,6 +321,26 @@ func (c *Client) ListJSON(ctx context.Context, remote string, cols ...string) (s
 	return c.Run(ctx, args...)
 }
 
+// QueryJSON runs `iron query --json <sql>` and returns the raw JSON
+// array iron emits ([][]string — one row per result, one cell per
+// projected column). Used by `mus irods find` to discover objects
+// by AVU value.
+//
+// Example:
+//
+//	rows, _ := client.QueryJSON(ctx,
+//	    "select COLL_NAME, DATA_NAME "+
+//	    "where META_DATA_ATTR_NAME = 'mus_organism' "+
+//	    "and META_DATA_ATTR_VALUE = 'human'")
+//
+// genquery has known limitations — can't intersect multiple AVU
+// attributes in a single statement. Callers that need
+// multi-attribute filtering should issue one query per attribute
+// and intersect the path sets on the client.
+func (c *Client) QueryJSON(ctx context.Context, sql string) (string, error) {
+	return c.Run(ctx, "query", "--json", sql)
+}
+
 // Exists reports whether the remote object or collection exists.
 func (c *Client) Exists(ctx context.Context, remote string) (bool, error) {
 	if c.DefaultTimeout > 0 {
