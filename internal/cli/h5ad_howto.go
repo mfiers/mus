@@ -202,14 +202,32 @@ the catalog (anthive) accepts only files that pass it.
 
 6. DEPOSIT
    --------
+   Mus has two deposit channels — they're orthogonal, and depositors
+   typically use either or both depending on the destination.
+
+   6a) iRODS — the lab archive (everything):
 
        mus irods upload -m "post-QC drop for figure 3" mydata.h5ad
 
-   The .h5ad uploads to iRODS. All resolved metadata is stamped on
-   the iRODS object as 'mus_*' AVU triplets (queryable via
-   'iron query' / 'mus irods find'). The local .mus sidecar gets the
-   iRODS path + persistent URL. '.h5ad.mus' and 'mus.cfg' themselves
-   are NOT uploaded — they stay local.
+       The .h5ad uploads to iRODS. All resolved metadata is stamped on
+       the iRODS object as 'mus_*' AVU triplets (queryable via
+       'iron query' / 'mus irods find'). The local .mus sidecar gets the
+       iRODS path + persistent URL. '.h5ad.mus' and 'mus.cfg' themselves
+       are NOT uploaded — they stay local.
+
+   6b) S3 — the catalog (anthive) ingest channel:
+
+       mus s3 login                                        # one-time setup
+       mus s3 upload -m "ingest into anthive" mydata.h5ad  # per deposit
+
+       Each data_project gets its own S3 bucket (e.g. 'Thrup2020',
+       'Fiers2025'). The file lands at s3://<data_project>/<basename>.
+       Hard-gated on the same 'mus h5ad check' PASS as iRODS upload, so
+       only validated, fully-annotated files reach the catalog. The
+       same 'mus_*' metadata set is stamped on the object as
+       x-amz-meta-* headers, mirroring the iRODS AVU. The .h5ad.mus
+       sidecar gets s3_url / s3_bucket / s3_key / s3_etag /
+       s3_uploaded_at.
 
 7. EXTRACT (anthive ingest, or any catalog reader)
    ------------------------------------------------

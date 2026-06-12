@@ -78,7 +78,7 @@ type ELN struct {
 	JournalID      string
 }
 
-// S3 captures S3 upload state (planned).
+// S3 captures S3 upload state (`mus s3 upload`).
 type S3 struct {
 	URL        string
 	Bucket     string

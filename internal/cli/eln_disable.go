@@ -8,7 +8,7 @@ package cli
 //   disabled  — eln_disabled is truthy in the cascade
 //   undecided — neither
 //
-// `mus irods upload` (and the future `mus s3 upload`) refuse to run while
+// `mus irods upload` and `mus s3 upload` refuse to run while
 // undecided so the user has to make an explicit choice. `mus eln disable`
 // records the "I don't use ELN here" answer; `mus eln link <id>` records
 // "this folder is linked to experiment <id>".
