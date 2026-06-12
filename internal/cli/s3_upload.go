@@ -1,21 +1,24 @@
 package cli
 
-// `mus s3 upload` — h5ad-only, hard-gated deposit to a project-named
-// S3 bucket.
+// `mus s3 upload` — h5ad-only, hard-gated deposit. Writes to the
+// single bucket configured by `mus s3 login`, using the cascade's
+// data_project as the key prefix.
 //
 // Gates (every one must pass before any bytes leave the local
 // machine):
 //
 //   1. file ends in .h5ad
-//   2. data_project is set in the cascade (becomes the bucket name)
+//   2. data_project is set in the cascade (becomes the key prefix)
 //   3. -m / --message provided
-//   4. bucket named after data_project exists (HeadBucket)
+//   4. configured bucket exists (HeadBucket) — caught at login but
+//      re-checked here in case the bucket was deleted since
 //   5. `mus h5ad check` has stamped a fresh PASS on the sidecar —
 //      file sha + vocab sha + check version all current. Reuses the
 //      gateH5adForUpload logic that `mus irods upload` already uses.
 //
 // On a clean pass:
-//   - multipart-upload the h5ad to s3://<data_project>/<basename>
+//   - multipart-upload the h5ad to
+//     s3://<configured_bucket>/<data_project>/<basename>
 //   - stamp the same mus_* metadata set as the iRODS AVU (organism,
 //     tissue, technology, …, upload message) as x-amz-meta-mus-*
 //   - refresh the sidecar with s3_url / s3_bucket / s3_key /
@@ -42,14 +45,16 @@ func newS3UploadCmd() *cobra.Command {
 	var forceH5adGate bool
 	cmd := &cobra.Command{
 		Use:   "upload -m MESSAGE FILE [FILE...]",
-		Short: "upload h5ad file(s) to s3://<data_project>/",
-		Long: "Uploads each .h5ad file to the S3 bucket named after the local\n" +
-			"data_project. Strict gates — every file must pass ALL of:\n\n" +
+		Short: "upload h5ad file(s) to s3://<bucket>/<data_project>/",
+		Long: "Uploads each .h5ad file to the bucket configured by `mus s3 login`,\n" +
+			"with data_project from the cascade as the key prefix. Final path:\n" +
+			"s3://<configured_bucket>/<data_project>/<basename>.\n\n" +
+			"Strict gates — every file must pass ALL of:\n\n" +
 			"  - filename ends in .h5ad\n" +
 			"  - sidecar carries a fresh `mus h5ad check` PASS (file sha +\n" +
 			"    vocab sha + check version all current)\n" +
-			"  - data_project is set in the cascade (used as the bucket name)\n" +
-			"  - the data_project bucket exists on S3\n" +
+			"  - data_project is set in the cascade (used as the key prefix)\n" +
+			"  - configured bucket exists on S3\n" +
 			"  - -m / --message describes why this upload is happening\n\n" +
 			"Mus_* metadata (organism, tissue, technology, …) is stamped on\n" +
 			"the S3 object as x-amz-meta-* headers, mirroring the iRODS AVU\n" +
@@ -136,15 +141,15 @@ func runS3Upload(cmd *cobra.Command, args []string, message string, forceH5adGat
 	if err != nil {
 		return err
 	}
-	exists, err := client.BucketExists(ctx, dataProject)
+	exists, err := client.BucketExists(ctx, cfg.Bucket)
 	if err != nil {
-		return fmt.Errorf("HeadBucket %s: %w", dataProject, err)
+		return fmt.Errorf("HeadBucket %s: %w", cfg.Bucket, err)
 	}
 	if !exists {
 		return fmt.Errorf(
 			"bucket %q does not exist on %s (or no permission).\n"+
-				"  Create it on your S3 provider, then re-run.",
-			dataProject, cfg.Endpoint)
+				"  Re-run `mus s3 login` after creating it on the provider.",
+			cfg.Bucket, cfg.Endpoint)
 	}
 
 	// Upload loop.
@@ -166,11 +171,15 @@ func runS3Upload(cmd *cobra.Command, args []string, message string, forceH5adGat
 		// even when the sidecar hasn't been re-stamped recently.
 		stampBioFromEnv(doc, env)
 
-		key := filepath.Base(abs)
+		// Key layout: <data_project>/<basename> within the
+		// configured bucket. Forward slashes are the S3 prefix
+		// separator on every provider; filepath.Join would be wrong
+		// on Windows (\) so we build the key manually.
+		key := dataProject + "/" + filepath.Base(abs)
 		meta := s3MetadataFromDoc(doc, message)
 
-		fmt.Fprintf(stdout, "→ s3://%s/%s\n", dataProject, key)
-		result, err := client.Upload(ctx, dataProject, key, abs, meta)
+		fmt.Fprintf(stdout, "→ s3://%s/%s\n", cfg.Bucket, key)
+		result, err := client.Upload(ctx, cfg.Bucket, key, abs, meta)
 		if err != nil {
 			fmt.Fprintf(stderr, "  ✘ upload failed for %s: %v\n", abs, err)
 			return err

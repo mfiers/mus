@@ -220,8 +220,12 @@ the catalog (anthive) accepts only files that pass it.
        mus s3 login                                        # one-time setup
        mus s3 upload -m "ingest into anthive" mydata.h5ad  # per deposit
 
-       Each data_project gets its own S3 bucket (e.g. 'Thrup2020',
-       'Fiers2025'). The file lands at s3://<data_project>/<basename>.
+       Mus writes to a single bucket configured at login time (e.g.
+       'anthive4a'), with data_project as the key prefix. So the file
+       lands at s3://<bucket>/<data_project>/<basename>, e.g.
+       s3://anthive4a/Fiers2025/mydata.h5ad. The same login also
+       verifies the bucket exists.
+
        Hard-gated on the same 'mus h5ad check' PASS as iRODS upload, so
        only validated, fully-annotated files reach the catalog. The
        same 'mus_*' metadata set is stamped on the object as

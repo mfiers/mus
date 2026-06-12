@@ -37,9 +37,15 @@ import (
 // Config holds the connection parameters mus stores in its secret
 // backend. Together they're enough to round-trip authenticated
 // requests against any S3-compatible endpoint.
+//
+// Layout choice: mus uploads to a SINGLE bucket; the per-deposit
+// data_project becomes a key prefix inside it. So configured once
+// per user/lab (e.g. `anthive4a`), and `mus s3 upload` writes
+// objects at `s3://<bucket>/<data_project>/<basename>`.
 type Config struct {
 	Endpoint  string // e.g. "https://s3.eu-central-1.amazonaws.com" or "https://minio.lab.example/"
 	Region    string // e.g. "us-east-1", or "auto" for many MinIO setups
+	Bucket    string // e.g. "anthive4a" — the one bucket mus writes to
 	AccessKey string
 	SecretKey string
 }
@@ -51,6 +57,7 @@ type Config struct {
 func (c *Config) Normalize() {
 	c.Endpoint = strings.TrimSpace(c.Endpoint)
 	c.Region = strings.TrimSpace(c.Region)
+	c.Bucket = strings.TrimSpace(c.Bucket)
 	c.AccessKey = strings.TrimSpace(c.AccessKey)
 	// SecretKey: trim surrounding whitespace only; never alter the
 	// body (might genuinely contain odd characters).
@@ -79,6 +86,9 @@ func (c Config) Validate() error {
 	}
 	if c.Region == "" {
 		missing = append(missing, "region")
+	}
+	if c.Bucket == "" {
+		missing = append(missing, "bucket")
 	}
 	if c.AccessKey == "" {
 		missing = append(missing, "access key")
