@@ -93,6 +93,13 @@ func runS3Upload(cmd *cobra.Command, args []string, message string, forceH5adGat
 				a, filepath.Ext(a))
 		}
 	}
+	// Refuse multi-source-folder invocations up-front: each folder
+	// would build a `mus_metadata_<stamp>.tar.gz` with the same
+	// basename under the same `<data_project>/` prefix and the
+	// second PUT would overwrite the first.
+	if err := requireSingleSourceFolder(args); err != nil {
+		return err
+	}
 
 	// Cascade → data_project → bucket name. data_project is also
 	// required for the iRODS path component; reuse the same lookup

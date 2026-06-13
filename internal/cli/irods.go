@@ -263,6 +263,27 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 			"⚠ --force-h5ad-upload set — h5ad sanity-check gate BYPASSED for this batch")
 	}
 
+	// Refuse multi-source-folder FILE invocations up-front: each
+	// file's source folder produces a `mus_metadata_<stamp>.tar.gz`
+	// with the same basename, and they'd collide in the single
+	// iRODS collection target. Folder args use a different code
+	// path (uploadFolderDirect / Archived) and are exempt.
+	var fileArgs []string
+	for _, a := range args {
+		abs, absErr := filepath.Abs(a)
+		if absErr != nil {
+			continue
+		}
+		st, statErr := os.Stat(abs)
+		if statErr != nil || st.IsDir() || sidecar.IsSidecar(abs) {
+			continue
+		}
+		fileArgs = append(fileArgs, abs)
+	}
+	if err := requireSingleSourceFolder(fileArgs); err != nil {
+		return err
+	}
+
 	fmt.Fprintf(os.Stderr, "→ remote collection: %s\n", remoteCollection)
 	if err := client.Mkdir(ctx, remoteCollection); err != nil {
 		return fmt.Errorf("imkdir %s: %w", remoteCollection, err)

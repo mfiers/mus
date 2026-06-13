@@ -191,6 +191,40 @@ func equalStrings(a, b []string) bool {
 	return true
 }
 
-// _ keeps the strings import alive for any future test that adds
-// a string-shape assertion.
-var _ = strings.Contains
+func TestRequireSingleSourceFolder_Accepts(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.h5ad")
+	b := filepath.Join(dir, "b.h5ad")
+	for _, p := range []string{a, b} {
+		writeTestFile(t, p, "x")
+	}
+	if err := requireSingleSourceFolder([]string{a, b}); err != nil {
+		t.Errorf("single folder rejected: %v", err)
+	}
+	if err := requireSingleSourceFolder(nil); err != nil {
+		t.Errorf("empty args rejected: %v", err)
+	}
+	if err := requireSingleSourceFolder([]string{a}); err != nil {
+		t.Errorf("single file rejected: %v", err)
+	}
+}
+
+func TestRequireSingleSourceFolder_RejectsMultiFolder(t *testing.T) {
+	dir1 := t.TempDir()
+	dir2 := t.TempDir()
+	a := filepath.Join(dir1, "a.h5ad")
+	b := filepath.Join(dir2, "b.h5ad")
+	for _, p := range []string{a, b} {
+		writeTestFile(t, p, "x")
+	}
+	err := requireSingleSourceFolder([]string{a, b})
+	if err == nil {
+		t.Fatal("multi-folder upload should be rejected")
+	}
+	msg := err.Error()
+	for _, want := range []string{"refusing", "mus_metadata_", dir1, dir2} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error message missing %q: %s", want, msg)
+		}
+	}
+}

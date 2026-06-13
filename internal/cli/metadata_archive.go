@@ -31,10 +31,47 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"codeberg.org/mfiers/mus/internal/sidecar"
 )
+
+// requireSingleSourceFolder returns an error if `args` resolve to
+// more than one distinct source folder. Each source folder produces
+// its own `mus_metadata_<stamp>.tar.gz` archive with an identical
+// basename inside one `mus … upload` invocation. They'd collide on
+// the remote (same key under the same data_project prefix on S3,
+// same name in the same iRODS collection), with the second upload
+// silently overwriting the first. Refusing up-front avoids the
+// silent data loss — caller runs the upload once per source folder.
+func requireSingleSourceFolder(args []string) error {
+	folders := map[string]bool{}
+	var examples []string
+	for _, a := range args {
+		abs, err := filepath.Abs(a)
+		if err != nil {
+			return fmt.Errorf("resolve path %s: %w", a, err)
+		}
+		dir := filepath.Dir(abs)
+		if folders[dir] {
+			continue
+		}
+		folders[dir] = true
+		examples = append(examples, dir)
+	}
+	if len(folders) <= 1 {
+		return nil
+	}
+	sort.Strings(examples)
+	return fmt.Errorf(
+		"upload spans %d source folders — refusing.\n"+
+			"  The per-folder metadata archive (mus_metadata_<stamp>.tar.gz) would\n"+
+			"  share a basename between folders and clobber on the remote.\n"+
+			"  Re-run `mus ... upload` once per source folder.\n"+
+			"  folders seen:\n    %s",
+		len(folders), strings.Join(examples, "\n    "))
+}
 
 // MetadataArchiveName returns the canonical filename for the
 // metadata archive a single `mus … upload` invocation produces.
