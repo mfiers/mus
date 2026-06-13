@@ -303,18 +303,31 @@ the catalog (anthive) accepts only files that pass it.
 
        mus s3 login                                        # one-time setup
        mus s3 upload -m "ingest into anthive" mydata.h5ad  # per deposit
+       mus s3 upload -m "site banner" --static banner.png  # static-only OK
 
-       h5ad-only. Mus writes to a single bucket configured at login
-       time (e.g. 'anthive4a'), with data_project as the key prefix:
+       Positional args MUST be .h5ad. Mus writes to a single bucket
+       configured at login time (e.g. 'anthive4a'), with data_project
+       as the key prefix. S3 layout is flat — the only two subfolders
+       mus ever creates are <data_project>/ and <data_project>/static/:
 
          s3://anthive4a/Fiers2025/mydata.h5ad
          s3://anthive4a/Fiers2025/mus_metadata_<stamp>.tar.gz
+         s3://anthive4a/Fiers2025/static/<basename>          (--static)
 
-       The S3 archive bundles EVERYTHING the catalog ingester needs
-       (folder mus.cfg, folder index.md, per-primary .h5ad.mus +
-       sibling .h5ad.md). Hard-gated on the same 'mus h5ad check'
-       PASS as iRODS upload. 'mus_*' metadata also lands on each S3
-       object as x-amz-meta-* headers, mirroring the AVU set.
+       --static FILE (repeatable) uploads any file to
+       <data_project>/static/<basename>. Use for auxiliary assets
+       (figures, JSON, PDFs) that the anthive web view needs but
+       that aren't biology data themselves. Static uploads carry no
+       biology AVU and skip the h5ad gate; only the upload message
+       lands as x-amz-meta. Static-only invocations (no .h5ad
+       positionals) are accepted — supply --static FILE.
+
+       The S3 metadata archive bundles EVERYTHING the catalog
+       ingester needs for the h5ad deposit (folder mus.cfg, folder
+       index.md, per-primary .h5ad.mus + sibling .h5ad.md). Hard-
+       gated on the same 'mus h5ad check' PASS as iRODS upload.
+       'mus_*' biology metadata lands on each h5ad S3 object as
+       x-amz-meta-* headers, mirroring the AVU set.
 
 8. EXTRACT (anthive ingest, or any catalog reader)
    ------------------------------------------------

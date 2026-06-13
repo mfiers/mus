@@ -28,6 +28,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -43,32 +44,43 @@ import (
 func newS3UploadCmd() *cobra.Command {
 	var message string
 	var forceH5adGate bool
+	var staticFiles []string
 	cmd := &cobra.Command{
-		Use:   "upload -m MESSAGE FILE [FILE...]",
-		Short: "upload h5ad file(s) to s3://<bucket>/<data_project>/",
-		Long: "Uploads each .h5ad file to the bucket configured by `mus s3 login`,\n" +
-			"with data_project from the cascade as the key prefix. Final path:\n" +
-			"s3://<configured_bucket>/<data_project>/<basename>.\n\n" +
-			"Strict gates — every file must pass ALL of:\n\n" +
+		Use:   "upload -m MESSAGE [--static FILE]... [FILE...]",
+		Short: "upload h5ad and/or static file(s) to s3://<bucket>/<data_project>/",
+		Long: "Uploads each .h5ad positional arg to the bucket configured by\n" +
+			"`mus s3 login`, with data_project from the cascade as the key prefix.\n" +
+			"Final layout (the only two subfolders mus ever writes):\n\n" +
+			"  s3://<configured_bucket>/<data_project>/<basename>.h5ad\n" +
+			"  s3://<configured_bucket>/<data_project>/mus_metadata_<stamp>.tar.gz\n" +
+			"  s3://<configured_bucket>/<data_project>/static/<basename>   (--static)\n\n" +
+			"Strict gates — every .h5ad arg must pass ALL of:\n\n" +
 			"  - filename ends in .h5ad\n" +
 			"  - sidecar carries a fresh `mus h5ad check` PASS (file sha +\n" +
 			"    vocab sha + check version all current)\n" +
 			"  - data_project is set in the cascade (used as the key prefix)\n" +
 			"  - configured bucket exists on S3\n" +
 			"  - -m / --message describes why this upload is happening\n\n" +
-			"Mus_* metadata (organism, tissue, technology, …) is stamped on\n" +
-			"the S3 object as x-amz-meta-* headers, mirroring the iRODS AVU\n" +
-			"set. The local *.h5ad.mus sidecar gets s3_url / s3_bucket /\n" +
-			"s3_key / s3_etag / s3_uploaded_at written.\n\n" +
+			"--static FILE (repeatable) uploads any file to <data_project>/static/.\n" +
+			"Static files are auxiliary assets (images, JSON, etc) — no h5ad gate,\n" +
+			"no sidecar update, only the upload message lands as x-amz-meta. Run\n" +
+			"with --static alone (no positional args) for a static-only upload.\n\n" +
+			"Mus_* biology metadata (organism, tissue, technology, …) is stamped\n" +
+			"on h5ad S3 objects as x-amz-meta-* headers, mirroring the iRODS AVU\n" +
+			"set. The local *.h5ad.mus sidecar gets s3_url / s3_bucket / s3_key /\n" +
+			"s3_etag / s3_uploaded_at written.\n\n" +
 			"--force-h5ad-upload bypasses the h5ad PASS gate (NOT recommended\n" +
 			"— depositor's responsibility to know what they're skipping).",
-		Args: cobra.MinimumNArgs(1),
+		Args: cobra.MinimumNArgs(0),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			msg := strings.TrimSpace(message)
 			if msg == "" {
 				return fmt.Errorf("`mus s3 upload` requires a -m / --message describing why this upload is happening")
 			}
-			return runS3Upload(cmd, args, msg, forceH5adGate)
+			if len(args) == 0 && len(staticFiles) == 0 {
+				return fmt.Errorf("`mus s3 upload` requires at least one .h5ad file or --static FILE")
+			}
+			return runS3Upload(cmd, args, staticFiles, msg, forceH5adGate)
 		},
 	}
 	cmd.Flags().StringVarP(&message, "message", "m", "",
@@ -76,27 +88,83 @@ func newS3UploadCmd() *cobra.Command {
 	_ = cmd.MarkFlagRequired("message")
 	cmd.Flags().BoolVar(&forceH5adGate, "force-h5ad-upload", false,
 		"bypass the .h5ad sanity-check gate (NOT recommended — depositor's responsibility)")
+	cmd.Flags().StringArrayVarP(&staticFiles, "static", "s", nil,
+		"additional file to upload to <data_project>/static/ (repeatable; basename is the S3 key)")
 	return cmd
 }
 
-func runS3Upload(cmd *cobra.Command, args []string, message string, forceH5adGate bool) error {
+// s3KeyFor builds the canonical S3 key under data_project. subfolder
+// must be one of "" (the data_project root) or "static" (auxiliary
+// assets). basename MUST be a final path component, never a path —
+// that's the invariant that keeps S3 layout flat to two known
+// subfolders. Coding-bug violations panic with a clear message.
+func s3KeyFor(dataProject, subfolder, basename string) string {
+	if strings.ContainsAny(basename, "/\\") {
+		panic(fmt.Sprintf(
+			"s3KeyFor: basename must be a final path component, got %q", basename))
+	}
+	switch subfolder {
+	case "":
+		return dataProject + "/" + basename
+	case "static":
+		return dataProject + "/static/" + basename
+	default:
+		panic(fmt.Sprintf(
+			"s3KeyFor: unknown subfolder %q (allowed: \"\", \"static\")", subfolder))
+	}
+}
+
+// validateStaticFiles checks that every --static path is a regular
+// existing file with a unique basename across the list (since they
+// all land in the same <data_project>/static/ prefix and a duplicate
+// basename would silently clobber).
+func validateStaticFiles(paths []string) error {
+	seen := map[string]string{}
+	for _, p := range paths {
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			return fmt.Errorf("--static %s: %w", p, err)
+		}
+		st, err := os.Stat(abs)
+		if err != nil {
+			return fmt.Errorf("--static %s: %w", p, err)
+		}
+		if st.IsDir() {
+			return fmt.Errorf("--static %s: is a directory (only regular files)", p)
+		}
+		base := filepath.Base(abs)
+		if prev, dup := seen[base]; dup {
+			return fmt.Errorf(
+				"--static collision: %s and %s share basename %q "+
+					"(both would land at <data_project>/static/%s — refusing)",
+				prev, abs, base, base)
+		}
+		seen[base] = abs
+	}
+	return nil
+}
+
+func runS3Upload(cmd *cobra.Command, args, staticFiles []string, message string, forceH5adGate bool) error {
 	stdout := cmd.OutOrStdout()
 	stderr := cmd.ErrOrStderr()
 	ctx := cmd.Context()
 
-	// Pre-flight: every file must be an .h5ad (the spec scope is
-	// h5ad-only). Catch typos / non-h5ad args before doing any
-	// network work.
+	// Pre-flight: every positional must be an .h5ad. --static files
+	// are validated separately and may have any extension.
 	for _, a := range args {
 		if !strings.HasSuffix(a, ".h5ad") {
-			return fmt.Errorf("%s: `mus s3 upload` only accepts .h5ad files (got %s)",
+			return fmt.Errorf("%s: positional args must be .h5ad (use --static for any other file; got %s)",
 				a, filepath.Ext(a))
 		}
+	}
+	if err := validateStaticFiles(staticFiles); err != nil {
+		return err
 	}
 	// Refuse multi-source-folder invocations up-front: each folder
 	// would build a `mus_metadata_<stamp>.tar.gz` with the same
 	// basename under the same `<data_project>/` prefix and the
-	// second PUT would overwrite the first.
+	// second PUT would overwrite the first. Applies to .h5ad
+	// positionals only — --static files don't generate archives.
 	if err := requireSingleSourceFolder(args); err != nil {
 		return err
 	}
@@ -189,10 +257,9 @@ func runS3Upload(cmd *cobra.Command, args []string, message string, forceH5adGat
 		stampBioFromEnv(doc, env)
 
 		// Key layout: <data_project>/<basename> within the
-		// configured bucket. Forward slashes are the S3 prefix
-		// separator on every provider; filepath.Join would be wrong
-		// on Windows (\) so we build the key manually.
-		key := dataProject + "/" + filepath.Base(abs)
+		// configured bucket. s3KeyFor enforces the no-subfolder
+		// invariant — see its doc.
+		key := s3KeyFor(dataProject, "", filepath.Base(abs))
 		meta := s3MetadataFromDoc(doc, message)
 
 		fmt.Fprintf(stdout, "→ s3://%s/%s\n", cfg.Bucket, key)
@@ -232,12 +299,37 @@ func runS3Upload(cmd *cobra.Command, args []string, message string, forceH5adGat
 			cleanup()
 			continue // nothing to archive
 		}
-		archiveKey := dataProject + "/" + filepath.Base(archivePath)
+		archiveKey := s3KeyFor(dataProject, "", filepath.Base(archivePath))
 		fmt.Fprintf(stdout, "  + s3://%s/%s\n", cfg.Bucket, archiveKey)
 		if _, err := client.Upload(ctx, cfg.Bucket, archiveKey, archivePath, nil); err != nil {
 			fmt.Fprintf(stderr, "  ⚠ metadata archive upload failed: %v — primaries already uploaded\n", err)
 		}
 		cleanup()
+	}
+
+	// Static files: upload to <data_project>/static/<basename>. They
+	// carry only mus_upload_message — no biology AVU, no sidecar
+	// update, no h5ad gate. The catalog ingester treats this prefix
+	// as auxiliary assets (figures, JSON, README PDFs, etc).
+	if len(staticFiles) > 0 {
+		staticMeta := map[string]string{}
+		if msg := strings.TrimSpace(message); msg != "" && !strings.ContainsAny(msg, "\r\n") {
+			staticMeta["mus_upload_message"] = msg
+		}
+		for _, raw := range staticFiles {
+			abs, err := filepath.Abs(raw)
+			if err != nil {
+				return err
+			}
+			key := s3KeyFor(dataProject, "static", filepath.Base(abs))
+			fmt.Fprintf(stdout, "→ s3://%s/%s\n", cfg.Bucket, key)
+			result, err := client.Upload(ctx, cfg.Bucket, key, abs, staticMeta)
+			if err != nil {
+				fmt.Fprintf(stderr, "  ✘ static upload failed for %s: %v\n", abs, err)
+				return err
+			}
+			fmt.Fprintf(stdout, "  ✓ etag=%s\n", strings.Trim(result.ETag, `"`))
+		}
 	}
 	return nil
 }
