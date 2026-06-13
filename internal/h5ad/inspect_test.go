@@ -117,3 +117,82 @@ func TestEmbeddedScriptIsValidPython(t *testing.T) {
 		t.Errorf("mus_h5ad_inspector.py missing anndata dep declaration in the script block")
 	}
 }
+
+func TestParseInspectorErrorJSON_FindsLastJSONLine(t *testing.T) {
+	// Real-world shape: progress lines + JSON blob.
+	buf := []byte("[mus h5ad] opening /tmp/a.h5ad in backed='r' mode…\n" +
+		`{"error": "Unable to synchronously open file (truncated file: eof = 112205824, sblock->base_addr = 0, stored_eof = 4510700254)", "type": "OSError"}` + "\n")
+	info := parseInspectorErrorJSON(buf)
+	if info == nil {
+		t.Fatal("expected error info; got nil")
+	}
+	if info.Type != "OSError" {
+		t.Errorf("type: got %q, want %q", info.Type, "OSError")
+	}
+	if !strings.Contains(info.Error, "truncated file") {
+		t.Errorf("error: missing 'truncated file': %q", info.Error)
+	}
+}
+
+func TestParseInspectorErrorJSON_ReturnsNilOnNoJSON(t *testing.T) {
+	if info := parseInspectorErrorJSON([]byte("[mus h5ad] just progress\n")); info != nil {
+		t.Errorf("expected nil; got %+v", info)
+	}
+	if info := parseInspectorErrorJSON(nil); info != nil {
+		t.Errorf("expected nil for empty input; got %+v", info)
+	}
+}
+
+func TestParseInspectorErrorJSON_SkipsMalformedJSON(t *testing.T) {
+	buf := []byte("[mus h5ad] opening x\n{not json}\n{\"error\":\"\",\"type\":\"X\"}\n{\"error\":\"hit\",\"type\":\"Y\"}\n")
+	info := parseInspectorErrorJSON(buf)
+	if info == nil {
+		t.Fatal("expected info")
+	}
+	if info.Error != "hit" || info.Type != "Y" {
+		t.Errorf("picked wrong line: %+v", info)
+	}
+}
+
+func TestProgressOnlyWriter_PassesThroughProgressAndDropsJSON(t *testing.T) {
+	var out strings.Builder
+	w := &progressOnlyWriter{out: &out}
+	chunks := []string{
+		"[mus h5ad] opening /tmp/a.h5ad…\n",
+		`{"error": "truncated", "type": "OSError"}` + "\n",
+		"[mus h5ad] aborting\n",
+	}
+	for _, c := range chunks {
+		if _, err := w.Write([]byte(c)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := out.String()
+	if !strings.Contains(got, "opening /tmp/a.h5ad") {
+		t.Errorf("progress line missing: %q", got)
+	}
+	if !strings.Contains(got, "aborting") {
+		t.Errorf("trailing progress missing: %q", got)
+	}
+	if strings.Contains(got, "truncated") || strings.Contains(got, "OSError") {
+		t.Errorf("JSON leaked into live stream: %q", got)
+	}
+}
+
+func TestProgressOnlyWriter_BuffersPartialLines(t *testing.T) {
+	var out strings.Builder
+	w := &progressOnlyWriter{out: &out}
+	// Split a progress line across two Write calls.
+	if _, err := w.Write([]byte("[mus h5ad] partial ")); err != nil {
+		t.Fatal(err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("unterminated line should not have flushed: %q", out.String())
+	}
+	if _, err := w.Write([]byte("rest\n")); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); got != "[mus h5ad] partial rest\n" {
+		t.Errorf("got %q", got)
+	}
+}

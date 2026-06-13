@@ -65,11 +65,11 @@ func newELNDisableCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "disable",
 		Short: "mark this folder (or your user) as non-ELN",
-		Long: "Writes eln_disabled=true to the local .env so `mus irods upload` and\n" +
-			"`mus s3 upload` stop demanding an ELN linkage in this folder.\n\n" +
-			"With --global, writes to ~/.config/mus/.env (XDG-aware) so the choice\n" +
-			"applies anywhere on this user account — useful if you simply don't\n" +
-			"have ELN access at all.\n\n" +
+		Long: "Writes eln_disabled=true to the local mus.cfg so `mus irods upload`\n" +
+			"and `mus s3 upload` stop demanding an ELN linkage in this folder.\n\n" +
+			"With --global, writes to ~/.config/mus/mus.cfg (XDG-aware) so the\n" +
+			"choice applies anywhere on this user account — useful if you simply\n" +
+			"don't have ELN access at all.\n\n" +
 			"Either form is reversible via `mus eln enable [--global]`. Running\n" +
 			"`mus eln link <ID>` in this folder also clears the local marker.",
 		Args: cobra.NoArgs,
@@ -78,7 +78,7 @@ func newELNDisableCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&global, "global", false,
-		"write to ~/.config/mus/.env instead of the current folder")
+		"write to ~/.config/mus/mus.cfg instead of the current folder")
 	return cmd
 }
 
@@ -105,7 +105,7 @@ func runELNDisable(cmd *cobra.Command, global bool) error {
 		return err
 	}
 	fmt.Fprintf(cmd.OutOrStdout(),
-		"eln_disabled=true written to %s/.env\n"+
+		"eln_disabled=true written to %s/mus.cfg\n"+
 			"  this folder will no longer demand ELN setup.\n"+
 			"  run `mus eln enable` to undo, or `mus eln link <ID>` to link an experiment.\n",
 		dir)
@@ -119,16 +119,17 @@ func newELNEnableCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "enable",
 		Short: "undo a previous `mus eln disable`",
-		Long: "Removes the eln_disabled key from the local .env (or, with --global,\n" +
-			"from ~/.config/mus/.env). After this, `mus irods upload` will again\n" +
-			"demand a linkage (`mus eln link <ID>`) for this folder.",
+		Long: "Removes the eln_disabled key from the local mus.cfg (or, with\n" +
+			"--global, from ~/.config/mus/mus.cfg). After this, `mus irods\n" +
+			"upload` will again demand a linkage (`mus eln link <ID>`) for\n" +
+			"this folder.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runELNEnable(cmd, global)
 		},
 	}
 	cmd.Flags().BoolVar(&global, "global", false,
-		"clear ~/.config/mus/.env instead of the current folder's .env")
+		"clear ~/.config/mus/mus.cfg instead of the current folder's mus.cfg")
 	return cmd
 }
 
@@ -153,6 +154,6 @@ func runELNEnable(cmd *cobra.Command, global bool) error {
 		return err
 	}
 	fmt.Fprintf(cmd.OutOrStdout(),
-		"removed eln_disabled from %s/.env (if it was set)\n", dir)
+		"removed eln_disabled from %s/mus.cfg (if it was set)\n", dir)
 	return nil
 }

@@ -44,36 +44,42 @@ func newH5adCmd() *cobra.Command {
 
 func newH5adCheckCmd() *cobra.Command {
 	var force bool
+	var hideSoft bool
 	cmd := &cobra.Command{
 		Use:   "check FILE",
 		Short: "validate an .h5ad against the lab ingestion spec",
 		Long: "FILE is the path to a .h5ad data file (passing the sidecar path\n" +
 			"<file>.h5ad.mus also works — mus resolves to the data file).\n\n" +
 			"Reads experiment metadata (organism / celltype / technology / …) from\n" +
-			"the cascading .env walking up from the file's directory, plus per-file\n" +
-			"overrides from <file>.h5ad.mus if present.\n\n" +
+			"the cascading mus.cfg walking up from the file's directory (legacy\n" +
+			".env still read), plus per-file overrides from <file>.h5ad.mus.\n\n" +
 			"If the sidecar already records a passed inspection AND the file's\n" +
 			"sha256 hasn't changed since, the previous PASS is reused and anndata is\n" +
 			"NOT re-run. Override with --force to re-inspect anyway.\n\n" +
 			"Otherwise: streams the embedded Python helper via `uv run --script` to\n" +
 			"open the file in backed='r' mode, applies §1.1-§1.4 structural rules,\n" +
-			"validates metadata against the controlled vocabulary (see `mus vocab`),\n" +
-			"prints a tiered HARD/SOFT/INFO report, and on PASS stamps the sidecar\n" +
-			"with the h5ad_* block + the file's sha256 as h5ad_inspected_sha256.\n\n" +
+			"validates metadata against the controlled vocabulary (see\n" +
+			"`mus vocab show`), prints a tiered HARD/SOFT/INFO report, and on PASS\n" +
+			"stamps the sidecar with the h5ad_* block + the file's sha256 as\n" +
+			"h5ad_inspected_sha256.\n\n" +
+			"--hide-soft suppresses the SOFT findings group (HARD + INFO still\n" +
+			"print). Useful for CI / quick passes; SOFT shows by default.\n\n" +
 			"Exit code is 0 on PASS (cached or fresh), 1 on any HARD finding.\n\n" +
 			"Requires `uv` on PATH for the inspection path; see\n" +
 			"https://docs.astral.sh/uv/ for the installer.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runH5adCheck(cmd, args[0], force)
+			return runH5adCheck(cmd, args[0], force, hideSoft)
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false,
 		"re-run anndata inspection even when the sidecar records a passed inspection at the current sha256")
+	cmd.Flags().BoolVar(&hideSoft, "hide-soft", false,
+		"suppress SOFT findings in the report (HARD + INFO still print)")
 	return cmd
 }
 
-func runH5adCheck(cmd *cobra.Command, arg string, force bool) error {
+func runH5adCheck(cmd *cobra.Command, arg string, force, hideSoft bool) error {
 	abs, err := filepath.Abs(arg)
 	if err != nil {
 		return err
@@ -122,7 +128,7 @@ func runH5adCheck(cmd *cobra.Command, arg string, force bool) error {
 	if err != nil {
 		return err
 	}
-	printReport(stdout, report)
+	printReport(stdout, report, hideSoft)
 
 	if report.HasHard() {
 		return fmt.Errorf("h5ad check failed: %d HARD finding(s) — fix and re-run",
@@ -375,7 +381,23 @@ func hasAnyBio(m *h5ad.Metadata) bool {
 }
 
 // printReport renders a Report as human-readable output to w.
-func printReport(w io.Writer, r *h5ad.Report) {
+// When hideSoft is true, SOFT findings are suppressed (HARD and
+// INFO still print). Inspector-failure reports always print only
+// the HARD section regardless of hideSoft.
+func printReport(w io.Writer, r *h5ad.Report, hideSoft bool) {
+	// Inspector-failure path: no Inspection report at all, and the
+	// only Issue in the bag is the cannot-inspect HARD finding
+	// (check.go REPLACES every prior metadata issue with that one).
+	// Show ONLY the HARD section plus a remediation hint — skip
+	// SOFT / INFO entirely.
+	if r.Inspection == nil && r.HasHard() {
+		printIssueGroup(w, "HARD", r.Hard(), "✘")
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "  inspector did not run — downstream checks skipped.")
+		fmt.Fprintln(w, "  Fix the file (or correct the path) then re-run `mus h5ad check`.")
+		fmt.Fprintln(w)
+		return
+	}
 	if r.Inspection != nil {
 		fmt.Fprintf(w, "\n%s\n", r.H5adPath)
 		fmt.Fprintf(w, "  n_obs=%d n_vars=%d layers=%s embedding=%s anndata=%s\n",
@@ -385,7 +407,9 @@ func printReport(w io.Writer, r *h5ad.Report) {
 			or(r.Inspection.AnnDataVersion, "?"))
 	}
 	printIssueGroup(w, "HARD", r.Hard(), "✘")
-	printIssueGroup(w, "SOFT", r.Soft(), "⚠")
+	if !hideSoft {
+		printIssueGroup(w, "SOFT", r.Soft(), "⚠")
+	}
 	printIssueGroup(w, "INFO", r.Info(), "·")
 	if !r.HasHard() {
 		fmt.Fprintln(w, "\n✓ no HARD findings — file passes the ingestion spec")

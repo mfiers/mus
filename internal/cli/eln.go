@@ -292,19 +292,19 @@ func newELNLinkCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "link EXPERIMENT_ID",
 		Aliases: []string{"tag"}, // muscle-memory alias; same code path
-		Short:   "link the current folder to an ELN experiment (writes .env)",
+		Short:   "link the current folder to an ELN experiment (writes mus.cfg)",
 		Long: "Fetches project / study / experiment names from the ELN API and writes\n" +
 			"eln_experiment_id / eln_experiment_name / eln_study_id / eln_study_name /\n" +
-			"eln_project_id / eln_project_name into the current folder's .env.\n\n" +
+			"eln_project_id / eln_project_name into the current folder's mus.cfg.\n\n" +
 			"EXPERIMENT_ID is the numeric eLabJournal experiment ID. To find it:\n" +
 			"  - open the experiment in the web UI; the ID is the digits at the\n" +
 			"    end of the URL, e.g. https://vib.elabjournal.com/.../experiment/12345\n" +
 			"  - or hover the experiment in a list view — same digits in the link.\n\n" +
 			"Also prompts for a `data_project` name (format e.g. Fiers2025), needed\n" +
-			"by `mus irods upload`. If `data_project` is already in the .env cascade\n" +
-			"it's reused silently (override with --data-project). Previous mappings for\n" +
-			"the same experiment ID are remembered across folders so you only\n" +
-			"confirm once.\n\n" +
+			"by `mus irods upload`. If `data_project` is already in the mus.cfg /\n" +
+			"legacy .env cascade it's reused silently (override with --data-project).\n" +
+			"Previous mappings for the same experiment ID are remembered across\n" +
+			"folders so you only confirm once.\n\n" +
 			"Clears any `eln_disabled` flag in this folder (link implies enable).\n\n" +
 			"Refuses to overwrite an existing linkage; use `mus eln update` to refresh\n" +
 			"after a server-side rename, or --force to relink to a different experiment.",
@@ -415,10 +415,10 @@ func runELNLink(cmd *cobra.Command, expIDRaw string, force bool, explicitDataPro
 	if localEnv.Has("eln_disabled") {
 		if err := config.Unset(dir, "eln_disabled"); err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(),
-				"WARNING: could not clear eln_disabled in local .env: %v\n", err)
+				"WARNING: could not clear eln_disabled in local mus.cfg: %v\n", err)
 		} else {
 			fmt.Fprintln(cmd.OutOrStdout(),
-				"cleared eln_disabled in local .env (link implies enable)")
+				"cleared eln_disabled in local mus.cfg (link implies enable)")
 		}
 	}
 	return nil
@@ -427,7 +427,7 @@ func runELNLink(cmd *cobra.Command, expIDRaw string, force bool, explicitDataPro
 // resolveDataProject picks the data_project for an experiment, in priority:
 //
 //  1. Explicit --data-project flag (skip prompt; validate; persist mapping).
-//  2. data_project already in this folder's .env (no prompt; just keep it).
+//  2. data_project already in this folder's mus.cfg / legacy .env (no prompt; just keep it).
 //  3. Cross-folder cache (~/.local/share/mus/eln_mappings.json) — propose
 //     the cached value and ask for confirmation.
 //  4. ELN-derived suggestion (first-collaborator surname + current year) —
@@ -471,12 +471,12 @@ func resolveDataProject(cmd *cobra.Command, expIDStr string, info *eln.Experimen
 		return explicit, nil
 	}
 
-	// 2. Already in the .env cascade — acknowledge and reuse.
+	// 2. Already in the cascade — acknowledge and reuse.
 	if existing != "" {
 		if err := dataproject.ValidateName(existing); err != nil {
-			return "", fmt.Errorf("existing data_project in .env cascade: %w", err)
+			return "", fmt.Errorf("existing data_project in cascade: %w", err)
 		}
-		fmt.Fprintf(stdout, "using existing data_project=%s (from .env cascade)\n", existing)
+		fmt.Fprintf(stdout, "using existing data_project=%s (from mus.cfg cascade)\n", existing)
 		_ = store.Remember(expIDStr, existing, info.ExperimentName)
 		pushStage2(ctx, ironClient, store, remotePath, stderr)
 		return existing, nil
@@ -580,7 +580,7 @@ func promptForDataProject(stdin io.Reader, stdout io.Writer, suggestion, source 
 func newELNUpdateCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "update",
-		Short: "refresh ELN metadata in local .env from the server",
+		Short: "refresh ELN metadata in local mus.cfg from the server",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runELNUpdate(cmd.OutOrStdout())
 		},
@@ -598,7 +598,7 @@ func runELNUpdate(stdout io.Writer) error {
 	}
 	idStr := env.String("eln_experiment_id")
 	if idStr == "" {
-		return errors.New("no eln_experiment_id in .env cascade — run `mus eln link <ID>` first")
+		return errors.New("no eln_experiment_id in cascade — run `mus eln link <ID>` first")
 	}
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {

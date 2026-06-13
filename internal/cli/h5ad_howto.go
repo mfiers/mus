@@ -82,7 +82,7 @@ the catalog (anthive) accepts only files that pass it.
        https://codeberg.org/mfiers/mus/raw/branch/main/vocabulary/main.yaml
    Matching is case-insensitive, and _ ≡ - ≡ space (so
    'prefrontal_cortex', 'prefrontal-cortex', and 'Prefrontal Cortex'
-   all match the same entry). 'mus vocab' prints the active lists.
+   all match the same entry). 'mus vocab show' prints the active lists.
    New term needed? File an issue on the mus repo to add it; do not
    invent locally.
 
@@ -369,8 +369,9 @@ the catalog (anthive) accepts only files that pass it.
 10. SHORTCUTS
     ---------
        mus h5ad check FILE          # validate + stamp PASS
-       mus vocab                    # active joint vocabulary
-       mus vocab --refresh          # re-pull vocab from upstream
+       mus vocab show               # active joint vocabulary (every field)
+       mus vocab show tissue        # one field's allowed values
+       mus vocab refresh            # force re-pull from upstream
        mus config show              # effective cascade values
        mus config files             # paths of every mus.cfg that contributes
        mus irods find --help        # AVU query flags

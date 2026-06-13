@@ -310,7 +310,7 @@ func TestRunH5adCheck_NonH5adArg(t *testing.T) {
 	if err := os.WriteFile(csv, []byte("a,b\n1,2"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	err := runH5adCheck(newTestCmd(), csv, false)
+	err := runH5adCheck(newTestCmd(), csv, false, false)
 	if err == nil {
 		t.Fatal("expected error on non-.h5ad arg, got nil")
 	}
@@ -335,7 +335,7 @@ func TestRunH5adCheck_SidecarArgResolvesToData(t *testing.T) {
 	if err := os.WriteFile(scPath, []byte("# empty"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	err := runH5adCheck(newTestCmd(), scPath, false)
+	err := runH5adCheck(newTestCmd(), scPath, false, false)
 	if err == nil {
 		t.Fatal("expected error when data file is missing")
 	}

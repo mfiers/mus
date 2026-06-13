@@ -12,6 +12,7 @@ import (
 
 	"codeberg.org/mfiers/mus/internal/config"
 	"codeberg.org/mfiers/mus/internal/upgradecheck"
+	"codeberg.org/mfiers/mus/internal/vocab"
 )
 
 // Build-time variables, populated via -ldflags. See Makefile.
@@ -58,6 +59,10 @@ func NewRootCmd() *cobra.Command {
 				autoMigrateCascade(cwd, cmd.ErrOrStderr())
 			}
 		}
+		// Best-effort background refresh of the local vocabulary
+		// cache when it's stale (>24h) or missing. Fire-and-forget;
+		// failures are silent. MUS_SKIP_VOCAB_REFRESH=1 opts out.
+		vocab.BackgroundRefresh()
 		return nil
 	}
 

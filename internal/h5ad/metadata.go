@@ -285,8 +285,8 @@ func ValidateMetadata(m *Metadata, v *vocab.Vocabulary) []Issue {
 				Severity: SeverityHard,
 				Field:    f,
 				Message: fmt.Sprintf(
-					"required field %q is missing — set %s=… in a .env "+
-						"(project-wide) or in <file>.h5ad.mus (file-specific)",
+					"required field %q is missing — `mus config set %s …` "+
+						"(folder-wide) or edit <file>.h5ad.mus (file-specific)",
 					f, f),
 			})
 		}

@@ -140,25 +140,26 @@ func (p *PythonInspector) Inspect(ctx context.Context, h5adPath string) (*Inspec
 	cmd := exec.CommandContext(ctx, uv, "run", "--quiet", "--script", script, h5adPath)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
-	// Tee stderr: capture for failure diagnostics AND stream live to
-	// the user's progress sink (typically os.Stderr) so they see the
-	// "[mus h5ad] …" lines as they happen.
+	// Tee stderr: ALL lines go to the capture buffer (for failure
+	// diagnostics + JSON-error parsing), but the live progress sink
+	// only sees the "[mus h5ad] …" progress lines. This keeps the
+	// error JSON blob from being shown to the user TWICE (once live,
+	// once parsed and re-emitted as a structured error).
 	if p.ProgressOut != nil {
-		cmd.Stderr = io.MultiWriter(&stderr, p.ProgressOut)
+		cmd.Stderr = io.MultiWriter(&stderr, &progressOnlyWriter{out: p.ProgressOut})
 	} else {
 		cmd.Stderr = &stderr
 	}
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
-			// Try to parse the stderr JSON.
-			var errInfo struct {
-				Error string `json:"error"`
-				Type  string `json:"type"`
-			}
-			if jsonErr := json.Unmarshal(stderr.Bytes(), &errInfo); jsonErr == nil && errInfo.Error != "" {
+			// Python helper emits the error blob as one JSON line at
+			// the end of stderr, after any "[mus h5ad] …" progress
+			// lines. Scan backwards for the last `{...}` line and
+			// parse just that.
+			if info := parseInspectorErrorJSON(stderr.Bytes()); info != nil {
 				return nil, fmt.Errorf("h5ad inspect failed (%s): %s",
-					errInfo.Type, errInfo.Error)
+					info.Type, info.Error)
 			}
 			return nil, fmt.Errorf("h5ad inspect failed (exit %d): %s",
 				exitErr.ExitCode(), bytes.TrimSpace(stderr.Bytes()))
@@ -175,6 +176,75 @@ func (p *PythonInspector) Inspect(ctx context.Context, h5adPath string) (*Inspec
 			report.SchemaVersion)
 	}
 	return report, nil
+}
+
+// --- stderr handling -------------------------------------------------------
+
+// inspectorErrorInfo is what the Python helper emits as a single
+// JSON line on stderr when it can't produce a report.
+type inspectorErrorInfo struct {
+	Error string `json:"error"`
+	Type  string `json:"type"`
+}
+
+// parseInspectorErrorJSON scans the captured stderr buffer for the
+// last line that starts with '{' and parses it as the inspector's
+// error JSON blob. Returns nil if no such line is found or it
+// doesn't carry the expected fields.
+//
+// The Python helper writes any number of "[mus h5ad] …" progress
+// lines to stderr before (on failure) emitting one final JSON line.
+// Unmarshalling the WHOLE buffer fails because of the progress
+// prefix — hence this line-scanning helper.
+func parseInspectorErrorJSON(buf []byte) *inspectorErrorInfo {
+	lines := bytes.Split(buf, []byte("\n"))
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := bytes.TrimSpace(lines[i])
+		if len(line) == 0 || line[0] != '{' {
+			continue
+		}
+		var info inspectorErrorInfo
+		if err := json.Unmarshal(line, &info); err != nil {
+			continue
+		}
+		if info.Error == "" {
+			continue
+		}
+		return &info
+	}
+	return nil
+}
+
+// progressOnlyWriter passes through only lines that look like
+// progress output from the Python helper (those starting with
+// "[mus h5ad]"). Everything else is silently dropped from the live
+// stream — the capture buffer still has it for diagnostics.
+//
+// Buffered line-by-line: partial writes accumulate until a '\n'
+// arrives. A final unterminated partial line is dropped (the
+// inspector always newline-terminates its output, so this case
+// only arises if the process is killed mid-write).
+type progressOnlyWriter struct {
+	out io.Writer
+	buf []byte
+}
+
+func (w *progressOnlyWriter) Write(p []byte) (int, error) {
+	w.buf = append(w.buf, p...)
+	for {
+		idx := bytes.IndexByte(w.buf, '\n')
+		if idx < 0 {
+			return len(p), nil
+		}
+		line := w.buf[:idx+1]
+		w.buf = w.buf[idx+1:]
+		trimmed := bytes.TrimLeft(line, " \t")
+		if bytes.HasPrefix(trimmed, []byte("[mus h5ad]")) {
+			if _, err := w.out.Write(line); err != nil {
+				return len(p), err
+			}
+		}
+	}
 }
 
 // --- Stub inspector for tests ----------------------------------------------

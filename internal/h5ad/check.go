@@ -108,11 +108,18 @@ func RunChecks(ctx context.Context, h5adPath string, opts CheckOptions) (*Report
 	}
 	report, ierr := opts.Inspector.Inspect(ctx, h5adPath)
 	if ierr != nil {
-		r.Issues = append(r.Issues, Issue{
+		// Inspector failure dominates: REPLACE any metadata findings
+		// gathered above with the single cannot-inspect issue. The
+		// metadata complaints are noise when the file itself can't
+		// be opened — the depositor has to fix the file before any
+		// downstream check is meaningful. printReport renders this
+		// case specially (no SOFT / INFO sections, with a
+		// "re-run after fixing" hint).
+		r.Issues = []Issue{{
 			Severity: SeverityHard,
 			Field:    "h5ad",
 			Message:  fmt.Sprintf("cannot inspect %s: %v", h5adPath, ierr),
-		})
+		}}
 		return r, nil
 	}
 	r.Inspection = report

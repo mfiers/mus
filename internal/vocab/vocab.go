@@ -166,7 +166,9 @@ func normalizeForMatch(s string) string {
 }
 
 // Embedded returns the build-time vocabulary directly, without any
-// network/cache work. Handy for tests and `mus vocab --embedded`.
+// network/cache work. Used in tests; the CLI exposes the same data
+// via the "embedded" Source returned by Load when network + cache
+// both fail.
 func Embedded() (*Vocabulary, error) {
 	return Parse(embeddedYAML)
 }

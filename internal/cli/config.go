@@ -17,7 +17,7 @@ import (
 func newConfigCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
-		Short: "manage .mus TOML config (cascading)",
+		Short: "manage cascading mus.cfg folder config",
 	}
 	cmd.AddCommand(
 		newConfigShowCmd(),
@@ -80,8 +80,8 @@ func newConfigSetCmd() *cobra.Command {
 	var force bool
 	cmd := &cobra.Command{
 		Use:   "set KEY VALUE",
-		Short: "set a key in the local .env",
-		Long: "Writes KEY=VALUE to the local folder's .env.\n\n" +
+		Short: "set a key in the local mus.cfg",
+		Long: "Writes KEY=VALUE to the local folder's mus.cfg (creating it if needed).\n\n" +
 			"For keys with a controlled vocabulary (organism, tissue, technology, " +
 			"cell_type, disease, suspension_type, sex, access, source, license):\n" +
 			"  - case-only differences are silently canonicalised\n" +
@@ -505,15 +505,15 @@ func isKnownConfigKey(key string) bool {
 func newConfigUnsetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "unset KEY",
-		Short: "remove a key from the local .env",
-		Long: "Removes KEY from the local folder's .env. Preserves any\n" +
+		Short: "remove a key from the local mus.cfg",
+		Long: "Removes KEY from the local folder's mus.cfg. Preserves any\n" +
 			"comments and blank lines in the file. If removing KEY leaves\n" +
 			"the file with no keys AND no comments (only whitespace), the\n" +
 			"file is deleted; otherwise it's kept with the surviving\n" +
 			"content.\n\n" +
-			"This is local-only — keys inherited from parent .env files\n" +
-			"are not touched. To remove a key from a parent, run\n" +
-			"`mus -C PARENT_DIR config unset KEY`.",
+			"This is local-only — keys inherited from parent mus.cfg files\n" +
+			"(or legacy .env in the cascade) are not touched. To remove a\n" +
+			"key from a parent, run `mus -C PARENT_DIR config unset KEY`.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			key := args[0]
@@ -529,7 +529,7 @@ func newConfigUnsetCmd() *cobra.Command {
 func newConfigFilesCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "files",
-		Short: "list .mus files in the cascade (root first)",
+		Short: "list mus.cfg / .env files in the cascade (root first)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir, err := workingDir(cmd)
 			if err != nil {
