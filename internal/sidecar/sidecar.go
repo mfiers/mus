@@ -261,6 +261,12 @@ func parseOpts() envformat.Options {
 	return envformat.Options{ListKeys: sidecarListKeys}
 }
 
+// ParseOpts returns the envformat options used when parsing sidecar
+// files. Exposed so external callers (e.g. the S3 upload's collapsed
+// sidecar builder) can re-use the same list-key discipline when
+// merging cascade keys with sidecar keys.
+func ParseOpts() envformat.Options { return parseOpts() }
+
 // Read parses a sidecar file. Returns os.IsNotExist-compatible error if
 // missing.
 func Read(path string) (*Doc, error) {

@@ -36,6 +36,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"codeberg.org/mfiers/mus/internal/config"
+	"codeberg.org/mfiers/mus/internal/envformat"
 	"codeberg.org/mfiers/mus/internal/hashcache"
 	"codeberg.org/mfiers/mus/internal/s3client"
 	"codeberg.org/mfiers/mus/internal/sidecar"
@@ -50,20 +51,31 @@ func newS3UploadCmd() *cobra.Command {
 		Use:   "upload -m MESSAGE [--subfolder NAME] [--static FILE]... [FILE...]",
 		Short: "upload h5ad and/or static file(s) to s3://<bucket>/<data_project>/",
 		Long: "Uploads each .h5ad positional arg to the bucket configured by\n" +
-			"`mus s3 login`, with data_project from the cascade as the key prefix.\n" +
-			"Layout — mus writes at depth ≤ 1 beneath <data_project>/:\n\n" +
-			"  s3://<bucket>/<data_project>/<basename>.h5ad             (no --subfolder)\n" +
-			"  s3://<bucket>/<data_project>/<subfolder>/<basename>.h5ad (with --subfolder NAME)\n" +
-			"  s3://<bucket>/<data_project>/[<subfolder>/]mus_metadata_<stamp>.tar.gz\n" +
-			"  s3://<bucket>/<data_project>/static/<basename>           (--static FILE)\n\n" +
-			"--subfolder NAME (optional) writes the .h5ad and its metadata\n" +
-			"archive under <data_project>/NAME/. Single path segment only;\n" +
+			"`mus s3 login`. Every mus S3 upload lands under the fixed staging\n" +
+			"prefix `__incoming/<data_project>/…` — depositor (or downstream)\n" +
+			"later promotes from there to the proper catalog location.\n\n" +
+			"Layout:\n\n" +
+			"  s3://<bucket>/__incoming/<data_project>/<basename>.h5ad             (no --subfolder)\n" +
+			"  s3://<bucket>/__incoming/<data_project>/<basename>.h5ad.mus         (collapsed sidecar; next to each h5ad)\n" +
+			"  s3://<bucket>/__incoming/<data_project>/<subfolder>/<basename>.h5ad (with --subfolder NAME)\n" +
+			"  s3://<bucket>/__incoming/<data_project>/static/<basename>           (--static FILE)\n\n" +
+			"COLLAPSED SIDECAR (.h5ad.mus next to each h5ad):\n" +
+			"Single KEY=VALUE file holding the EFFECTIVE metadata at upload\n" +
+			"time — every mus.cfg key in the cascade (root-most → deepest,\n" +
+			"deeper overrides) overlaid with the file's own .h5ad.mus (sidecar\n" +
+			"wins for scalar conflicts; list keys merge per the cascade\n" +
+			"semantics). Includes the freshly-stamped s3_* block. Replaces the\n" +
+			"previous tar.gz archive — a downstream `mv` keeps data + .mus\n" +
+			"paired and the metadata is plain KEY=VALUE, no unpacking needed.\n\n" +
+			"--subfolder NAME (optional): writes the h5ad + its collapsed\n" +
+			"sidecar under <data_project>/NAME/. Single path segment only;\n" +
 			"\"static\", \".\", and \"..\" are reserved / refused.\n\n" +
-			"--static FILE (repeatable) ALWAYS lands at <data_project>/static/\n" +
-			"regardless of --subfolder. Static files are auxiliary assets\n" +
-			"(images, JSON, PDFs) — no h5ad gate, no sidecar update, only the\n" +
-			"upload message lands as x-amz-meta. Static-only invocations (no\n" +
-			"positional args) are accepted.\n\n" +
+			"--static FILE (repeatable): ALWAYS lands at\n" +
+			"__incoming/<data_project>/static/<basename> regardless of\n" +
+			"--subfolder. Static files are auxiliary assets (images, JSON,\n" +
+			"PDFs) — no h5ad gate, no sidecar update, no collapsed sidecar\n" +
+			"uploaded. Only the upload message lands as x-amz-meta. Static-only\n" +
+			"invocations (no positional args) are accepted.\n\n" +
 			"Strict gates — every .h5ad positional must pass ALL of:\n\n" +
 			"  - filename ends in .h5ad\n" +
 			"  - sidecar carries a fresh `mus h5ad check` PASS (file sha +\n" +
@@ -128,27 +140,82 @@ func validateSubfolder(raw string) (string, error) {
 	return s, nil
 }
 
-// s3KeyFor builds the canonical S3 key under data_project. subfolder
-// is one of: "" (the data_project root), "static" (auxiliary
+// s3IncomingPrefix is the staging prefix every mus S3 upload lands
+// under. By policy, mus only writes to this prefix — the depositor
+// (or some downstream process) later promotes the data to its final
+// location. Hard-coded, NOT configurable: keeping all in-flight
+// deposits under one well-known prefix is the whole point.
+const s3IncomingPrefix = "__incoming"
+
+// s3KeyFor builds the canonical S3 key for a mus deposit. The key
+// shape is always:
+//
+//	__incoming/<data_project>/[<subfolder>/]<basename>
+//
+// subfolder is one of: "" (data_project root), "static" (auxiliary
 // --static uploads), or a depositor-supplied single-segment name
-// from --subfolder. basename MUST be a final path component, never
-// a path — coding-bug violations panic with a clear message. The
-// "no path separators in subfolder" check is a belt-and-braces
-// rerun of validateSubfolder so callers can't ship a path through
-// by accident.
+// from --subfolder. basename MUST be a final path component —
+// coding-bug violations panic with a clear message. The "no path
+// separators in subfolder" check is a belt-and-braces rerun of
+// validateSubfolder so callers can't ship a path through by
+// accident.
 func s3KeyFor(dataProject, subfolder, basename string) string {
 	if strings.ContainsAny(basename, "/\\") {
 		panic(fmt.Sprintf(
 			"s3KeyFor: basename must be a final path component, got %q", basename))
 	}
 	if subfolder == "" {
-		return dataProject + "/" + basename
+		return s3IncomingPrefix + "/" + dataProject + "/" + basename
 	}
 	if strings.ContainsAny(subfolder, "/\\") {
 		panic(fmt.Sprintf(
 			"s3KeyFor: subfolder must be a single segment, got %q", subfolder))
 	}
-	return dataProject + "/" + subfolder + "/" + basename
+	return s3IncomingPrefix + "/" + dataProject + "/" + subfolder + "/" + basename
+}
+
+// buildCollapsedSidecar produces the per-h5ad metadata blob that
+// rides alongside the primary on S3. It's a single KEY=VALUE flat
+// file (same grammar as the .h5ad.mus sidecar) holding the
+// EFFECTIVE metadata for this file at upload time:
+//
+//   - every mus.cfg key in the cascade (root-most first; deeper
+//     overrides shallower) is the base layer
+//   - the file's own .h5ad.mus sidecar is overlaid on top — sidecar
+//     wins for any scalar conflict; list-typed keys merge with the
+//     usual append/`-prefix-removal` cascade semantics
+//
+// The result is what a fresh `mus config show` plus the freshly-
+// stamped Bio/H5ad/S3 blocks would jointly say. Used in place of
+// the per-folder tar.gz archive on the S3 path — the depositor's
+// downstream "move to proper location" step can read one .mus per
+// h5ad instead of unpacking an archive.
+//
+// MUST be called AFTER the primary has uploaded and the local
+// sidecar has been re-written with the fresh s3_* block, so the
+// snapshot carries the S3 pointer.
+func buildCollapsedSidecar(h5adPath string) ([]byte, error) {
+	dir := filepath.Dir(h5adPath)
+	env, err := config.Load(dir)
+	if err != nil {
+		return nil, fmt.Errorf("load cascade for %s: %w", dir, err)
+	}
+	merged := env.All()
+
+	scPath := sidecar.SidecarPath(h5adPath)
+	raw, err := os.ReadFile(scPath)
+	if err != nil {
+		return nil, fmt.Errorf("read sidecar %s: %w", scPath, err)
+	}
+	sidecarMap, err := envformat.Parse(raw, sidecar.ParseOpts())
+	if err != nil {
+		return nil, fmt.Errorf("parse sidecar %s: %w", scPath, err)
+	}
+	envformat.Resolve(sidecarMap, sidecar.ParseOpts())
+
+	// Sidecar overlays cascade: most-specific source wins.
+	envformat.MergeInto(merged, sidecarMap, sidecar.ParseOpts())
+	return envformat.Marshal(merged)
 }
 
 // validateStaticFiles checks that every --static path is a regular
@@ -198,10 +265,9 @@ func runS3Upload(cmd *cobra.Command, args, staticFiles []string, subfolder, mess
 		return err
 	}
 	// Refuse multi-source-folder invocations up-front: each folder
-	// would build a `mus_metadata_<stamp>.tar.gz` with the same
-	// basename under the same `<data_project>/` prefix and the
-	// second PUT would overwrite the first. Applies to .h5ad
-	// positionals only — --static files don't generate archives.
+	// has its own cascade, and the collapsed sidecars on S3 would
+	// quietly inherit whatever cwd the depositor happened to be in.
+	// Run once per source folder so the cascade matches.
 	if err := requireSingleSourceFolder(args); err != nil {
 		return err
 	}
@@ -264,17 +330,10 @@ func runS3Upload(cmd *cobra.Command, args, staticFiles []string, subfolder, mess
 			cfg.Bucket, cfg.Endpoint)
 	}
 
-	// One invocation = one timestamp shared across every metadata
-	// archive built this run, so a batch of files from multiple
-	// folders produces a coherent set of dated archives.
-	invocationStamp := time.Now().UTC()
-	// Track primaries per source folder so we can build one
-	// archive per folder AFTER all primaries from that folder
-	// have uploaded (sidecars refreshed with s3_* block first).
-	primariesByFolder := map[string][]string{}
-
-	// Upload loop — primaries only. Companions go up later via
-	// the per-folder metadata archive.
+	// Upload loop — primaries + a per-h5ad collapsed sidecar. The
+	// sidecar carries the merged cascade + freshly-stamped s3_*
+	// block, so the depositor can later move data + .mus together
+	// without losing context.
 	for _, raw := range args {
 		abs, err := filepath.Abs(raw)
 		if err != nil {
@@ -293,8 +352,8 @@ func runS3Upload(cmd *cobra.Command, args, staticFiles []string, subfolder, mess
 		// even when the sidecar hasn't been re-stamped recently.
 		stampBioFromEnv(doc, env)
 
-		// Key layout: <data_project>/[<subfolder>/]<basename>.
-		// subfolder is the validated --subfolder flag (empty ⇒ root).
+		// Key layout: __incoming/<data_project>/[<subfolder>/]<basename>.
+		// subfolder is the validated --subfolder flag (empty ⇒ data_project root).
 		key := s3KeyFor(dataProject, subfolder, filepath.Base(abs))
 		meta := s3MetadataFromDoc(doc, message)
 
@@ -306,7 +365,8 @@ func runS3Upload(cmd *cobra.Command, args, staticFiles []string, subfolder, mess
 		}
 		fmt.Fprintf(stdout, "  ✓ etag=%s\n", strings.Trim(result.ETag, `"`))
 
-		// Refresh sidecar with S3 pointer.
+		// Refresh sidecar with S3 pointer BEFORE building the
+		// collapsed .mus so the snapshot includes s3_url / s3_etag.
 		if doc.S3 == nil {
 			doc.S3 = &sidecar.S3{}
 		}
@@ -318,29 +378,42 @@ func runS3Upload(cmd *cobra.Command, args, staticFiles []string, subfolder, mess
 		if err := sidecar.Write(scPath, doc); err != nil {
 			return fmt.Errorf("update sidecar %s: %w", scPath, err)
 		}
-		primariesByFolder[filepath.Dir(abs)] = append(primariesByFolder[filepath.Dir(abs)], abs)
-	}
 
-	// Per source folder: build the metadata archive (now with
-	// freshly-updated sidecars) and PUT it. Archive failures log
-	// a warning but don't roll back the primary uploads — the
-	// data + AVU / x-amz-meta has already landed.
-	for folder, primaries := range primariesByFolder {
-		archivePath, cleanup, err := buildMetadataArchive(folder, primaries, invocationStamp, true)
+		// Build the collapsed .mus (cascade + local sidecar merged
+		// into one KEY=VALUE blob) and upload next to the primary.
+		// Collapsed-sidecar failures log but do NOT roll back the
+		// primary — data + x-amz-meta have already landed.
+		collapsed, err := buildCollapsedSidecar(abs)
 		if err != nil {
-			fmt.Fprintf(stderr, "  ⚠ metadata archive build failed for %s: %v\n", folder, err)
+			fmt.Fprintf(stderr,
+				"  ⚠ collapsed sidecar build failed for %s: %v — primary already uploaded\n",
+				abs, err)
 			continue
 		}
-		if archivePath == "" {
-			cleanup()
-			continue // nothing to archive
+		sidecarKey := s3KeyFor(dataProject, subfolder, filepath.Base(scPath))
+		tmpFile, err := os.CreateTemp("", "mus-collapsed-sidecar-*.mus")
+		if err != nil {
+			fmt.Fprintf(stderr,
+				"  ⚠ tempfile for collapsed sidecar failed for %s: %v\n", abs, err)
+			continue
 		}
-		archiveKey := s3KeyFor(dataProject, subfolder, filepath.Base(archivePath))
-		fmt.Fprintf(stdout, "  + s3://%s/%s\n", cfg.Bucket, archiveKey)
-		if _, err := client.Upload(ctx, cfg.Bucket, archiveKey, archivePath, nil); err != nil {
-			fmt.Fprintf(stderr, "  ⚠ metadata archive upload failed: %v — primaries already uploaded\n", err)
+		tmpPath := tmpFile.Name()
+		_, writeErr := tmpFile.Write(collapsed)
+		closeErr := tmpFile.Close()
+		if writeErr != nil || closeErr != nil {
+			os.Remove(tmpPath)
+			fmt.Fprintf(stderr,
+				"  ⚠ write collapsed sidecar failed for %s: %v / %v\n",
+				abs, writeErr, closeErr)
+			continue
 		}
-		cleanup()
+		fmt.Fprintf(stdout, "  + s3://%s/%s\n", cfg.Bucket, sidecarKey)
+		if _, err := client.Upload(ctx, cfg.Bucket, sidecarKey, tmpPath, meta); err != nil {
+			fmt.Fprintf(stderr,
+				"  ⚠ collapsed sidecar upload failed for %s: %v — primary already uploaded\n",
+				abs, err)
+		}
+		os.Remove(tmpPath)
 	}
 
 	// Static files: upload to <data_project>/static/<basename>. They

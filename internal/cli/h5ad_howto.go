@@ -305,30 +305,40 @@ the catalog (anthive) accepts only files that pass it.
        mus s3 upload -m "ingest into anthive" mydata.h5ad  # per deposit
        mus s3 upload -m "site banner" --static banner.png  # static-only OK
 
-       Positional args MUST be .h5ad. Mus writes to a single bucket
-       configured at login time (e.g. 'anthive4a'), with data_project
-       as the key prefix. S3 layout is at depth ≤ 1 below
-       <data_project>/:
+       Every S3 upload lands under the fixed staging prefix
+       __incoming/<data_project>/… — the depositor (or a downstream
+       process) later moves the data to its catalog home. Positional
+       args MUST be .h5ad.
 
-         s3://anthive4a/Fiers2025/mydata.h5ad                (default)
-         s3://anthive4a/Fiers2025/mus_metadata_<stamp>.tar.gz
-         s3://anthive4a/Fiers2025/rev2/mydata.h5ad           (--subfolder rev2)
-         s3://anthive4a/Fiers2025/rev2/mus_metadata_<stamp>.tar.gz
-         s3://anthive4a/Fiers2025/static/<basename>          (--static)
+         s3://<bucket>/__incoming/Fiers2025/mydata.h5ad           (default)
+         s3://<bucket>/__incoming/Fiers2025/mydata.h5ad.mus       (collapsed sidecar)
+         s3://<bucket>/__incoming/Fiers2025/rev2/mydata.h5ad      (--subfolder rev2)
+         s3://<bucket>/__incoming/Fiers2025/rev2/mydata.h5ad.mus
+         s3://<bucket>/__incoming/Fiers2025/static/<basename>     (--static)
+
+       NEXT TO EACH H5AD: a single collapsed .mus file holding the
+       EFFECTIVE metadata at upload time — every cascading mus.cfg
+       key (root-most → deepest) overlaid with the per-file
+       .h5ad.mus sidecar. Same KEY=VALUE grammar mus already uses;
+       no archive, no unpack step. The S3 block (s3_url / s3_etag /
+       …) is included so the .mus follows the data when promoted
+       to its final location.
 
        --subfolder NAME (optional, single segment) writes the .h5ad
-       and its metadata archive under <data_project>/NAME/ instead
-       of the data_project root. Useful for revisions, drafts,
-       embargoed releases. 'static', '.', '..' and any name
-       containing a path separator are refused.
+       and its collapsed sidecar under
+       __incoming/<data_project>/NAME/ instead of the
+       data_project root. Useful for revisions, drafts, embargoed
+       releases. 'static', '.', '..' and any name containing a path
+       separator are refused.
 
        --static FILE (repeatable) ALWAYS lands at
-       <data_project>/static/<basename> regardless of --subfolder.
-       Use for auxiliary assets (figures, JSON, PDFs) that the
-       anthive web view needs but that aren't biology data
-       themselves. Static uploads carry no biology AVU and skip the
-       h5ad gate; only the upload message lands as x-amz-meta.
-       Static-only invocations (no .h5ad positionals) are accepted.
+       __incoming/<data_project>/static/<basename> regardless of
+       --subfolder. Use for auxiliary assets (figures, JSON, PDFs)
+       that the anthive web view needs but that aren't biology data
+       themselves. Static uploads carry no biology AVU, skip the
+       h5ad gate, and don't produce a collapsed sidecar; only the
+       upload message lands as x-amz-meta. Static-only invocations
+       (no .h5ad positionals) are accepted.
 
        The S3 metadata archive bundles EVERYTHING the catalog
        ingester needs for the h5ad deposit (folder mus.cfg, folder

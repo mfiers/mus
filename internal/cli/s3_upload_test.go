@@ -15,13 +15,16 @@ func TestS3KeyFor_AllShapes(t *testing.T) {
 		basename  string
 		want      string
 	}{
-		{"root", "Fiers2025", "", "data.h5ad", "Fiers2025/data.h5ad"},
-		{"static", "Fiers2025", "static", "logo.png", "Fiers2025/static/logo.png"},
-		{"custom-subfolder", "Fiers2025", "rev2", "data.h5ad", "Fiers2025/rev2/data.h5ad"},
-		{"archive-root", "X2025", "", "mus_metadata_2026-06-13T10-12-00Z.tar.gz",
-			"X2025/mus_metadata_2026-06-13T10-12-00Z.tar.gz"},
-		{"archive-in-subfolder", "X2025", "rev2", "mus_metadata_2026-06-13T10-12-00Z.tar.gz",
-			"X2025/rev2/mus_metadata_2026-06-13T10-12-00Z.tar.gz"},
+		{"root", "Fiers2025", "", "data.h5ad",
+			"__incoming/Fiers2025/data.h5ad"},
+		{"static", "Fiers2025", "static", "logo.png",
+			"__incoming/Fiers2025/static/logo.png"},
+		{"custom-subfolder", "Fiers2025", "rev2", "data.h5ad",
+			"__incoming/Fiers2025/rev2/data.h5ad"},
+		{"collapsed-sidecar-root", "X2025", "", "data.h5ad.mus",
+			"__incoming/X2025/data.h5ad.mus"},
+		{"collapsed-sidecar-in-subfolder", "X2025", "rev2", "data.h5ad.mus",
+			"__incoming/X2025/rev2/data.h5ad.mus"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -144,5 +147,60 @@ func TestValidateStaticFiles_RejectsDuplicateBasename(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error missing %q: %s", want, err.Error())
 		}
+	}
+}
+
+func TestBuildCollapsedSidecar_MergesCascadeAndSidecar(t *testing.T) {
+	dir := t.TempDir()
+	// Folder-level mus.cfg sets data_project + organism + a list field.
+	if err := os.WriteFile(filepath.Join(dir, "mus.cfg"),
+		[]byte("data_project=Fiers2025\norganism=human\ntissue=brain,cortex\n"),
+		0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Primary + sidecar. Sidecar overrides organism and adds an
+	// s3 block.
+	h5ad := filepath.Join(dir, "carlo.h5ad")
+	if err := os.WriteFile(h5ad, []byte("fake"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sidecarBody := strings.Join([]string{
+		"sha256=abc",
+		"size=12345",
+		"organism=mouse",
+		"s3_bucket=anthive4a",
+		"s3_key=__incoming/Fiers2025/carlo.h5ad",
+		"s3_etag=etag123",
+		"",
+	}, "\n")
+	if err := os.WriteFile(h5ad+".mus", []byte(sidecarBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	collapsed, err := buildCollapsedSidecar(h5ad)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(collapsed)
+
+	// Sidecar wins for scalars.
+	if !strings.Contains(text, "organism=mouse") {
+		t.Errorf("sidecar override missing: %s", text)
+	}
+	// Cascade-only keys preserved.
+	if !strings.Contains(text, "data_project=Fiers2025") {
+		t.Errorf("data_project missing: %s", text)
+	}
+	// Sidecar S3 block present.
+	if !strings.Contains(text, "s3_etag=etag123") {
+		t.Errorf("s3 block missing: %s", text)
+	}
+	// File-level sha256 from sidecar present.
+	if !strings.Contains(text, "sha256=abc") {
+		t.Errorf("file sha256 missing: %s", text)
+	}
+	// List-typed key from cascade present (any order, comma-joined).
+	if !strings.Contains(text, "tissue=") {
+		t.Errorf("tissue list missing: %s", text)
 	}
 }
