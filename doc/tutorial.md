@@ -469,13 +469,14 @@ Every `mus … upload` invocation refuses if args span more than one source fold
     - `mus.cfg` — folder's own config, if any
     - `<basename>.mus` — one per uploaded primary
   - AVU on every uploaded iRODS object — strict-vocab metadata, queryable via `iron query` and `mus irods find`
-- **S3** — `mus s3 upload`; positional args must be `.h5ad`, plus optional `--static FILE` (repeatable):
-  - `<file>.h5ad` → `s3://<bucket>/<data_project>/<basename>.h5ad`
-  - `mus_metadata_<UTC-timestamp>.tar.gz` → `s3://<bucket>/<data_project>/` — one archive bundling the full documentation set:
+- **S3** — `mus s3 upload`; positional args must be `.h5ad`, plus optional `--subfolder NAME` and `--static FILE` (repeatable):
+  - `<file>.h5ad` → `s3://<bucket>/<data_project>/[<subfolder>/]<basename>.h5ad`
+  - `mus_metadata_<UTC-timestamp>.tar.gz` → `s3://<bucket>/<data_project>/[<subfolder>/]` — one archive bundling the full documentation set:
     - `mus.cfg`, `index.md`, `<basename>.h5ad.mus`, `<basename>.h5ad.md`
-  - `--static FILE` → `s3://<bucket>/<data_project>/static/<basename>` — auxiliary assets (figures, JSON, PDFs); no biology AVU, no h5ad gate, no sidecar update. Static-only invocations (no `.h5ad` positionals) are accepted.
+  - `--subfolder NAME` (optional, single segment) places the `.h5ad` + archive under `<data_project>/NAME/` instead of the data_project root. Names `static`, `.`, `..` and anything containing a path separator are refused.
+  - `--static FILE` → `s3://<bucket>/<data_project>/static/<basename>` — **always** the `static/` prefix regardless of `--subfolder`. Auxiliary assets (figures, JSON, PDFs); no biology AVU, no h5ad gate, no sidecar update. Static-only invocations (no `.h5ad` positionals) are accepted.
   - `x-amz-meta-*` headers on every h5ad S3 object — same strict-vocab set as the iRODS AVU. Static objects carry only `mus_upload_message`.
-  - S3 layout is **flat to two subfolders**: `<data_project>/` and `<data_project>/static/`. Mus never writes deeper.
+  - S3 layout depth ≤ 1 beneath `<data_project>/`: mus never writes deeper than one segment.
 
 The legacy `.env` file is NOT included by either path — it can carry direnv-style shell secrets that don't belong on the catalog.
 

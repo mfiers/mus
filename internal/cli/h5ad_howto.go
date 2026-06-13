@@ -307,20 +307,28 @@ the catalog (anthive) accepts only files that pass it.
 
        Positional args MUST be .h5ad. Mus writes to a single bucket
        configured at login time (e.g. 'anthive4a'), with data_project
-       as the key prefix. S3 layout is flat — the only two subfolders
-       mus ever creates are <data_project>/ and <data_project>/static/:
+       as the key prefix. S3 layout is at depth ≤ 1 below
+       <data_project>/:
 
-         s3://anthive4a/Fiers2025/mydata.h5ad
+         s3://anthive4a/Fiers2025/mydata.h5ad                (default)
          s3://anthive4a/Fiers2025/mus_metadata_<stamp>.tar.gz
+         s3://anthive4a/Fiers2025/rev2/mydata.h5ad           (--subfolder rev2)
+         s3://anthive4a/Fiers2025/rev2/mus_metadata_<stamp>.tar.gz
          s3://anthive4a/Fiers2025/static/<basename>          (--static)
 
-       --static FILE (repeatable) uploads any file to
-       <data_project>/static/<basename>. Use for auxiliary assets
-       (figures, JSON, PDFs) that the anthive web view needs but
-       that aren't biology data themselves. Static uploads carry no
-       biology AVU and skip the h5ad gate; only the upload message
-       lands as x-amz-meta. Static-only invocations (no .h5ad
-       positionals) are accepted — supply --static FILE.
+       --subfolder NAME (optional, single segment) writes the .h5ad
+       and its metadata archive under <data_project>/NAME/ instead
+       of the data_project root. Useful for revisions, drafts,
+       embargoed releases. 'static', '.', '..' and any name
+       containing a path separator are refused.
+
+       --static FILE (repeatable) ALWAYS lands at
+       <data_project>/static/<basename> regardless of --subfolder.
+       Use for auxiliary assets (figures, JSON, PDFs) that the
+       anthive web view needs but that aren't biology data
+       themselves. Static uploads carry no biology AVU and skip the
+       h5ad gate; only the upload message lands as x-amz-meta.
+       Static-only invocations (no .h5ad positionals) are accepted.
 
        The S3 metadata archive bundles EVERYTHING the catalog
        ingester needs for the h5ad deposit (folder mus.cfg, folder

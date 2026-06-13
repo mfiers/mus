@@ -45,26 +45,32 @@ func newS3UploadCmd() *cobra.Command {
 	var message string
 	var forceH5adGate bool
 	var staticFiles []string
+	var subfolder string
 	cmd := &cobra.Command{
-		Use:   "upload -m MESSAGE [--static FILE]... [FILE...]",
+		Use:   "upload -m MESSAGE [--subfolder NAME] [--static FILE]... [FILE...]",
 		Short: "upload h5ad and/or static file(s) to s3://<bucket>/<data_project>/",
 		Long: "Uploads each .h5ad positional arg to the bucket configured by\n" +
 			"`mus s3 login`, with data_project from the cascade as the key prefix.\n" +
-			"Final layout (the only two subfolders mus ever writes):\n\n" +
-			"  s3://<configured_bucket>/<data_project>/<basename>.h5ad\n" +
-			"  s3://<configured_bucket>/<data_project>/mus_metadata_<stamp>.tar.gz\n" +
-			"  s3://<configured_bucket>/<data_project>/static/<basename>   (--static)\n\n" +
-			"Strict gates — every .h5ad arg must pass ALL of:\n\n" +
+			"Layout — mus writes at depth ≤ 1 beneath <data_project>/:\n\n" +
+			"  s3://<bucket>/<data_project>/<basename>.h5ad             (no --subfolder)\n" +
+			"  s3://<bucket>/<data_project>/<subfolder>/<basename>.h5ad (with --subfolder NAME)\n" +
+			"  s3://<bucket>/<data_project>/[<subfolder>/]mus_metadata_<stamp>.tar.gz\n" +
+			"  s3://<bucket>/<data_project>/static/<basename>           (--static FILE)\n\n" +
+			"--subfolder NAME (optional) writes the .h5ad and its metadata\n" +
+			"archive under <data_project>/NAME/. Single path segment only;\n" +
+			"\"static\", \".\", and \"..\" are reserved / refused.\n\n" +
+			"--static FILE (repeatable) ALWAYS lands at <data_project>/static/\n" +
+			"regardless of --subfolder. Static files are auxiliary assets\n" +
+			"(images, JSON, PDFs) — no h5ad gate, no sidecar update, only the\n" +
+			"upload message lands as x-amz-meta. Static-only invocations (no\n" +
+			"positional args) are accepted.\n\n" +
+			"Strict gates — every .h5ad positional must pass ALL of:\n\n" +
 			"  - filename ends in .h5ad\n" +
 			"  - sidecar carries a fresh `mus h5ad check` PASS (file sha +\n" +
 			"    vocab sha + check version all current)\n" +
 			"  - data_project is set in the cascade (used as the key prefix)\n" +
 			"  - configured bucket exists on S3\n" +
 			"  - -m / --message describes why this upload is happening\n\n" +
-			"--static FILE (repeatable) uploads any file to <data_project>/static/.\n" +
-			"Static files are auxiliary assets (images, JSON, etc) — no h5ad gate,\n" +
-			"no sidecar update, only the upload message lands as x-amz-meta. Run\n" +
-			"with --static alone (no positional args) for a static-only upload.\n\n" +
 			"Mus_* biology metadata (organism, tissue, technology, …) is stamped\n" +
 			"on h5ad S3 objects as x-amz-meta-* headers, mirroring the iRODS AVU\n" +
 			"set. The local *.h5ad.mus sidecar gets s3_url / s3_bucket / s3_key /\n" +
@@ -80,7 +86,11 @@ func newS3UploadCmd() *cobra.Command {
 			if len(args) == 0 && len(staticFiles) == 0 {
 				return fmt.Errorf("`mus s3 upload` requires at least one .h5ad file or --static FILE")
 			}
-			return runS3Upload(cmd, args, staticFiles, msg, forceH5adGate)
+			cleanSub, err := validateSubfolder(subfolder)
+			if err != nil {
+				return err
+			}
+			return runS3Upload(cmd, args, staticFiles, cleanSub, msg, forceH5adGate)
 		},
 	}
 	cmd.Flags().StringVarP(&message, "message", "m", "",
@@ -90,28 +100,55 @@ func newS3UploadCmd() *cobra.Command {
 		"bypass the .h5ad sanity-check gate (NOT recommended — depositor's responsibility)")
 	cmd.Flags().StringArrayVarP(&staticFiles, "static", "s", nil,
 		"additional file to upload to <data_project>/static/ (repeatable; basename is the S3 key)")
+	cmd.Flags().StringVar(&subfolder, "subfolder", "",
+		"write h5ad + metadata archive under <data_project>/<NAME>/ (single segment; 'static' is reserved)")
 	return cmd
 }
 
+// validateSubfolder sanitises the --subfolder flag value. Returns
+// "" for empty input (meaning "use the data_project root"). Errors
+// on multi-segment paths, "." / "..", or "static" (reserved for the
+// --static auxiliary-assets prefix).
+func validateSubfolder(raw string) (string, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", nil
+	}
+	if strings.ContainsAny(s, "/\\") {
+		return "", fmt.Errorf(
+			"--subfolder %q: must be a single path component (no '/' or '\\')", raw)
+	}
+	if s == "." || s == ".." {
+		return "", fmt.Errorf("--subfolder %q: '.' and '..' are not allowed", raw)
+	}
+	if s == "static" {
+		return "", fmt.Errorf(
+			"--subfolder %q: 'static' is reserved for --static uploads", raw)
+	}
+	return s, nil
+}
+
 // s3KeyFor builds the canonical S3 key under data_project. subfolder
-// must be one of "" (the data_project root) or "static" (auxiliary
-// assets). basename MUST be a final path component, never a path —
-// that's the invariant that keeps S3 layout flat to two known
-// subfolders. Coding-bug violations panic with a clear message.
+// is one of: "" (the data_project root), "static" (auxiliary
+// --static uploads), or a depositor-supplied single-segment name
+// from --subfolder. basename MUST be a final path component, never
+// a path — coding-bug violations panic with a clear message. The
+// "no path separators in subfolder" check is a belt-and-braces
+// rerun of validateSubfolder so callers can't ship a path through
+// by accident.
 func s3KeyFor(dataProject, subfolder, basename string) string {
 	if strings.ContainsAny(basename, "/\\") {
 		panic(fmt.Sprintf(
 			"s3KeyFor: basename must be a final path component, got %q", basename))
 	}
-	switch subfolder {
-	case "":
+	if subfolder == "" {
 		return dataProject + "/" + basename
-	case "static":
-		return dataProject + "/static/" + basename
-	default:
-		panic(fmt.Sprintf(
-			"s3KeyFor: unknown subfolder %q (allowed: \"\", \"static\")", subfolder))
 	}
+	if strings.ContainsAny(subfolder, "/\\") {
+		panic(fmt.Sprintf(
+			"s3KeyFor: subfolder must be a single segment, got %q", subfolder))
+	}
+	return dataProject + "/" + subfolder + "/" + basename
 }
 
 // validateStaticFiles checks that every --static path is a regular
@@ -144,7 +181,7 @@ func validateStaticFiles(paths []string) error {
 	return nil
 }
 
-func runS3Upload(cmd *cobra.Command, args, staticFiles []string, message string, forceH5adGate bool) error {
+func runS3Upload(cmd *cobra.Command, args, staticFiles []string, subfolder, message string, forceH5adGate bool) error {
 	stdout := cmd.OutOrStdout()
 	stderr := cmd.ErrOrStderr()
 	ctx := cmd.Context()
@@ -256,10 +293,9 @@ func runS3Upload(cmd *cobra.Command, args, staticFiles []string, message string,
 		// even when the sidecar hasn't been re-stamped recently.
 		stampBioFromEnv(doc, env)
 
-		// Key layout: <data_project>/<basename> within the
-		// configured bucket. s3KeyFor enforces the no-subfolder
-		// invariant — see its doc.
-		key := s3KeyFor(dataProject, "", filepath.Base(abs))
+		// Key layout: <data_project>/[<subfolder>/]<basename>.
+		// subfolder is the validated --subfolder flag (empty ⇒ root).
+		key := s3KeyFor(dataProject, subfolder, filepath.Base(abs))
 		meta := s3MetadataFromDoc(doc, message)
 
 		fmt.Fprintf(stdout, "→ s3://%s/%s\n", cfg.Bucket, key)
@@ -299,7 +335,7 @@ func runS3Upload(cmd *cobra.Command, args, staticFiles []string, message string,
 			cleanup()
 			continue // nothing to archive
 		}
-		archiveKey := s3KeyFor(dataProject, "", filepath.Base(archivePath))
+		archiveKey := s3KeyFor(dataProject, subfolder, filepath.Base(archivePath))
 		fmt.Fprintf(stdout, "  + s3://%s/%s\n", cfg.Bucket, archiveKey)
 		if _, err := client.Upload(ctx, cfg.Bucket, archiveKey, archivePath, nil); err != nil {
 			fmt.Fprintf(stderr, "  ⚠ metadata archive upload failed: %v — primaries already uploaded\n", err)
