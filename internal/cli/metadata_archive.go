@@ -96,8 +96,15 @@ func MetadataArchiveName(stamp time.Time) string {
 // Returns ("", noop, nil) when the archive would be empty (no
 // metadata files anywhere). Caller treats that as "nothing to
 // upload" rather than uploading an empty archive.
-func buildMetadataArchive(folder string, primaries []string, stamp time.Time) (string, func(), error) {
-	files := collectMetadataFiles(folder, primaries)
+//
+// includeMarkdown controls whether folder-level index.md and per-
+// primary sibling <basename>.md are bundled. S3 uploads include
+// them (catalog ingest wants the prose alongside the data); iRODS
+// uploads exclude them (.md files travel as standalone iRODS data
+// objects when the depositor passes them on the command line —
+// see `mus irods upload`).
+func buildMetadataArchive(folder string, primaries []string, stamp time.Time, includeMarkdown bool) (string, func(), error) {
+	files := collectMetadataFiles(folder, primaries, includeMarkdown)
 	if len(files) == 0 {
 		return "", func() {}, nil
 	}
@@ -135,7 +142,12 @@ func fileExists(p string) bool {
 // collectMetadataFiles returns the deterministic set of metadata
 // files to put in the per-folder archive, sorted for reproducible
 // archive bytes (helps debugging diffs).
-func collectMetadataFiles(folder string, primaries []string) []archiveEntry {
+//
+// includeMarkdown=false drops every .md (folder index.md and the
+// per-primary sibling <basename>.md) so the archive contains only
+// the structured metadata (mus.cfg + .mus sidecars). iRODS uses
+// that mode; .md travels as a standalone object instead.
+func collectMetadataFiles(folder string, primaries []string, includeMarkdown bool) []archiveEntry {
 	seen := map[string]bool{}
 	var out []archiveEntry
 
@@ -152,7 +164,9 @@ func collectMetadataFiles(folder string, primaries []string) []archiveEntry {
 
 	// Folder-level companions (once).
 	add(filepath.Join(folder, "mus.cfg"), "mus.cfg")
-	add(filepath.Join(folder, "index.md"), "index.md")
+	if includeMarkdown {
+		add(filepath.Join(folder, "index.md"), "index.md")
+	}
 
 	// Per-primary companions (sidecar + sibling .md).
 	for _, p := range primaries {
@@ -162,7 +176,9 @@ func collectMetadataFiles(folder string, primaries []string) []archiveEntry {
 		}
 		base := filepath.Base(abs)
 		add(sidecar.SidecarPath(abs), base+".mus")
-		add(abs+".md", base+".md")
+		if includeMarkdown {
+			add(abs+".md", base+".md")
+		}
 	}
 
 	sort.Slice(out, func(i, j int) bool { return out[i].RemoteName < out[j].RemoteName })

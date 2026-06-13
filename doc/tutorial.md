@@ -459,15 +459,23 @@ visible in `iron meta ls` and queryable via `iron query`. AVU is iRODS
 jargon for "attribute-value-unit" key-value metadata.
 
 **What travels with the upload:**
-- `<file>.h5ad` — the data, uploaded directly
-- `mus_metadata_<UTC-timestamp>.tar.gz` — ONE archive per source folder per `mus … upload` invocation, bundling all the documentation files (flat, no nested dirs):
-  - `<basename>.h5ad.mus` — the sidecar (sha256 + iRODS path / URL / PURL + cascade snapshot)
-  - `<basename>.h5ad.md` — per-file prose, if present
-  - `mus.cfg` — the folder's own config (cascade entries from parent dirs stay local)
-  - `index.md` — folder-level prose, if present
-- AVU on the iRODS object itself — the strict-vocab metadata, queryable via `iron query` and `mus irods find`. On S3, the same fields land as `x-amz-meta-*` headers.
 
-The archive form keeps the destination collection tidy (one data file + one docs archive per upload, instead of N+5 little objects) and makes a colleague's restore a single `tar -xzf` away. The legacy `.env` file is NOT included — it can carry direnv-style shell secrets that don't belong on the catalog.
+Every `mus … upload` invocation refuses if args span more than one source folder, and requires `data_project` on the cascade. Within that one folder, the deposit shape differs between iRODS and S3:
+
+- **iRODS** — `mus irods upload` accepts any file type:
+  - `<file>` — the data, uploaded directly (any extension; `.mus` sidecars passed as args are skipped — mus owns them)
+  - `<file>.md` — uploaded directly **only when explicitly passed**; not auto-bundled
+  - `mus_metadata_<UTC-timestamp>.tar.gz` — one archive holding ONLY the structured metadata:
+    - `mus.cfg` — folder's own config, if any
+    - `<basename>.mus` — one per uploaded primary
+  - AVU on every uploaded iRODS object — strict-vocab metadata, queryable via `iron query` and `mus irods find`
+- **S3** — `mus s3 upload` is `.h5ad`-only:
+  - `<file>.h5ad` — the data, uploaded directly
+  - `mus_metadata_<UTC-timestamp>.tar.gz` — one archive bundling the full documentation set:
+    - `mus.cfg`, `index.md`, `<basename>.h5ad.mus`, `<basename>.h5ad.md`
+  - `x-amz-meta-*` headers on every S3 object — same strict-vocab set as the iRODS AVU
+
+The legacy `.env` file is NOT included by either path — it can carry direnv-style shell secrets that don't belong on the catalog.
 
 ### Leave the `*.mus` sidecars in place
 

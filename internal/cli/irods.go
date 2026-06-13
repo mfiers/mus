@@ -470,14 +470,17 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 		})
 	}
 
-	// Per-folder metadata archive. Now that every primary in this
-	// invocation has a freshly-stamped sidecar (irods_* block
-	// populated), bundle metadata + push as one tar.gz per source
-	// folder. Failures here are non-fatal — data is already on the
-	// catalog with AVU stamped.
+	// Per-folder metadata archive. iRODS-flavoured: only the
+	// structured metadata (mus.cfg + per-primary .mus sidecars) goes
+	// in — .md files are NOT auto-bundled here; the depositor
+	// uploads those as standalone iRODS objects by passing them on
+	// the command line. Now that every primary in this invocation
+	// has a freshly-stamped sidecar (irods_* block populated),
+	// bundle + push as one tar.gz per source folder. Failures here
+	// are non-fatal — data is already on the catalog with AVU stamped.
 	if !opts.DryRun {
 		for folder, primaries := range primariesByFolder {
-			archivePath, cleanup, err := buildMetadataArchive(folder, primaries, invocationStamp)
+			archivePath, cleanup, err := buildMetadataArchive(folder, primaries, invocationStamp, false)
 			if err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(),
 					"  ⚠ metadata archive build failed for %s: %v\n", folder, err)

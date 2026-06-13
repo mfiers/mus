@@ -76,7 +76,7 @@ func TestBuildMetadataArchive_IncludesEveryRelevantFile(t *testing.T) {
 		filepath.Join(folder, "b.h5ad"),
 	}
 	stamp := time.Date(2026, 6, 13, 10, 12, 0, 0, time.UTC)
-	archivePath, cleanup, err := buildMetadataArchive(folder, primaries, stamp)
+	archivePath, cleanup, err := buildMetadataArchive(folder, primaries, stamp, true)
 	defer cleanup()
 	if err != nil {
 		t.Fatal(err)
@@ -104,7 +104,7 @@ func TestBuildMetadataArchive_SkipsMissingOptionals(t *testing.T) {
 	writeTestFile(t, filepath.Join(folder, "a.h5ad"), "fake")
 	writeTestFile(t, filepath.Join(folder, "a.h5ad.mus"), "sha256=abc\n")
 	primaries := []string{filepath.Join(folder, "a.h5ad")}
-	archivePath, cleanup, err := buildMetadataArchive(folder, primaries, time.Now())
+	archivePath, cleanup, err := buildMetadataArchive(folder, primaries, time.Now(), true)
 	defer cleanup()
 	if err != nil {
 		t.Fatal(err)
@@ -121,13 +121,44 @@ func TestBuildMetadataArchive_EmptyReturnsNoPath(t *testing.T) {
 	// Primary exists but no sidecar, no companions.
 	writeTestFile(t, filepath.Join(folder, "a.h5ad"), "fake")
 	primaries := []string{filepath.Join(folder, "a.h5ad")}
-	archivePath, cleanup, err := buildMetadataArchive(folder, primaries, time.Now())
+	archivePath, cleanup, err := buildMetadataArchive(folder, primaries, time.Now(), true)
 	defer cleanup()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if archivePath != "" {
 		t.Errorf("expected empty archive path; got %q", archivePath)
+	}
+}
+
+func TestBuildMetadataArchive_NoMarkdownDropsEveryMd(t *testing.T) {
+	folder := t.TempDir()
+	writeTestFile(t, filepath.Join(folder, "mus.cfg"), "data_project=X2025\n")
+	writeTestFile(t, filepath.Join(folder, "index.md"), "# folder prose\n")
+	for _, base := range []string{"a.h5ad", "b.h5ad"} {
+		writeTestFile(t, filepath.Join(folder, base), "x")
+		writeTestFile(t, filepath.Join(folder, base+".mus"), "sha256=abc\n")
+		writeTestFile(t, filepath.Join(folder, base+".md"), "# per-file\n")
+	}
+	primaries := []string{
+		filepath.Join(folder, "a.h5ad"),
+		filepath.Join(folder, "b.h5ad"),
+	}
+	// includeMarkdown=false ⇒ archive must hold mus.cfg + .mus only.
+	archivePath, cleanup, err := buildMetadataArchive(folder, primaries, time.Now(), false)
+	defer cleanup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := readTarGzNames(t, archivePath)
+	want := []string{"a.h5ad.mus", "b.h5ad.mus", "mus.cfg"}
+	if !equalStrings(got, want) {
+		t.Errorf("iRODS archive contents:\n  got  %v\n  want %v", got, want)
+	}
+	for _, n := range got {
+		if strings.HasSuffix(n, ".md") {
+			t.Errorf("found .md entry %q with includeMarkdown=false", n)
+		}
 	}
 }
 
@@ -144,7 +175,7 @@ func TestBuildMetadataArchive_FolderLevelOnceAcrossPrimaries(t *testing.T) {
 		filepath.Join(folder, "b.h5ad"),
 		filepath.Join(folder, "c.h5ad"),
 	}
-	archivePath, cleanup, err := buildMetadataArchive(folder, primaries, time.Now())
+	archivePath, cleanup, err := buildMetadataArchive(folder, primaries, time.Now(), true)
 	defer cleanup()
 	if err != nil {
 		t.Fatal(err)

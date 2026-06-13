@@ -223,7 +223,7 @@ func runS3Upload(cmd *cobra.Command, args []string, message string, forceH5adGat
 	// a warning but don't roll back the primary uploads — the
 	// data + AVU / x-amz-meta has already landed.
 	for folder, primaries := range primariesByFolder {
-		archivePath, cleanup, err := buildMetadataArchive(folder, primaries, invocationStamp)
+		archivePath, cleanup, err := buildMetadataArchive(folder, primaries, invocationStamp, true)
 		if err != nil {
 			fmt.Fprintf(stderr, "  ⚠ metadata archive build failed for %s: %v\n", folder, err)
 			continue
