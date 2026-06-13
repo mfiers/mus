@@ -459,13 +459,15 @@ visible in `iron meta ls` and queryable via `iron query`. AVU is iRODS
 jargon for "attribute-value-unit" key-value metadata.
 
 **What travels with the upload:**
-- `<file>.h5ad` — the data
-- `<file>.h5ad.mus` — the sidecar (sha256 + iRODS path / URL / PURL + cascade snapshot)
-- `<file>.h5ad.md` — your prose description of this file (if present)
-- The folder's own `mus.cfg` and `index.md` — the immediate-folder config + folder-level prose (parent cascade entries stay local)
-- AVU on the iRODS object itself — the strict-vocab metadata, queryable via `iron query` and `mus irods find`
+- `<file>.h5ad` — the data, uploaded directly
+- `mus_metadata_<UTC-timestamp>.tar.gz` — ONE archive per source folder per `mus … upload` invocation, bundling all the documentation files (flat, no nested dirs):
+  - `<basename>.h5ad.mus` — the sidecar (sha256 + iRODS path / URL / PURL + cascade snapshot)
+  - `<basename>.h5ad.md` — per-file prose, if present
+  - `mus.cfg` — the folder's own config (cascade entries from parent dirs stay local)
+  - `index.md` — folder-level prose, if present
+- AVU on the iRODS object itself — the strict-vocab metadata, queryable via `iron query` and `mus irods find`. On S3, the same fields land as `x-amz-meta-*` headers.
 
-The legacy `.env` file is the one thing mus does NOT upload — it can carry direnv-style shell secrets that don't belong on the catalog.
+The archive form keeps the destination collection tidy (one data file + one docs archive per upload, instead of N+5 little objects) and makes a colleague's restore a single `tar -xzf` away. The legacy `.env` file is NOT included — it can carry direnv-style shell secrets that don't belong on the catalog.
 
 ### Leave the `*.mus` sidecars in place
 

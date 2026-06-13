@@ -239,10 +239,12 @@ the catalog (anthive) accepts only files that pass it.
          they're just markdown.
 
        Both layers travel together: when mus uploads to S3 / iRODS,
-       it bundles the .h5ad, its sidecar, its sibling .md, and the
-       folder's own mus.cfg + index.md as a single self-describing
-       deposit. So a colleague pulling from the catalog sees both
-       the strict metadata (sidecar / AVU) AND your prose notes.
+       it puts the .h5ad alongside a single per-folder archive
+       (mus_metadata_<timestamp>.tar.gz) that holds the sidecar, the
+       sibling .md, and the folder's own mus.cfg + index.md. So a
+       colleague pulling from the catalog sees both the strict
+       metadata (sidecar / AVU) AND your prose notes after one
+       'tar -xzf' of the archive.
 
 6. VALIDATE BEFORE DEPOSIT
    -----------------------
@@ -265,26 +267,36 @@ the catalog (anthive) accepts only files that pass it.
    Mus has two deposit channels — they're orthogonal, and depositors
    typically use either or both depending on the destination.
 
-   7a) iRODS — the lab archive (everything):
+   The deposit travels as TWO objects on the remote: the primary
+   data file, and ONE metadata archive bundling every documentation
+   file from the source folder. Per-folder archive name:
+
+       mus_metadata_<UTC-timestamp>.tar.gz
+
+   Inside the archive (flat, no nested dirs):
+
+       mus.cfg                       (the folder's own config)
+       index.md                      (the folder's prose, if any)
+       <basename>.h5ad.mus           (one per primary uploaded from this folder)
+       <basename>.h5ad.md            (one per primary, if a .md is present)
+
+   The archive is built AFTER the primaries upload, so the embedded
+   sidecars carry the freshly-stamped irods_* / s3_* fields. Within
+   one 'mus ... upload' invocation each source folder produces ONE
+   archive with a shared timestamp; if you upload files from N
+   folders, you get N archives — all stamped identically.
+
+   7a) iRODS — the lab archive:
 
        mus irods upload -m "post-QC drop for figure 3" mydata.h5ad
 
-       The deposit travels as a SET — primary + companions land
-       together in the iRODS collection:
+       Lands in the iRODS collection:
+         mydata.h5ad                          the data
+         mus_metadata_2026-06-13T10-12-00Z.tar.gz   bundled docs
 
-         mydata.h5ad                      the data
-         mydata.h5ad.mus                  the sidecar
-         mydata.h5ad.md                   per-file prose (if present)
-         mus.cfg                          the folder's own config
-         index.md                         the folder's prose (if present)
-
-       All resolved metadata is ALSO stamped on the data object as
-       'mus_*' AVU triplets (queryable via 'iron query' / 'mus irods
-       find'). The sidecar carries the iRODS path + persistent URL.
-
-       Only legacy '.env' files are still excluded from folder
-       uploads — they may carry direnv-style shell secrets that
-       shouldn't reach the catalog.
+       Strict-vocab metadata is ALSO stamped on the data object as
+       'mus_*' AVU triplets (queryable via 'iron query' /
+       'mus irods find').
 
    7b) S3 — the catalog (anthive) ingest channel:
 
@@ -292,29 +304,17 @@ the catalog (anthive) accepts only files that pass it.
        mus s3 upload -m "ingest into anthive" mydata.h5ad  # per deposit
 
        Mus writes to a single bucket configured at login time (e.g.
-       'anthive4a'), with data_project as the key prefix. So the
-       primary file lands at s3://<bucket>/<data_project>/<basename>,
-       e.g. s3://anthive4a/Fiers2025/mydata.h5ad. The same login also
-       verifies the bucket exists.
-
-       The same companion-set as iRODS travels too:
+       'anthive4a'), with data_project as the key prefix:
 
          s3://anthive4a/Fiers2025/mydata.h5ad
-         s3://anthive4a/Fiers2025/mydata.h5ad.mus
-         s3://anthive4a/Fiers2025/mydata.h5ad.md       (if present)
-         s3://anthive4a/Fiers2025/mus.cfg
-         s3://anthive4a/Fiers2025/index.md             (if present)
+         s3://anthive4a/Fiers2025/mus_metadata_2026-06-13T10-12-00Z.tar.gz
 
        Hard-gated on the same 'mus h5ad check' PASS as iRODS upload,
        so only validated, fully-annotated files reach the catalog.
        The 'mus_*' metadata set is stamped on each S3 object as
        x-amz-meta-* headers, mirroring the iRODS AVU. The .h5ad.mus
-       sidecar gets s3_url / s3_bucket / s3_key / s3_etag /
-       s3_uploaded_at written.
-
-       Folder-level companions (mus.cfg, index.md) are deduped
-       within a single invocation — uploading 10 files from one
-       folder PUTs the shared docs once, not 10 times.
+       sidecar (inside the archive) carries s3_url / s3_bucket /
+       s3_key / s3_etag / s3_uploaded_at.
 
 8. EXTRACT (anthive ingest, or any catalog reader)
    ------------------------------------------------

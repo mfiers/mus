@@ -269,10 +269,15 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 	}
 
 	var uploads []uploadedItem
-	// Track folder-level companions (mus.cfg, index.md) we've
-	// already uploaded this invocation so a batch of N files from
-	// the same dir doesn't re-PUT them N times.
-	uploadedFolderLevel := map[string]bool{}
+	// One invocation = one timestamp on every metadata archive built
+	// this run, so a batch of files across multiple folders produces
+	// a coherent dated set of archives.
+	invocationStamp := time.Now().UTC()
+	// Track primaries per source folder so we can build one
+	// metadata archive per folder AFTER all primaries from that
+	// folder have uploaded (sidecars refreshed with irods_* block
+	// first).
+	primariesByFolder := map[string][]string{}
 
 	for _, raw := range args {
 		if sidecar.IsSidecar(raw) {
@@ -413,13 +418,14 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 		}
 
 		// Companion files (sidecar, *.h5ad.md, folder mus.cfg,
-		// folder index.md) travel with the data file so a remote
-		// reader gets the complete documented deposit. AVU still
-		// carries the strict-vocab metadata on the object itself —
-		// the companions are the human-readable layer.
+		// folder index.md) are bundled into one tar.gz archive per
+		// source folder and pushed AFTER all primaries from that
+		// folder have uploaded — see the per-folder loop after this
+		// one. We only stash the primary path here so the archive
+		// step can pick it up.
 		if !opts.DryRun {
-			uploadIRODSCompanions(ctx, client, abs, remoteCollection,
-				opts, uploadedFolderLevel, cmd.OutOrStdout(), cmd.ErrOrStderr())
+			primariesByFolder[filepath.Dir(abs)] = append(
+				primariesByFolder[filepath.Dir(abs)], abs)
 		}
 
 		uploads = append(uploads, uploadedItem{
@@ -441,6 +447,33 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 			"size":    fmt.Sprintf("%d", st.Size()),
 			"message": message,
 		})
+	}
+
+	// Per-folder metadata archive. Now that every primary in this
+	// invocation has a freshly-stamped sidecar (irods_* block
+	// populated), bundle metadata + push as one tar.gz per source
+	// folder. Failures here are non-fatal — data is already on the
+	// catalog with AVU stamped.
+	if !opts.DryRun {
+		for folder, primaries := range primariesByFolder {
+			archivePath, cleanup, err := buildMetadataArchive(folder, primaries, invocationStamp)
+			if err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(),
+					"  ⚠ metadata archive build failed for %s: %v\n", folder, err)
+				continue
+			}
+			if archivePath == "" {
+				cleanup()
+				continue
+			}
+			remotePath := remoteCollection + "/" + filepath.Base(archivePath)
+			fmt.Fprintf(cmd.OutOrStdout(), "  + %s\n", remotePath)
+			if err := client.Upload(ctx, archivePath, remotePath, opts); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(),
+					"  ⚠ metadata archive upload failed: %v — primaries already uploaded\n", err)
+			}
+			cleanup()
+		}
 	}
 
 	postUploadCommentToELN(env, uploads, opts.DryRun, postELNComment, message, cmd.ErrOrStderr())
@@ -1065,36 +1098,6 @@ func localDestForBarePath(remotePath string) string {
 // downloadFromMango handles the legacy *.mango sidecar files emitted by the
 // Python mus. Delegates the actual parsing to parseMangoFile so the URL
 // extraction is unit-testable without spinning up an iron client.
-// uploadIRODSCompanions pushes the depositor-side documentation
-// files (per-file *.h5ad.mus sidecar + *.h5ad.md, folder mus.cfg
-// + index.md) into the same iRODS collection as the primary data
-// file. Folder-level companions are deduped via `seen` so a batch
-// of N files from one folder doesn't re-PUT them N times.
-//
-// Failures here are LOGGED, not fatal — the primary data + AVU
-// metadata have already landed and the user shouldn't have an
-// otherwise-successful upload undone by a companion miss.
-func uploadIRODSCompanions(ctx context.Context, client *iron.Client,
-	primaryAbs, remoteCollection string, opts iron.UploadOpts,
-	seen map[string]bool, stdout, stderr io.Writer) {
-
-	for _, comp := range companionsForFile(primaryAbs) {
-		remotePath := remoteCollection + "/" + comp.RemoteName
-		if isFolderLevel(comp.RemoteName) {
-			if seen[remotePath] {
-				continue
-			}
-			seen[remotePath] = true
-		}
-		fmt.Fprintf(stdout, "  + %s\n", remotePath)
-		if err := client.Upload(ctx, comp.LocalPath, remotePath, opts); err != nil {
-			fmt.Fprintf(stderr,
-				"  ⚠ companion upload failed (%s): %v — primary already uploaded\n",
-				comp.LocalPath, err)
-		}
-	}
-}
-
 func downloadFromMango(ctx context.Context, client *iron.Client,
 	mangoPath string, force, verify bool) error {
 

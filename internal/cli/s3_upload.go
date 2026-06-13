@@ -152,12 +152,17 @@ func runS3Upload(cmd *cobra.Command, args []string, message string, forceH5adGat
 			cfg.Bucket, cfg.Endpoint)
 	}
 
-	// Track folder-level companions (mus.cfg, index.md) we've
-	// already uploaded this invocation, so a batch of N files
-	// from the same directory doesn't re-PUT them N times.
-	uploadedFolderLevel := map[string]bool{}
+	// One invocation = one timestamp shared across every metadata
+	// archive built this run, so a batch of files from multiple
+	// folders produces a coherent set of dated archives.
+	invocationStamp := time.Now().UTC()
+	// Track primaries per source folder so we can build one
+	// archive per folder AFTER all primaries from that folder
+	// have uploaded (sidecars refreshed with s3_* block first).
+	primariesByFolder := map[string][]string{}
 
-	// Upload loop.
+	// Upload loop — primaries only. Companions go up later via
+	// the per-folder metadata archive.
 	for _, raw := range args {
 		abs, err := filepath.Abs(raw)
 		if err != nil {
@@ -203,25 +208,29 @@ func runS3Upload(cmd *cobra.Command, args []string, message string, forceH5adGat
 		if err := sidecar.Write(scPath, doc); err != nil {
 			return fmt.Errorf("update sidecar %s: %w", scPath, err)
 		}
+		primariesByFolder[filepath.Dir(abs)] = append(primariesByFolder[filepath.Dir(abs)], abs)
+	}
 
-		// Companion files: sidecar, per-file *.md, folder mus.cfg,
-		// folder index.md. The sidecar was just rewritten above so
-		// the upload below picks up the freshly-stamped s3_* block.
-		for _, comp := range companionsForFile(abs) {
-			// Dedupe folder-level companions within this invocation.
-			compKey := dataProject + "/" + comp.RemoteName
-			if isFolderLevel(comp.RemoteName) {
-				if uploadedFolderLevel[compKey] {
-					continue
-				}
-				uploadedFolderLevel[compKey] = true
-			}
-			fmt.Fprintf(stdout, "  + s3://%s/%s\n", cfg.Bucket, compKey)
-			if _, err := client.Upload(ctx, cfg.Bucket, compKey, comp.LocalPath, nil); err != nil {
-				fmt.Fprintf(stderr, "  ⚠ companion upload failed (%s): %v — primary already uploaded\n",
-					comp.LocalPath, err)
-			}
+	// Per source folder: build the metadata archive (now with
+	// freshly-updated sidecars) and PUT it. Archive failures log
+	// a warning but don't roll back the primary uploads — the
+	// data + AVU / x-amz-meta has already landed.
+	for folder, primaries := range primariesByFolder {
+		archivePath, cleanup, err := buildMetadataArchive(folder, primaries, invocationStamp)
+		if err != nil {
+			fmt.Fprintf(stderr, "  ⚠ metadata archive build failed for %s: %v\n", folder, err)
+			continue
 		}
+		if archivePath == "" {
+			cleanup()
+			continue // nothing to archive
+		}
+		archiveKey := dataProject + "/" + filepath.Base(archivePath)
+		fmt.Fprintf(stdout, "  + s3://%s/%s\n", cfg.Bucket, archiveKey)
+		if _, err := client.Upload(ctx, cfg.Bucket, archiveKey, archivePath, nil); err != nil {
+			fmt.Fprintf(stderr, "  ⚠ metadata archive upload failed: %v — primaries already uploaded\n", err)
+		}
+		cleanup()
 	}
 	return nil
 }
