@@ -38,8 +38,14 @@ func newH5adHowtoCmd() *cobra.Command {
 const h5adHowtoText = `Annotating an .h5ad file for deposit (mus + anthive)
 =====================================================
 
-This is a depositor-side primer. Run 'mus h5ad check FILE' to validate;
-the catalog (anthive) accepts only files that pass it.
+This is the depositor-side primer for the anthive workflow
+(pathway B in the mus tutorial — see doc/tutorial.md). Use it
+when you need the structural rules, the full vocab field list,
+and the common failure modes. For the day-to-day command
+sequence, the tutorial is shorter and copy-paste-ready.
+
+Run 'mus h5ad check FILE' to validate before deposit; the
+catalog (anthive) only accepts files that pass it.
 
 1. STRUCTURAL REQUIREMENTS (inside the .h5ad)
    -------------------------------------------
@@ -238,13 +244,15 @@ the catalog (anthive) accepts only files that pass it.
          does NOT regenerate, validate, or schema-check them —
          they're just markdown.
 
-       Both layers travel together on upload, but how depends on
-       the destination — see §7 for the exact deposit shape.
-       Short version: every upload puts a per-folder
-       'mus_metadata_<timestamp>.tar.gz' next to the data. S3 puts
-       the prose .md inside that archive; iRODS uploads .md as
-       standalone objects instead and keeps the archive to
-       mus.cfg + .mus only.
+       Both layers travel together on upload, but the wire shape
+       differs per destination — see §7 for the exact deposit
+       layout. Short version: iRODS still bundles structured
+       metadata into a per-folder 'mus_metadata_<stamp>.tar.gz'
+       (mus.cfg + .mus only) and uploads .md as standalone iRODS
+       objects when explicitly named. S3 dropped the archive
+       entirely — instead, a single collapsed '.h5ad.mus' rides
+       next to each h5ad (cascade + sidecar merged into one
+       KEY=VALUE file).
 
 6. VALIDATE BEFORE DEPOSIT
    -----------------------
@@ -264,18 +272,13 @@ the catalog (anthive) accepts only files that pass it.
 
 7. DEPOSIT
    --------
-   Mus has two deposit channels — they're orthogonal, and depositors
-   typically use either or both depending on the destination.
+   Mus has two deposit channels — they're orthogonal. The anthive
+   workflow typically uses both (S3 for catalog ingest, iRODS for
+   the lab archive of record), but you can use either alone.
 
-   Both deposits refuse multi-source-folder invocations and require
-   data_project be set on the cascade. Both build a per-folder
-   archive named:
-
-       mus_metadata_<UTC-timestamp>.tar.gz
-
-   …but the archive contents differ between iRODS and S3 (see below).
-   Built AFTER the primaries upload so the embedded sidecars carry
-   the freshly-stamped irods_* / s3_* fields.
+   Both refuse multi-source-folder invocations and require
+   data_project on the cascade. They take different shapes on the
+   wire — see the per-channel subsections below.
 
    7a) iRODS — the lab archive:
 
@@ -340,12 +343,20 @@ the catalog (anthive) accepts only files that pass it.
        upload message lands as x-amz-meta. Static-only invocations
        (no .h5ad positionals) are accepted.
 
-       The S3 metadata archive bundles EVERYTHING the catalog
-       ingester needs for the h5ad deposit (folder mus.cfg, folder
-       index.md, per-primary .h5ad.mus + sibling .h5ad.md). Hard-
-       gated on the same 'mus h5ad check' PASS as iRODS upload.
-       'mus_*' biology metadata lands on each h5ad S3 object as
-       x-amz-meta-* headers, mirroring the AVU set.
+       Per-h5ad metadata: one COLLAPSED '.h5ad.mus' file lands
+       next to the h5ad (e.g. '<basename>.h5ad.mus' at the same
+       S3 prefix). Single KEY=VALUE blob holding the effective
+       metadata at upload time — every cascading mus.cfg key
+       (root-most → deepest, deeper overrides) overlaid with the
+       per-file .h5ad.mus sidecar; sidecar wins for scalar
+       conflicts. Includes the freshly-stamped s3_* block
+       (s3_url / s3_etag / …). No archive, no unpack. A
+       downstream 'mv data.h5ad data.h5ad.mus destination/'
+       keeps the pair together.
+
+       Hard-gated on the same 'mus h5ad check' PASS as iRODS
+       upload. 'mus_*' biology metadata also lands on each h5ad
+       S3 object as x-amz-meta-* headers, mirroring the AVU set.
 
 8. EXTRACT (anthive ingest, or any catalog reader)
    ------------------------------------------------
