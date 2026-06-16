@@ -34,6 +34,7 @@ func newIRODSCmd() *cobra.Command {
 		newIRODSGetCmd(),
 		newIRODSScanCmd(),
 		newIRODSFindCmd(),
+		newIRODSProjectsCmd(),
 	)
 	return cmd
 }

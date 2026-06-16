@@ -1,233 +1,315 @@
 # mus tutorial
 
-Two pathways. Pick the one that matches what you're doing today.
+Step-by-step, copy-paste-friendly. The first 5 steps are the same regardless of where the data is going. The 6th step is the only place the two pathways diverge:
 
-| Pathway | When to use it | What it does |
+| Pathway | When | Final step |
 | --- | --- | --- |
-| **A. Back up data** | You have files (any format) you need on the lab archive. | Tag → annotate → upload to iRODS. Done. |
-| **B. Prep h5ad for anthive** | Submit a single-cell `.h5ad` to the lab catalog. | Tag → annotate → strict-validate → upload to S3 staging + iRODS. |
+| **A. Back up data** | Files (any format) need to land on the lab archive. | `mus irods upload` |
+| **B. Prep h5ad for anthive** | A single-cell `.h5ad` needs to enter the lab catalog. | `mus h5ad check` → `mus s3 upload` + `mus irods upload` |
 
-If you're not sure, you want **A**. **B** only kicks in when something specifically asks for an anthive-ready h5ad.
-
-The two pathways share the same setup section (`§ Setup`). After that they're independent — skip straight to A or B.
+If you don't know which you need, you want **A**. **B** only kicks in when something explicitly asks for an anthive-ready h5ad.
 
 ---
 
-## Setup (once per machine, ≈ 2 min)
+## Setup (once per machine, ≈ 2 minutes)
 
-```bash
-# 1. Install
-curl -sSL https://codeberg.org/mfiers/mus/raw/branch/main/install.sh | bash
+These you only run once on each computer you use.
 
-# 2. iRODS auth — verifies you're logged into the lab archive
-mus irods login          # if not yet → prints the exact `iron auth …` to run
-                         # → then re-run `mus irods login` to confirm ✓
+1. **Install.**
+   ```bash
+   curl -sSL https://codeberg.org/mfiers/mus/raw/branch/main/install.sh | bash
+   ```
 
-# 3. ELN auth — pastes a token from the eLab UI; verifies it works
-mus eln login            # OR `mus eln disable --global` if you don't have eLab access
+2. **iRODS auth.** Mus verifies; if not authenticated yet, it prints the exact `iron auth` command for your account.
+   ```bash
+   mus irods login
+   ```
 
-# 4. Shell completion
-mus completion install
-```
+3. **ELN auth.** Skip with `mus eln disable --global` if you don't have eLab access.
+   ```bash
+   mus eln login
+   ```
 
-For full setup details (where keys land, how the keyring works, completion paths, …) see [quickstart.md](quickstart.md).
+4. **Shell completion.**
+   ```bash
+   mus completion install
+   ```
+
+Details on each setup step (XDG paths, secret backends, completion fallbacks): [quickstart.md](quickstart.md).
 
 ---
 
-## Pathway A — Back up data to iRODS
+## Step 1 — `cd` into the project folder
 
-**Goal.** Get your files onto the lab archive with provenance so you (or a colleague) can find and restore them later.
-
-### A1. cd to the project folder
+Mus reads the cascading `mus.cfg` files in your folder tree. Everything below is run from the project root.
 
 ```bash
 cd ~/projects/microglia_pilot
 ```
 
-### A2. Link the folder to an eLab experiment
+---
 
-This sets `data_project` + `eln_experiment_id` in one shot.
+## Step 2 — Link the ELN experiment (recommended)
 
-```bash
-mus eln link 12345                    # 12345 = numeric ID from the eLab URL
-```
-
-Don't have eLab? Run these instead:
+`mus eln link <ID>` does three things at once: fetches experiment / study / project metadata from the eLab API, sets `eln_experiment_id` + `eln_experiment_name` in `mus.cfg`, and suggests a `data_project` name (see Step 3).
 
 ```bash
-mus config set data_project Fiers2025           # NameYear format
-mus config set eln_experiment_name microglia    # path-safe label
-mus eln disable                                 # once per folder
+mus eln link 12345         # 12345 = the numeric ID at the end of the eLab URL
 ```
 
-### A3. Annotate the folder (so every upload inherits the metadata)
+To find the ID: open the experiment in eLab. The URL ends in `…/experiment/12345` — the digits are the ID.
 
-These all go in the folder's `mus.cfg` (mus creates it on first write):
+**No eLab access?** Skip this step and run once:
+
+```bash
+mus eln disable            # this folder only
+# OR
+mus eln disable --global   # every folder on this machine
+```
+
+Without ELN you'll set `eln_experiment_name` by hand in Step 3.
+
+---
+
+## Step 3 — Set `data_project`
+
+`data_project` is the **collection name** under which every upload from this folder will live on the lab archive (`<irods_home>/project/<data_project>/…`). It groups all the deposits from one piece of research into one place.
+
+### 3a. Criteria
+
+- **Format:** `NameYear` — capital first letter, ends in 4 digits. mus rejects anything else.
+- **Convention:** first-author surname + publication / acquisition year. Examples: `Fiers2025`, `DeWulf2024`, `Sun2024`.
+- **One per project, not per experiment.** Multiple experiments in one paper share the same `data_project`; multiple papers from the same lab use different ones.
+- **Unique across the lab.** Two unrelated projects sharing a `data_project` collide on iRODS — they'd write into the same subtree.
+
+### 3b. Avoid duplicates — check what's already in use
+
+Before picking a name, list the projects that already exist on iRODS:
+
+```bash
+mus irods projects                # plain list, sorted alphabetically
+mus irods projects --details      # adds owner (u-number) + creation date
+```
+
+Output looks like:
+
+```
+DeWulf2024
+Fiers2024
+Fiers2025
+Sun2024
+…
+```
+
+If your intended name is already there and it's not yours, pick a different one (e.g. add a discriminator: `FiersMicroglia2025`).
+
+### 3c. Set it
+
+If you ran `mus eln link` in Step 2, it already prompted you for a `data_project` and wrote it to `mus.cfg`. Verify with `mus config show`.
+
+If you skipped ELN, set it (and the experiment-name label) by hand:
+
+```bash
+mus config set data_project Fiers2025
+mus config set eln_experiment_name microglia_pilot   # path-safe label for the iRODS subdir
+```
+
+---
+
+## Step 4 — Annotate the folder
+
+Annotation cascades. Set fields once at the project root; every file beneath inherits them. `mus.cfg` files in subfolders override the parent for that branch.
+
+### 4a. Minimum recommended (both pathways)
 
 ```bash
 mus config set organism human
-mus config set tissue 'middle temporal gyrus'
-mus config set technology 10x_chromium_3p_v3
-mus config set source internal              # internal | external
-mus config set access internal              # internal | public
+mus config set source internal                # internal  | external
+mus config set access internal                # internal  | public
 ```
 
-Subfolder overrides — use `-C SUBDIR`:
+### 4b. Biology fields (use them — the more, the better)
+
+These help colleagues find data later via `iron query` and (for pathway B) are required for anthive ingest.
+
+```bash
+mus config set tissue 'middle temporal gyrus'
+mus config set cell_type 'microglial cell'
+mus config set technology 10x_chromium_3p_v3
+mus config set suspension_type nucleus        # cell | nucleus | na
+mus config set disease 'Alzheimer disease'
+mus config set sex pooled
+mus config set age '65y-90y'
+```
+
+Lists work — comma-separated:
+
+```bash
+mus config set tissue 'middle temporal gyrus,hippocampus,frontal cortex'
+mus config set cell_type 'microglial cell,astrocyte,oligodendrocyte'
+```
+
+### 4c. Subfolder overrides
+
+Use `-C SUBDIR` to write a subfolder's `mus.cfg` without `cd`-ing:
 
 ```bash
 mus -C final config set access public
 mus -C final config set doi 10.1234/microglia.2025
 ```
 
-Inspect with `mus config show` (effective cascade) or `mus config show --local` (this folder only).
+### 4d. Pick values from the vocabulary
 
-### A4. Upload
-
-```bash
-# Single files
-mus irods upload -m "raw fastq drop"  raw/sample01.fastq.gz raw/sample02.fastq.gz
-
-# A whole folder (mus packs many small files into a tar.gz if it makes sense)
-mus irods upload -m "analysis scripts"  scripts/
-
-# Multiple things in one shot — one shared `-m` message
-mus irods upload -m "initial deposit"  scripts/  raw/  final/figure_data.csv
-```
-
-`-m / --message` is **required** — it's stamped on the sidecar, the iRODS AVU, and the ELN comment. No silent uploads.
-
-After upload each file has a `<file>.mus` sidecar next to it. **Keep those.** They carry the sha256, the iRODS URL, the AVU snapshot — they're how `mus check`, `mus rm`, and `mus irods get` find their way back.
-
-### A5. (optional) Verify + free local disk
+All controlled-vocab fields are checked against the joint vocabulary as you type. Off-vocab values are rejected with a "did you mean?" suggestion.
 
 ```bash
-mus check                           # every *.mus in this dir
-mus check -r .                      # recurse
-mus rm -y final/microglia_clusters.h5ad   # only after a passing remote-check
+mus vocab show tissue              # one field's allowed values
+mus vocab show                     # everything, every field
+mus vocab refresh                  # force a fresh pull from upstream
 ```
 
-`mus rm` refuses to delete unless three things pass: sidecar says uploaded, local sha matches the sidecar, remote checksum matches too. After deletion the sidecar stays as a **tombstone** so `mus irods get final/microglia_clusters.h5ad.mus` can pull the data back any time.
+Use **labels, not ontology IDs** — `tissue=middle temporal gyrus`, never `UBERON:0002771`. Case + separator variants are silently canonicalised: `HuMaN` → `human`, `prefrontal_cortex` ≡ `Prefrontal Cortex`.
 
-### A6. End-to-end (copy-paste-able)
+Need a term that isn't in the vocab yet? File an issue on the mus repo — don't invent it locally.
+
+### 4e. Verify
 
 ```bash
-cd ~/projects/microglia_pilot
-
-mus eln link 12345
-mus config set organism human
-mus config set tissue 'middle temporal gyrus'
-mus config set technology 10x_chromium_3p_v3
-mus config set source internal
-mus config set access internal
-
-mus irods upload -m "scripts snapshot" scripts/
-mus irods upload -m "raw fastq" raw/sample01.fastq.gz raw/sample02.fastq.gz
-mus irods upload -m "post-QC final + figure-3 source" \
-    final/microglia_clusters.h5ad  final/figure_data.csv
+mus config show                    # full effective cascade
+mus config show --local            # only this folder's mus.cfg
 ```
-
-That's pathway A. Done.
 
 ---
 
-## Pathway B — Prep an h5ad for anthive
+## Step 5 — (Pathway B only) Sanity-check the `.h5ad`
 
-**Goal.** Submit a single-cell `.h5ad` to the lab catalog so it appears in anthive4.
+Skip to Step 6 if you're doing pathway A.
 
-Same setup as A (`mus eln link …` + folder annotation), **plus** two things:
+For pathway B, `mus h5ad check` is mandatory before upload. It reads the cascade + the file, then checks:
 
-1. `mus h5ad check` must PASS — anthive only ingests files mus has structurally + vocab-validated.
-2. Files go to **both** S3 (anthive ingest channel) AND iRODS (lab archive).
-
-### B1. Setup the folder (same as A, plus a few h5ad-specific fields)
-
-```bash
-cd ~/projects/microglia_pilot
-mus eln link 12345
-
-# the seven HARD-required fields for h5ad — all from controlled vocab
-mus config set organism human
-mus config set tissue 'middle temporal gyrus'
-mus config set cell_type 'microglial cell'
-mus config set technology 10x_chromium_3p_v3
-mus config set suspension_type nucleus        # cell | nucleus | na
-mus config set source internal
-mus config set access internal
-```
-
-`mus config set` validates each value against the joint vocabulary as you type it. Off-vocab values are rejected with a "did you mean?" suggestion. Browse with:
-
-```bash
-mus vocab show tissue       # one field's allowed values
-mus vocab show              # everything
-```
-
-### B2. Sanity-check the h5ad
+- **Structural rules.** `adata.X` is log-normalised, `adata.layers["counts"]` carries raw integer counts, at least one of `X_umap` / `X_tsne` is present, `var_names` are gene symbols.
+- **Required metadata.** Seven fields must be set + in vocab: `organism`, `tissue`, `cell_type`, `technology`, `suspension_type`, `access`, `source`. If you completed Step 4 thoroughly, they're already there.
+- **Soft warnings.** Recommended-but-not-blocking: `doi`, `disease`, `sex`, `age`, `condition`, `accession`, `license`, `title`, `contributor`.
 
 ```bash
 mus h5ad check final/microglia_clusters.h5ad
 ```
 
-This reads the cascade + the file, checks:
+On PASS, the sidecar is stamped (cached on file_sha + vocab_sha + check_version). Re-runs are stat-fast unless one of those changes.
 
-- **Structural rules** — `adata.X` is log-normalised, `adata.layers["counts"]` carries raw integer counts, at least one of `X_umap` / `X_tsne` is present, `var_names` are gene symbols (not Ensembl IDs).
-- **Required metadata** — all seven fields above are set and in vocab.
-- **Soft warnings** — `doi`, `disease`, `sex`, `age`, `condition`, etc. — strongly recommended but not blocking.
+Fail? Fix what it tells you and re-run. `mus h5ad howto` prints the depositor primer (structural rules, vocab field list, common failure modes).
 
-On PASS the sidecar is stamped. Subsequent runs are stat-fast (cached on `file_sha + vocab_sha + check_version`). Re-runs only happen when one of those changes.
+---
 
-If it fails, fix what it tells you and re-run. The `mus h5ad howto` command prints a depositor-side primer with the structural rules, the vocab fields, and the common failure modes:
+## Step 6 — Upload
+
+### Pathway A — Back up to iRODS
 
 ```bash
-mus h5ad howto              # full primer
+# Single files
+mus irods upload -m "raw fastq drop" \
+    raw/sample01.fastq.gz raw/sample02.fastq.gz
+
+# A whole folder (mus offers to pack many small files into a tar.gz)
+mus irods upload -m "analysis scripts" scripts/
+
+# Several things in one shot — one shared -m message, one ELN comment
+mus irods upload -m "initial deposit" \
+    scripts/ raw/ final/figure_data.csv
 ```
 
-`--hide-soft` on the check suppresses the SOFT warnings group if you only want to see blockers.
+- `-m / --message` is **required**. It's stamped on the sidecar, on the iRODS object as an AVU, and prepended to the ELN comment. No silent uploads.
+- After upload, each file has a `<file>.mus` sidecar next to it. Keep those — they're how `mus check`, `mus rm`, and `mus irods get` find their way back.
 
-### B3. (optional) Write human-readable docs
+Lands at `<irods_home>/project/<data_project>/<eln_experiment_name>/<basename>`.
 
-mus does NOT generate these — but if you write them, they get uploaded.
-
-- `index.md` in the folder — what's in the project, who put it together
-- `<basename>.h5ad.md` next to each h5ad — what's special about THIS file, what processing it went through, caveats
-
-Plain markdown, no schema mus enforces. See `mus h5ad howto` §5 for examples.
-
-### B4. Upload to S3 (anthive staging) + iRODS (lab archive)
+### Pathway B — Prep h5ad for anthive (S3 + iRODS)
 
 ```bash
-mus s3 login                                                  # one-time per machine
-mus s3 upload -m "ingest into anthive"  final/microglia_clusters.h5ad
-mus irods upload -m "post-QC h5ad for anthive"  final/microglia_clusters.h5ad
+mus s3 login                                                  # one-time setup per machine
+mus s3 upload    -m "ingest into anthive"  final/microglia_clusters.h5ad
+mus irods upload -m "post-QC h5ad"         final/microglia_clusters.h5ad
 ```
 
 What lands where:
 
 | Channel | Path | Per-h5ad metadata |
 | --- | --- | --- |
-| S3 (anthive staging) | `s3://<bucket>/__incoming/<data_project>/<basename>.h5ad` | A **collapsed `.h5ad.mus`** next to the data — single KEY=VALUE file with the merged cascade + sidecar + freshly-stamped `s3_*` block. `mv` keeps data + .mus paired. |
-| iRODS (lab archive) | `<irods_home>/project/<data_project>/<exp_name>/<basename>.h5ad` | `mus_*` AVU triplets on the object (queryable via `iron query`) + a per-folder `mus_metadata_<stamp>.tar.gz` holding `mus.cfg` + the `.h5ad.mus` sidecar. |
+| S3 (anthive staging) | `s3://<bucket>/__incoming/<data_project>/<basename>.h5ad` | A **collapsed `.h5ad.mus`** next to the data — single KEY=VALUE file with the merged cascade + sidecar + s3_* block. |
+| iRODS (lab archive) | `<irods_home>/project/<data_project>/<eln_experiment_name>/<basename>.h5ad` | `mus_*` AVU triplets on the object + a per-folder `mus_metadata_<stamp>.tar.gz` (mus.cfg + sidecar). |
 
-The S3 prefix `__incoming/` is a staging area — the depositor (or a downstream process) later promotes the data to its final location. mus never writes outside `__incoming/`.
+S3 uploads always land under `__incoming/` — a staging area. A downstream process (or you, later) promotes from there to the catalog home.
 
-### B5. (optional) Other things on the S3 side
+Optional S3 extras:
 
-- **`--subfolder NAME`** — places the h5ad under `__incoming/<dp>/NAME/` instead of the data_project root. Useful for revisions / drafts / embargoed releases. Single segment; `static`, `.`, `..` refused.
+```bash
+# Place this revision under __incoming/<dp>/rev2/ instead of the data_project root
+mus s3 upload -m "rev2 after reviewer comments" \
+    --subfolder rev2  final/microglia_clusters.h5ad
 
-- **`--static FILE`** — uploads auxiliary assets (figures, JSON, PDFs) to `__incoming/<dp>/static/<basename>`. Repeatable. Always under `static/` regardless of `--subfolder`. Use for things the anthive web view needs that aren't biology data.
+# Static assets the anthive web view needs (figures, JSON, PDFs)
+mus s3 upload -m "QC figures for the web view" \
+    --static figures/umap.png  --static figures/qc.json
+```
 
-  ```bash
-  mus s3 upload -m "QC plots for the web view" \
-      --static figures/umap.png --static figures/qc.json
-  ```
+---
 
-### B6. End-to-end (copy-paste-able)
+## Step 7 (optional) — Verify, restore, delete
+
+```bash
+mus check                           # every *.mus in this dir
+mus check -r .                      # recurse
+
+# Once a file is safely uploaded AND remote-checked, free local disk:
+mus rm -y final/microglia_clusters.h5ad
+
+# Restore later (sidecar stays as a tombstone):
+mus irods get final/microglia_clusters.h5ad.mus
+```
+
+`mus rm` refuses to delete unless: sidecar says uploaded, local sha matches, remote checksum matches. After deletion the sidecar is a tombstone — keep it.
+
+---
+
+## End-to-end transcripts
+
+### Pathway A — Back up
 
 ```bash
 cd ~/projects/microglia_pilot
 
-# Folder annotation
+# Step 2 — ELN link (writes data_project + eln_*)
 mus eln link 12345
+
+# Step 3 — verify what's already on the catalog before naming
+mus irods projects --details | head -20
+
+# Step 4 — annotate
+mus config set organism human
+mus config set tissue 'middle temporal gyrus'
+mus config set technology 10x_chromium_3p_v3
+mus config set source internal
+mus config set access internal
+
+# Step 6 — upload
+mus irods upload -m "scripts snapshot" scripts/
+mus irods upload -m "raw fastq" raw/sample01.fastq.gz raw/sample02.fastq.gz
+mus irods upload -m "post-QC h5ad + figure-3 source" \
+    final/microglia_clusters.h5ad  final/figure_data.csv
+```
+
+### Pathway B — Anthive prep
+
+```bash
+cd ~/projects/microglia_pilot
+
+# Step 2 — ELN link
+mus eln link 12345
+
+# Step 3
+mus irods projects | grep -i fiers      # ensure my chosen name is free
+
+# Step 4 — annotate (includes all seven h5ad-required fields)
 mus config set organism human
 mus config set tissue 'middle temporal gyrus'
 mus config set cell_type 'microglial cell'
@@ -235,63 +317,68 @@ mus config set technology 10x_chromium_3p_v3
 mus config set suspension_type nucleus
 mus config set source internal
 mus config set access internal
+# soft, but please do
+mus config set disease 'Alzheimer disease'
+mus config set sex pooled
 
-# Sanity check (gates the upload)
+# Step 5 — sanity check
 mus h5ad check final/microglia_clusters.h5ad
 
-# Deposit: anthive staging + lab archive
-mus s3 upload    -m "ingest into anthive"        final/microglia_clusters.h5ad
-mus irods upload -m "post-QC h5ad for anthive"   final/microglia_clusters.h5ad
+# Step 6 — deposit (anthive staging + lab archive)
+mus s3 upload    -m "ingest into anthive"  final/microglia_clusters.h5ad
+mus irods upload -m "post-QC h5ad"         final/microglia_clusters.h5ad
 ```
-
-That's pathway B. Done.
 
 ---
 
-## Shared concepts (quick reference)
+## Concepts reference
 
 ### Annotation lives in two places
 
-- **`mus.cfg`** in a folder. Applies to that folder and every file beneath it. Cascades root-down; deeper overrides shallower. Set once at the project root; refine in subfolders.
+- **`mus.cfg`** in a folder. Applies to that folder and every file beneath it. Cascades root-down; deeper overrides shallower.
 - **`<file>.mus`** sidecar next to one specific file. Applies to that file only. Created by `mus tag` / `mus h5ad check` / `mus irods upload` — don't hand-edit.
 
 Per-key precedence: file sidecar > deepest mus.cfg > shallower mus.cfg > root.
 
 ### ELN status is mandatory
 
-Every folder mus operates on must be in ONE of two states:
-
-| State | How to set it | Effect |
-| --- | --- | --- |
-| **linked** | `mus eln link <ID>` | folder ↔ eLab experiment; auto-comments on upload |
-| **disabled** | `mus eln disable` (per-folder) or `mus eln disable --global` (once) | upload proceeds without eLab |
+| State | How to set it |
+| --- | --- |
+| **linked** | `mus eln link <ID>` |
+| **disabled** | `mus eln disable` (per-folder) or `mus eln disable --global` (once per machine) |
 
 A folder with neither set is **undecided** and `mus irods upload` refuses until you pick.
 
 ### Vocabulary
 
-The controlled-value lists for `organism`, `tissue`, `cell_type`, `technology`, `disease`, etc. live in [`vocabulary/main.yaml`](https://codeberg.org/mfiers/mus/src/branch/main/vocabulary/main.yaml). Local copy auto-refreshes every 24 h in the background. Inspect:
+| Field | Ontology | Browse |
+| --- | --- | --- |
+| `tissue` | UBERON labels | <https://www.ebi.ac.uk/ols4/ontologies/uberon> |
+| `cell_type` | CL labels | <https://www.ebi.ac.uk/ols4/ontologies/cl> |
+| `disease` | MONDO labels | <https://www.ebi.ac.uk/ols4/ontologies/mondo> |
+| `technology` | EFO-aligned protocol/chemistry | <https://www.ebi.ac.uk/ols4/ontologies/efo> |
+
+Inspect locally:
 
 ```bash
 mus vocab show              # everything
 mus vocab show tissue       # one field
-mus vocab refresh           # force a pull right now
+mus vocab refresh           # force a pull
 ```
 
-Labels, not IDs (`tissue=middle temporal gyrus`, never `UBERON:0002771`). Case + separator variants are silently canonicalised (`HuMaN` → `human`, `prefrontal_cortex` ≡ `Prefrontal Cortex`). Off-vocab values are rejected with a "did you mean?" suggestion; `--force` saves anyway.
-
-Need a new term? File an issue on the mus repo — don't invent locally.
+Mus auto-refreshes the cache every 24 h in the background. Set `MUS_SKIP_VOCAB_REFRESH=1` to opt out (CI, sandboxes).
 
 ---
 
 ## Common pitfalls
 
-- **`data_project not set`** — run `mus eln link 12345` or `mus config set data_project Fiers2025`. Format: `NameYear` (capital first, ends in 4 digits).
-- **`no ELN status declared`** — every folder picks consciously: link or disable.
-- **`vocabulary changed since last check`** — joint vocab was updated upstream; re-run `mus h5ad check`.
-- **`value not in vocabulary`** — `mus vocab show <field>` to see allowed values, or browse <https://codeberg.org/mfiers/mus/src/branch/main/vocabulary/main.yaml>.
-- **`local drift since upload`** on `mus rm` — you (or a process) modified the file after upload. Re-upload, or restore original, then retry.
-- **`upload spans N source folders — refusing`** — run mus once per source folder. Each folder has its own cascade.
+- **`data_project not set`** — Step 3 wasn't done. Run `mus eln link 12345` or `mus config set data_project Fiers2025`.
+- **`data_project` doesn't match format** — must be `NameYear`: capital first letter, ends in 4 digits.
+- **`no ELN status declared`** — every folder picks consciously: `mus eln link <ID>` or `mus eln disable`.
+- **`upload spans N source folders — refusing`** — Run mus once per source folder. Each folder has its own cascade.
+- **`vocabulary changed since last check`** — Joint vocab was updated upstream; re-run `mus h5ad check`.
+- **`value not in vocabulary`** — `mus vocab show <field>` to see allowed values.
+- **`local drift since upload`** on `mus rm` — file modified after upload. Re-upload, or restore original, then retry.
 - **Many small files** — `mus irods upload` will offer to pack into `tar.gz` interactively. Say `t`.
 - **Deleted `*.mus` by accident** — recover from git, or `mus irods scan find <sha256>` if you noted the hash.
 
@@ -299,10 +386,10 @@ Need a new term? File an issue on the mus repo — don't invent locally.
 
 ## See also
 
-- [quickstart.md](quickstart.md) — full reference manual: every flag, every env var, every edge case
-- `mus h5ad howto` — depositor primer for pathway B (structural rules, vocab, soft fields, failure modes)
+- [quickstart.md](quickstart.md) — full reference manual: every flag, env var, edge case
+- `mus h5ad howto` — depositor primer for pathway B (structural rules, vocab fields, failure modes)
 - [joint vocabulary](https://codeberg.org/mfiers/mus/src/branch/main/vocabulary/main.yaml) — controlled-value lists
-- UBERON (anatomy): <https://www.ebi.ac.uk/ols4/ontologies/uberon>
-- CL (cell types): <https://www.ebi.ac.uk/ols4/ontologies/cl>
-- MONDO (diseases): <https://www.ebi.ac.uk/ols4/ontologies/mondo>
-- EFO (assays / protocols): <https://www.ebi.ac.uk/ols4/ontologies/efo>
+- UBERON: <https://www.ebi.ac.uk/ols4/ontologies/uberon>
+- CL: <https://www.ebi.ac.uk/ols4/ontologies/cl>
+- MONDO: <https://www.ebi.ac.uk/ols4/ontologies/mondo>
+- EFO: <https://www.ebi.ac.uk/ols4/ontologies/efo>
