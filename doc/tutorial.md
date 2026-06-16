@@ -4,8 +4,8 @@ Two pathways. Pick the one that matches what you're doing today.
 
 | Pathway | When to use it | What it does |
 | --- | --- | --- |
-| **A. Back up data** | You have files (any format) you need on the lab archive. | Tag → upload to iRODS. Done. |
-| **B. Prep h5ad for anthive** | You're about to submit a single-cell `.h5ad` to the lab catalog. | Tag → strict-validate → upload to S3 staging + iRODS. |
+| **A. Back up data** | You have files (any format) you need on the lab archive. | Tag → annotate → upload to iRODS. Done. |
+| **B. Prep h5ad for anthive** | Submit a single-cell `.h5ad` to the lab catalog. | Tag → annotate → strict-validate → upload to S3 staging + iRODS. |
 
 If you're not sure, you want **A**. **B** only kicks in when something specifically asks for an anthive-ready h5ad.
 
