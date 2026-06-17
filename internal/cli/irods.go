@@ -16,6 +16,7 @@ import (
 	"codeberg.org/mfiers/mus/internal/folder"
 	"codeberg.org/mfiers/mus/internal/hashcache"
 	"codeberg.org/mfiers/mus/internal/iron"
+	"codeberg.org/mfiers/mus/internal/localprojects"
 	"codeberg.org/mfiers/mus/internal/pikahook"
 	"codeberg.org/mfiers/mus/internal/sidecar"
 	"github.com/spf13/cobra"
@@ -35,6 +36,7 @@ func newIRODSCmd() *cobra.Command {
 		newIRODSScanCmd(),
 		newIRODSFindCmd(),
 		newIRODSProjectsCmd(),
+		newIRODSProjectCmd(),
 	)
 	return cmd
 }
@@ -469,6 +471,14 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 			"size":    fmt.Sprintf("%d", st.Size()),
 			"message": message,
 		})
+		// Update the local project-log so `mus irods projects --details`
+		// can later show "the most recent local folder you uploaded
+		// from for project X". Best-effort — silent on every error.
+		if dp := doc.DataProject; dp != "" {
+			if lp, err := localprojects.Open(""); err == nil {
+				lp.RecordBestEffort(dp, filepath.Dir(abs))
+			}
+		}
 	}
 
 	// Per-folder metadata archive. iRODS-flavoured: only the

@@ -17,12 +17,14 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"codeberg.org/mfiers/mus/internal/config"
 	"codeberg.org/mfiers/mus/internal/defaults"
 	"codeberg.org/mfiers/mus/internal/iron"
+	"codeberg.org/mfiers/mus/internal/localprojects"
 )
 
 func newIRODSProjectsCmd() *cobra.Command {
@@ -35,8 +37,14 @@ func newIRODSProjectsCmd() *cobra.Command {
 			"this before `mus eln link` / `mus config set data_project` to\n" +
 			"avoid colliding with an existing project.\n\n" +
 			"Output is one project per line, alphabetically. With --details,\n" +
-			"adds the iRODS owner (uploader who created the subcollection)\n" +
-			"and the creation date.\n\n" +
+			"adds:\n" +
+			"  - iRODS owner (u-number of whoever created the subcollection)\n" +
+			"  - iRODS creation date\n" +
+			"  - iRODS last-modified time (max DATA_MODIFY_TIME under the\n" +
+			"    project; one extra genquery per project — slower with many)\n" +
+			"  - local folder you most recently uploaded from for this\n" +
+			"    project on this machine (from ~/.local/share/mus/local_projects.json,\n" +
+			"    updated automatically on every `mus irods upload` / `mus s3 upload`)\n\n" +
 			"This is a passive read against the iCAT — no AVU stamping is\n" +
 			"required for a project to show up; the subcollection's mere\n" +
 			"existence under <irods_home>/project/ is the source of truth.",
@@ -85,16 +93,103 @@ func runIRODSProjects(cmd *cobra.Command, details bool) error {
 		fmt.Fprintf(stdout, "no projects found under %s\n", parent)
 		return nil
 	}
+	if details {
+		enrichWithLocalFolders(rows)
+		enrichWithIRODSLastModified(ctx, client, parent, rows)
+	}
 	writeProjects(stdout, rows, details)
 	return nil
+}
+
+// enrichWithLocalFolders fills LocalFolder on each row from the
+// local projects log. Best-effort — missing log / read errors
+// leave every row's LocalFolder empty.
+func enrichWithLocalFolders(rows []projectRow) {
+	store, err := localprojects.Open("")
+	if err != nil {
+		return
+	}
+	all, err := store.All()
+	if err != nil {
+		return
+	}
+	for i := range rows {
+		entry, ok := all[rows[i].Name]
+		if !ok {
+			continue
+		}
+		// Stamp folder + a compact "YYYY-MM-DD" suffix from LastUsed.
+		// Skip the suffix if LastUsed is zero (shouldn't happen but
+		// keep robust to hand-edits of the JSON).
+		if entry.LastUsed.IsZero() {
+			rows[i].LocalFolder = entry.Folder
+		} else {
+			rows[i].LocalFolder = fmt.Sprintf("%s (%s)",
+				entry.Folder, entry.LastUsed.Format("2006-01-02"))
+		}
+	}
+}
+
+// enrichWithIRODSLastModified asks the iCAT for the most recent
+// DATA_MODIFY_TIME under each project's collection (recursive,
+// LIKE-prefix match). One genquery per project — slow with many
+// projects but bounded; called only when --details.
+//
+// Best-effort: a per-project failure leaves that row's LastUpload
+// empty; the rest still get their value. Errors are silent.
+func enrichWithIRODSLastModified(ctx context.Context, client *iron.Client, parent string, rows []projectRow) {
+	for i := range rows {
+		projectPath := parent + "/" + rows[i].Name
+		raw, err := client.QueryJSON(ctx, fmt.Sprintf(
+			"select DATA_MODIFY_TIME where COLL_NAME like '%s%%' "+
+				"order by DATA_MODIFY_TIME desc limit 1",
+			escapeGenquerySingleQuotes(projectPath),
+		))
+		if err != nil {
+			continue
+		}
+		var cells [][]string
+		if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &cells); err != nil {
+			continue
+		}
+		if len(cells) == 0 || len(cells[0]) == 0 {
+			continue
+		}
+		rows[i].LastUpload = formatICATTime(cells[0][0])
+	}
+}
+
+// formatICATTime renders an iCAT DATA_MODIFY_TIME string compactly.
+// iCAT emits either Unix epoch seconds ("1718000000") or ISO-ish
+// strings depending on the iron version — handle both, fall back
+// to the raw value on parse failure.
+func formatICATTime(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	// Try Unix seconds.
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return t.UTC().Format("2006-01-02")
+	}
+	if t, err := time.Parse("2006-01-02T15:04:05", raw); err == nil {
+		return t.UTC().Format("2006-01-02")
+	}
+	// Some iron builds emit unix seconds as a decimal string.
+	var secs int64
+	if _, err := fmt.Sscanf(raw, "%d", &secs); err == nil && secs > 0 {
+		return time.Unix(secs, 0).UTC().Format("2006-01-02")
+	}
+	return raw
 }
 
 // projectRow holds one collection's metadata. Only `Name` is
 // populated unless --details was requested.
 type projectRow struct {
-	Name       string
-	Owner      string
-	CreateTime string
+	Name        string
+	Owner       string
+	CreateTime  string
+	LastUpload  string // iCAT: max DATA_MODIFY_TIME under the project (--details)
+	LocalFolder string // ~/.local/share/mus/local_projects.json (--details)
 }
 
 // queryProjects asks the iCAT for every subcollection one level
@@ -117,6 +212,14 @@ func queryProjects(ctx context.Context, client *iron.Client, parent string, deta
 	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &cells); err != nil {
 		return nil, fmt.Errorf("decoding iron query output: %w (raw=%q)", err, raw)
 	}
+	// iCAT genquery returns one row per (collection, owner) tuple
+	// because the collection-owner relation is many-to-many via the
+	// ACL table. Dedupe client-side, keyed on collection name —
+	// keep the FIRST (owner, create_time) we see per name. Caller
+	// won't usually care which ACL "wins" because the catalog's
+	// real creator typically has the earliest entry in the
+	// genquery result.
+	seen := make(map[string]int, len(cells)) // name → index into `rows`
 	rows := make([]projectRow, 0, len(cells))
 	for _, row := range cells {
 		if len(row) == 0 {
@@ -124,6 +227,9 @@ func queryProjects(ctx context.Context, client *iron.Client, parent string, deta
 		}
 		name := path.Base(row[0])
 		if name == "" || name == "." || name == "/" {
+			continue
+		}
+		if _, dup := seen[name]; dup {
 			continue
 		}
 		entry := projectRow{Name: name}
@@ -135,6 +241,7 @@ func queryProjects(ctx context.Context, client *iron.Client, parent string, deta
 				entry.CreateTime = row[2]
 			}
 		}
+		seen[name] = len(rows)
 		rows = append(rows, entry)
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
@@ -142,8 +249,9 @@ func queryProjects(ctx context.Context, client *iron.Client, parent string, deta
 }
 
 // writeProjects renders rows to w. Plain list when !details;
-// aligned table when details — owner column is unbounded length so
-// we compute the width up front.
+// aligned table when details. Column widths are computed per call
+// so a few unusually long owner / folder values don't push the
+// other rows out of alignment.
 func writeProjects(w io.Writer, rows []projectRow, details bool) {
 	if !details {
 		for _, r := range rows {
@@ -151,28 +259,46 @@ func writeProjects(w io.Writer, rows []projectRow, details bool) {
 		}
 		return
 	}
-	nameWidth := 0
-	ownerWidth := 0
+	widths := computeColumnWidths(rows,
+		[]string{"name", "owner", "created", "last upload", "local folder"})
+	header := fmt.Sprintf("%-*s  %-*s  %-*s  %-*s  %s",
+		widths[0], "name",
+		widths[1], "owner",
+		widths[2], "created",
+		widths[3], "last upload",
+		"local folder")
+	fmt.Fprintln(w, header)
+	fmt.Fprintln(w, strings.Repeat("-", len(header)))
 	for _, r := range rows {
-		if len(r.Name) > nameWidth {
-			nameWidth = len(r.Name)
-		}
-		if len(r.Owner) > ownerWidth {
-			ownerWidth = len(r.Owner)
-		}
+		fmt.Fprintf(w, "%-*s  %-*s  %-*s  %-*s  %s\n",
+			widths[0], r.Name,
+			widths[1], r.Owner,
+			widths[2], r.CreateTime,
+			widths[3], r.LastUpload,
+			r.LocalFolder)
 	}
-	if nameWidth < 4 {
-		nameWidth = 4
+}
+
+// computeColumnWidths returns the max-of(header-label, longest-cell)
+// for the first 4 columns. The 5th (local folder) is unbounded —
+// rendered without a fixed width.
+func computeColumnWidths(rows []projectRow, headers []string) []int {
+	widths := make([]int, len(headers))
+	for i, h := range headers {
+		widths[i] = len(h)
 	}
-	if ownerWidth < 5 {
-		ownerWidth = 5
-	}
-	fmt.Fprintf(w, "%-*s  %-*s  %s\n", nameWidth, "name", ownerWidth, "owner", "created")
-	fmt.Fprintln(w, strings.Repeat("-", nameWidth+ownerWidth+22))
 	for _, r := range rows {
-		fmt.Fprintf(w, "%-*s  %-*s  %s\n",
-			nameWidth, r.Name, ownerWidth, r.Owner, r.CreateTime)
+		cells := []string{r.Name, r.Owner, r.CreateTime, r.LastUpload}
+		for i, c := range cells {
+			if i >= len(widths)-1 { // skip the unbounded trailing column
+				break
+			}
+			if len(c) > widths[i] {
+				widths[i] = len(c)
+			}
+		}
 	}
+	return widths
 }
 
 // escapeGenquerySingleQuotes doubles every ' so the value is safe

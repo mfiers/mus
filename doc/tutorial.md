@@ -88,7 +88,10 @@ Before picking a name, list the projects that already exist on iRODS:
 
 ```bash
 mus irods projects                # plain list, sorted alphabetically
-mus irods projects --details      # adds owner (u-number) + creation date
+mus irods projects --details      # adds owner, creation date, last
+                                  # upload time (iRODS), and the most
+                                  # recent local folder you used for
+                                  # each project on this machine
 ```
 
 Output looks like:
@@ -102,6 +105,13 @@ Sun2024
 ```
 
 If your intended name is already there and it's not yours, pick a different one (e.g. add a discriminator: `FiersMicroglia2025`).
+
+To see what's actually IN a project (most recent 20 uploads):
+
+```bash
+mus irods project Fiers2025
+mus irods project Fiers2025 -n 50    # last 50 instead of 20
+```
 
 ### 3c. Set it
 

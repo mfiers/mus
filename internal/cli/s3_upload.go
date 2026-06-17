@@ -38,6 +38,7 @@ import (
 	"codeberg.org/mfiers/mus/internal/config"
 	"codeberg.org/mfiers/mus/internal/envformat"
 	"codeberg.org/mfiers/mus/internal/hashcache"
+	"codeberg.org/mfiers/mus/internal/localprojects"
 	"codeberg.org/mfiers/mus/internal/s3client"
 	"codeberg.org/mfiers/mus/internal/sidecar"
 )
@@ -377,6 +378,12 @@ func runS3Upload(cmd *cobra.Command, args, staticFiles []string, subfolder, mess
 		doc.S3.UploadedAt = time.Now().UTC().Truncate(time.Second)
 		if err := sidecar.Write(scPath, doc); err != nil {
 			return fmt.Errorf("update sidecar %s: %w", scPath, err)
+		}
+		// Update the local project-log so `mus irods projects --details`
+		// can later show "the most recent local folder you uploaded
+		// from for project X". Best-effort — silent on every error.
+		if lp, err := localprojects.Open(""); err == nil {
+			lp.RecordBestEffort(dataProject, filepath.Dir(abs))
 		}
 
 		// Build the collapsed .mus (cascade + local sidecar merged
