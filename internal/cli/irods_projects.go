@@ -10,6 +10,7 @@ package cli
 // keyed on COLL_PARENT_NAME (no recursion, no AVU filter).
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -130,33 +131,65 @@ func enrichWithLocalFolders(rows []projectRow) {
 	}
 }
 
-// enrichWithIRODSLastModified asks the iCAT for the most recent
-// DATA_MODIFY_TIME under each project's collection (recursive,
-// LIKE-prefix match). One genquery per project — slow with many
-// projects but bounded; called only when --details.
+// enrichWithIRODSLastModified asks iRODS for the most recent
+// modification time under each project's collection. One
+// `iron tree --json <project>` call per project, walking the
+// subtree and taking the max of the `modified` field. Slow with
+// many large projects but bounded; called only when --details.
 //
 // Best-effort: a per-project failure leaves that row's LastUpload
 // empty; the rest still get their value. Errors are silent.
+//
+// We avoid iCAT genquery here — iron 0.4.67 rejects LIKE / multi-
+// table projections in `iron query`. `iron tree --json` is the
+// reliable cross-version primitive.
 func enrichWithIRODSLastModified(ctx context.Context, client *iron.Client, parent string, rows []projectRow) {
 	for i := range rows {
 		projectPath := parent + "/" + rows[i].Name
-		raw, err := client.QueryJSON(ctx, fmt.Sprintf(
-			"select DATA_MODIFY_TIME where COLL_NAME like '%s%%' "+
-				"order by DATA_MODIFY_TIME desc limit 1",
-			escapeGenquerySingleQuotes(projectPath),
-		))
+		raw, err := client.TreeJSON(ctx, projectPath, "name", "checksum", "date")
 		if err != nil {
 			continue
 		}
-		var cells [][]string
-		if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &cells); err != nil {
-			continue
+		newest := newestModifiedInTreeJSON(raw)
+		if newest != "" {
+			rows[i].LastUpload = newest
 		}
-		if len(cells) == 0 || len(cells[0]) == 0 {
-			continue
-		}
-		rows[i].LastUpload = formatICATTime(cells[0][0])
 	}
+}
+
+// newestModifiedInTreeJSON parses iron tree's NDJSON output and
+// returns the most recent `modified` value (formatted compactly)
+// across every data object in the tree. Returns "" when nothing
+// usable is found.
+func newestModifiedInTreeJSON(raw string) string {
+	scanner := bufio.NewScanner(strings.NewReader(raw))
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	var best string // store raw mtime; lexicographic sort works for ISO/epoch within one encoding
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || line[0] != '{' {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			continue
+		}
+		checksum, _ := m["checksum"].(string)
+		if checksum == "" { // collection, not data object
+			continue
+		}
+		mod, _ := m["modified"].(string)
+		if mod == "" {
+			continue
+		}
+		if mod > best {
+			best = mod
+		}
+	}
+	if best == "" {
+		return ""
+	}
+	return formatICATTime(best)
 }
 
 // formatICATTime renders an iCAT DATA_MODIFY_TIME string compactly.
@@ -192,60 +225,117 @@ type projectRow struct {
 	LocalFolder string // ~/.local/share/mus/local_projects.json (--details)
 }
 
-// queryProjects asks the iCAT for every subcollection one level
-// below `parent`. Without `details` we project COLL_NAME only;
-// with `details` we add COLL_OWNER_NAME + COLL_CREATE_TIME so the
-// depositor sees who landed the project (and roughly when).
-func queryProjects(ctx context.Context, client *iron.Client, parent string, details bool) ([]projectRow, error) {
-	cols := "COLL_NAME"
-	if details {
-		cols = "COLL_NAME, COLL_OWNER_NAME, COLL_CREATE_TIME"
-	}
-	raw, err := client.QueryJSON(ctx, fmt.Sprintf(
-		"select %s where COLL_PARENT_NAME = '%s'",
-		cols, escapeGenquerySingleQuotes(parent),
-	))
+// queryProjects asks iRODS for every subcollection one level below
+// `parent`. We use `iron ls --json` because iron's genquery in
+// older releases (≤ 0.4.67) rejects the COLL_PARENT_NAME filter +
+// COLL_OWNER_NAME / COLL_CREATE_TIME projection with
+// SYS_INVALID_INPUT_PARAM. `iron ls` is the iRODS-native "what's
+// directly under here?" command and works on every iron version.
+//
+// Output handling: iron's ls --json comes in two shapes depending
+// on version — a single JSON array, or NDJSON (one object per
+// line). parseIronListJSON handles both. Only collection-shaped
+// entries are returned (data objects directly under the project
+// parent don't exist in mus's layout, but we filter defensively).
+func queryProjects(ctx context.Context, client *iron.Client, parent string, _details bool) ([]projectRow, error) {
+	raw, err := client.ListJSON(ctx, parent)
 	if err != nil {
 		return nil, err
 	}
-	var cells [][]string
-	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &cells); err != nil {
-		return nil, fmt.Errorf("decoding iron query output: %w (raw=%q)", err, raw)
+	entries, err := parseIronListJSON(raw)
+	if err != nil {
+		return nil, fmt.Errorf("decoding iron ls output: %w", err)
 	}
-	// iCAT genquery returns one row per (collection, owner) tuple
-	// because the collection-owner relation is many-to-many via the
-	// ACL table. Dedupe client-side, keyed on collection name —
-	// keep the FIRST (owner, create_time) we see per name. Caller
-	// won't usually care which ACL "wins" because the catalog's
-	// real creator typically has the earliest entry in the
-	// genquery result.
-	seen := make(map[string]int, len(cells)) // name → index into `rows`
-	rows := make([]projectRow, 0, len(cells))
-	for _, row := range cells {
-		if len(row) == 0 {
+	seen := make(map[string]bool, len(entries))
+	rows := make([]projectRow, 0, len(entries))
+	for _, e := range entries {
+		// Skip explicit data objects — projects must be collections.
+		if e.IsObject {
 			continue
 		}
-		name := path.Base(row[0])
-		if name == "" || name == "." || name == "/" {
+		name := path.Base(e.Name)
+		if name == "" || name == "." || name == "/" || name == path.Base(parent) {
 			continue
 		}
-		if _, dup := seen[name]; dup {
+		if seen[name] {
 			continue
 		}
-		entry := projectRow{Name: name}
-		if details {
-			if len(row) > 1 {
-				entry.Owner = row[1]
-			}
-			if len(row) > 2 {
-				entry.CreateTime = row[2]
-			}
-		}
-		seen[name] = len(rows)
-		rows = append(rows, entry)
+		seen[name] = true
+		rows = append(rows, projectRow{Name: name})
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
 	return rows, nil
+}
+
+// ironListEntry is one record from `iron ls --json`. Different iron
+// versions emit slightly different field shapes — we accept the
+// most common ones. An entry is a "data object" if it carries a
+// checksum or has type == "data"/"object"; otherwise it's a
+// collection (or unknown, which we treat as collection).
+type ironListEntry struct {
+	Name     string
+	IsObject bool
+}
+
+// parseIronListJSON handles both NDJSON and JSON-array variants of
+// `iron ls --json`. Different iron versions emit different shapes;
+// the leading character distinguishes them: `[` ⇒ array, `{` ⇒
+// NDJSON. Empty input is a successful zero-result.
+func parseIronListJSON(raw string) ([]ironListEntry, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	switch raw[0] {
+	case '[':
+		var arr []map[string]any
+		if err := json.Unmarshal([]byte(raw), &arr); err != nil {
+			return nil, fmt.Errorf("decoding iron ls --json array: %w", err)
+		}
+		out := make([]ironListEntry, 0, len(arr))
+		for _, m := range arr {
+			out = append(out, ironListEntryFromMap(m))
+		}
+		return out, nil
+	case '{':
+		entries := parseIronListNDJSON(raw)
+		return entries, nil
+	default:
+		return nil, fmt.Errorf("unrecognised iron ls --json shape (first 200 bytes: %.200s)", raw)
+	}
+}
+
+func parseIronListNDJSON(raw string) []ironListEntry {
+	scanner := bufio.NewScanner(strings.NewReader(raw))
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	var out []ironListEntry
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || line[0] != '{' {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			// One bad line shouldn't kill the whole listing —
+			// just skip it.
+			continue
+		}
+		out = append(out, ironListEntryFromMap(m))
+	}
+	return out
+}
+
+func ironListEntryFromMap(m map[string]any) ironListEntry {
+	name, _ := m["name"].(string)
+	checksum, _ := m["checksum"].(string)
+	typeStr, _ := m["type"].(string)
+	isObject := checksum != "" ||
+		strings.EqualFold(typeStr, "data") ||
+		strings.EqualFold(typeStr, "dataobject") ||
+		strings.EqualFold(typeStr, "data_object") ||
+		strings.EqualFold(typeStr, "object") ||
+		strings.EqualFold(typeStr, "file")
+	return ironListEntry{Name: name, IsObject: isObject}
 }
 
 // writeProjects renders rows to w. Plain list when !details;

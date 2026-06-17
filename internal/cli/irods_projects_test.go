@@ -2,69 +2,84 @@ package cli
 
 import (
 	"bytes"
-	"path"
-	"sort"
 	"strings"
 	"testing"
 )
 
-// dedupeProjectRowsForTest mirrors the dedup logic used by
-// queryProjects on the parsed [][]string. Lets us unit-test the
-// dedupe behaviour without needing an iron client.
-func dedupeProjectRowsForTest(cells [][]string, details bool) []projectRow {
-	seen := make(map[string]int, len(cells))
-	rows := make([]projectRow, 0, len(cells))
-	for _, row := range cells {
-		if len(row) == 0 {
-			continue
-		}
-		name := path.Base(row[0])
-		if name == "" || name == "." || name == "/" {
-			continue
-		}
-		if _, dup := seen[name]; dup {
-			continue
-		}
-		entry := projectRow{Name: name}
-		if details {
-			if len(row) > 1 {
-				entry.Owner = row[1]
-			}
-			if len(row) > 2 {
-				entry.CreateTime = row[2]
-			}
-		}
-		seen[name] = len(rows)
-		rows = append(rows, entry)
+func TestParseIronListJSON_NDJSON(t *testing.T) {
+	raw := strings.Join([]string{
+		`{"name": "/gbiomed/home/BADS/project/Fiers2025", "type": "collection"}`,
+		`{"name": "/gbiomed/home/BADS/project/DeWulf2024", "type": "collection"}`,
+		`{"name": "/gbiomed/home/BADS/project/orphan.txt", "type": "data", "checksum": "sha2:abc"}`,
+	}, "\n")
+	entries, err := parseIronListJSON(raw)
+	if err != nil {
+		t.Fatal(err)
 	}
-	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
-	return rows
+	if len(entries) != 3 {
+		t.Fatalf("expected 3 entries; got %d: %+v", len(entries), entries)
+	}
+	if entries[0].IsObject {
+		t.Errorf("first entry should be a collection: %+v", entries[0])
+	}
+	if !entries[2].IsObject {
+		t.Errorf("third entry should be a data object: %+v", entries[2])
+	}
 }
 
-func TestQueryProjects_DedupesACLExplosion(t *testing.T) {
-	// iCAT can return one row per (collection, owner) tuple — same
-	// COLL_NAME repeated with different COLL_OWNER_NAME values.
-	cells := [][]string{
-		{"/gbiomed/home/BADS/mus/project/Fiers2025", "u0089478", "2026-04-12T10:11:12"},
-		{"/gbiomed/home/BADS/mus/project/Fiers2025", "u9999999", "2026-04-12T10:11:12"},
-		{"/gbiomed/home/BADS/mus/project/DeWulf2024", "u0089478", "2024-09-01T08:00:00"},
-		{"/gbiomed/home/BADS/mus/project/Fiers2025", "groupBADS", "2026-04-12T10:11:12"},
+func TestParseIronListJSON_SingleArray(t *testing.T) {
+	raw := `[
+		{"name": "/p/Fiers2025"},
+		{"name": "/p/DeWulf2024"}
+	]`
+	entries, err := parseIronListJSON(raw)
+	if err != nil {
+		t.Fatal(err)
 	}
-	got := dedupeProjectRowsForTest(cells, true)
-	if len(got) != 2 {
-		t.Fatalf("expected 2 distinct projects after dedupe; got %d: %+v", len(got), got)
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries; got %d", len(entries))
 	}
-	want := []string{"DeWulf2024", "Fiers2025"}
-	for i, w := range want {
-		if got[i].Name != w {
-			t.Errorf("row %d: got %q, want %q", i, got[i].Name, w)
-		}
+}
+
+func TestParseIronListJSON_GarbageReturnsError(t *testing.T) {
+	if _, err := parseIronListJSON("this is not json"); err == nil {
+		t.Error("expected error on non-JSON input")
 	}
-	// First-seen-wins for owner: Fiers2025's first row had u0089478.
-	for _, r := range got {
-		if r.Name == "Fiers2025" && r.Owner != "u0089478" {
-			t.Errorf("Fiers2025 should keep first-seen owner u0089478; got %q", r.Owner)
-		}
+}
+
+func TestParseIronListJSON_EmptyIsNoError(t *testing.T) {
+	got, err := parseIronListJSON("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("empty input should yield no entries; got %v", got)
+	}
+}
+
+func TestNewestModifiedInTreeJSON(t *testing.T) {
+	raw := strings.Join([]string{
+		`{"name": "/p/Fiers2025/exp1", "modified": "2025-01-01T00:00:00Z"}`,
+		`{"name": "/p/Fiers2025/exp1/a.h5ad", "checksum": "x", "modified": "2025-06-10T12:00:00Z"}`,
+		`{"name": "/p/Fiers2025/exp1/b.h5ad", "checksum": "y", "modified": "2026-06-14T08:00:00Z"}`,
+		`{"name": "/p/Fiers2025/exp1/c.h5ad", "checksum": "z", "modified": "2025-12-31T23:59:00Z"}`,
+	}, "\n")
+	got := newestModifiedInTreeJSON(raw)
+	if got != "2026-06-14" {
+		t.Errorf("expected newest=2026-06-14, got %q", got)
+	}
+}
+
+func TestNewestModifiedInTreeJSON_IgnoresCollections(t *testing.T) {
+	// Collection (no checksum) with an even newer modified field
+	// should NOT be picked — we only care about data objects.
+	raw := strings.Join([]string{
+		`{"name": "/p/Fiers2025/exp1", "modified": "2099-12-31T00:00:00Z"}`,
+		`{"name": "/p/Fiers2025/exp1/a.h5ad", "checksum": "x", "modified": "2025-06-10T12:00:00Z"}`,
+	}, "\n")
+	got := newestModifiedInTreeJSON(raw)
+	if got != "2025-06-10" {
+		t.Errorf("collection mtime leaked in; got %q", got)
 	}
 }
 

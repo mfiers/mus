@@ -10,12 +10,11 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"sort"
-	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -110,74 +109,44 @@ type objectRow struct {
 	RelPath    string
 }
 
-// queryRecentInProject fetches every data object under projectPath
-// via one genquery, sorts client-side by DATA_MODIFY_TIME desc,
-// and returns the top `limit`.
+// queryRecentInProject walks the project's iRODS subtree via
+// `iron tree --json`, filters to data objects, sorts client-side
+// by modified time desc, and returns the top `limit`.
 //
-// We sort + cap CLIENT-SIDE because iron's genquery (iquest) doesn't
-// support `ORDER BY` / `LIMIT` clauses — those return
-// SYS_INVALID_INPUT_PARAM. For typical projects (tens to a few
-// thousand objects) the cost is negligible. For very large projects
-// the whole row set is still streamed and we just discard the tail
-// — fine for the "what landed lately?" use case.
+// We use `iron tree` instead of `iron query` because older iron
+// releases (≤ 0.4.67) reject the SQL forms we need (LIKE filter
+// on COLL_NAME, ORDER BY / LIMIT clauses) with
+// SYS_INVALID_INPUT_PARAM. Tree is the reliable cross-version
+// primitive — `mus irods scan` already uses the same parser.
 //
-// iCAT path-prefix matching: COLL_NAME LIKE 'projectPath/%' catches
-// every data object in a subcollection. The trailing `/` means
-// projectPath itself isn't matched (subcollections only). The
-// `mus irods upload` layout always puts files under an experiment
-// subcollection, so the root-level case is rare in practice.
+// Performance: tree walks the whole project subtree. Per-project
+// scope keeps this bounded (one project's worth of objects, not
+// the whole lab). For multi-thousand-object projects the network
+// part dominates; the client-side sort + cap is trivial.
 func queryRecentInProject(ctx context.Context, client *iron.Client, projectPath string, limit int) ([]objectRow, error) {
-	sql := fmt.Sprintf(
-		"select DATA_NAME, COLL_NAME, DATA_MODIFY_TIME, DATA_OWNER_NAME, DATA_SIZE "+
-			"where COLL_NAME like '%s/%%'",
-		escapeGenquerySingleQuotes(projectPath),
-	)
-	raw, err := client.QueryJSON(ctx, sql)
+	raw, err := client.TreeJSON(ctx, projectPath, "name", "size", "checksum", "date", "creator")
 	if err != nil {
 		return nil, err
 	}
-	var cells [][]string
-	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &cells); err != nil {
-		return nil, fmt.Errorf("decoding iron query output: %w (raw=%q)", err, raw)
+	objects, err := parseIronTreeJSON(strings.NewReader(raw), projectPath)
+	if err != nil {
+		return nil, fmt.Errorf("parsing iron tree output: %w", err)
 	}
-	rows := make([]objectRow, 0, len(cells))
-	for _, row := range cells {
-		if len(row) < 5 {
-			continue
+	rows := make([]objectRow, 0, len(objects))
+	for _, obj := range objects {
+		if !obj.IsObject {
+			continue // skip collections; we only show data objects
 		}
-		dataName := row[0]
-		collName := row[1]
-		mtime := row[2]
-		owner := row[3]
-		sizeStr := row[4]
-
-		// Build the relative path: <coll under projectPath>/<dataName>.
-		relColl := strings.TrimPrefix(collName, projectPath)
-		relColl = strings.TrimPrefix(relColl, "/")
-		var rel string
-		if relColl == "" {
-			rel = dataName
-		} else {
-			rel = relColl + "/" + dataName
-		}
-
-		var size int64
-		if v, err := strconv.ParseInt(sizeStr, 10, 64); err == nil {
-			size = v
-		}
-
+		rel := strings.TrimPrefix(obj.Path, projectPath)
+		rel = strings.TrimPrefix(rel, "/")
 		rows = append(rows, objectRow{
-			ModifyTime: formatICATTime(mtime),
-			rawMtime:   mtime,
-			Size:       size,
-			Owner:      owner,
+			ModifyTime: obj.Modified.UTC().Format("2006-01-02"),
+			rawMtime:   obj.Modified.UTC().Format(time.RFC3339),
+			Size:       obj.Size,
+			Owner:      obj.Creator,
 			RelPath:    rel,
 		})
 	}
-	// Sort newest-first by the RAW mtime string. iCAT emits either
-	// RFC3339 / ISO timestamps or unix epoch seconds — both sort
-	// correctly lexicographically WITHIN the same encoding (the
-	// catalog never mixes encodings within a single query result).
 	sort.SliceStable(rows, func(i, j int) bool {
 		return rows[i].rawMtime > rows[j].rawMtime
 	})
