@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -98,32 +99,38 @@ func runIRODSProject(cmd *cobra.Command, name string, limit int) error {
 // objectRow is one row of `mus irods project NAME` output. RelPath
 // is the path BELOW the projectPath (e.g. "microglia_pilot/foo.h5ad"
 // when the project is "Fiers2025"), so the project name itself
-// doesn't repeat on every line.
+// doesn't repeat on every line. rawMtime keeps the unparsed iCAT
+// timestamp string for sorting (formatICATTime produces a
+// human-friendly form that loses the time-of-day precision).
 type objectRow struct {
 	ModifyTime string
+	rawMtime   string
 	Size       int64
 	Owner      string
 	RelPath    string
 }
 
-// queryRecentInProject runs ONE genquery for the most recently
-// modified data objects under projectPath, capped at limit.
+// queryRecentInProject fetches every data object under projectPath
+// via one genquery, sorts client-side by DATA_MODIFY_TIME desc,
+// and returns the top `limit`.
 //
-// iCAT path-prefix matching: COLL_NAME = projectPath catches every
-// data object directly in the project root; COLL_NAME LIKE 'projectPath/%'
-// catches everything in a subcollection. We use the latter — `%`
-// is the iCAT wildcard, and the trailing `/` on the prefix means
+// We sort + cap CLIENT-SIDE because iron's genquery (iquest) doesn't
+// support `ORDER BY` / `LIMIT` clauses — those return
+// SYS_INVALID_INPUT_PARAM. For typical projects (tens to a few
+// thousand objects) the cost is negligible. For very large projects
+// the whole row set is still streamed and we just discard the tail
+// — fine for the "what landed lately?" use case.
+//
+// iCAT path-prefix matching: COLL_NAME LIKE 'projectPath/%' catches
+// every data object in a subcollection. The trailing `/` means
 // projectPath itself isn't matched (subcollections only). The
 // `mus irods upload` layout always puts files under an experiment
-// subcollection, so the root-level case is rare in practice; we
-// keep things simple with the LIKE form.
+// subcollection, so the root-level case is rare in practice.
 func queryRecentInProject(ctx context.Context, client *iron.Client, projectPath string, limit int) ([]objectRow, error) {
 	sql := fmt.Sprintf(
 		"select DATA_NAME, COLL_NAME, DATA_MODIFY_TIME, DATA_OWNER_NAME, DATA_SIZE "+
-			"where COLL_NAME like '%s/%%' "+
-			"order by DATA_MODIFY_TIME desc "+
-			"limit %d",
-		escapeGenquerySingleQuotes(projectPath), limit,
+			"where COLL_NAME like '%s/%%'",
+		escapeGenquerySingleQuotes(projectPath),
 	)
 	raw, err := client.QueryJSON(ctx, sql)
 	if err != nil {
@@ -161,10 +168,21 @@ func queryRecentInProject(ctx context.Context, client *iron.Client, projectPath 
 
 		rows = append(rows, objectRow{
 			ModifyTime: formatICATTime(mtime),
+			rawMtime:   mtime,
 			Size:       size,
 			Owner:      owner,
 			RelPath:    rel,
 		})
+	}
+	// Sort newest-first by the RAW mtime string. iCAT emits either
+	// RFC3339 / ISO timestamps or unix epoch seconds — both sort
+	// correctly lexicographically WITHIN the same encoding (the
+	// catalog never mixes encodings within a single query result).
+	sort.SliceStable(rows, func(i, j int) bool {
+		return rows[i].rawMtime > rows[j].rawMtime
+	})
+	if len(rows) > limit {
+		rows = rows[:limit]
 	}
 	return rows, nil
 }

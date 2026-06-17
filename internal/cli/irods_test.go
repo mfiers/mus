@@ -106,6 +106,48 @@ func TestFirstPathSegment(t *testing.T) {
 
 // --- resolvePackMode --------------------------------------------------------
 
+func TestMergeArchiveAndPack(t *testing.T) {
+	cases := []struct {
+		name    string
+		archive bool
+		packRaw string
+		want    packMode
+		err     bool
+	}{
+		// archive=false → passthrough of resolvePackMode
+		{"no archive, no pack", false, "", packAuto, false},
+		{"no archive, auto", false, "auto", packAuto, false},
+		{"no archive, tar.gz", false, "tar.gz", packTarGz, false},
+		{"no archive, none", false, "none", packNone, false},
+		{"no archive, invalid pack", false, "bz2", "", true},
+		// archive=true → force tar.gz unless pack disagrees
+		{"archive alone", true, "", packTarGz, false},
+		{"archive + auto", true, "auto", packTarGz, false},
+		{"archive + tar.gz (agreement)", true, "tar.gz", packTarGz, false},
+		{"archive + targz alias", true, "targz", packTarGz, false},
+		{"archive + none (CONFLICT)", true, "none", "", true},
+		{"archive + asis (CONFLICT)", true, "asis", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := mergeArchiveAndPack(tc.archive, tc.packRaw)
+			if tc.err {
+				if err == nil {
+					t.Errorf("expected error; got pack=%q", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				return
+			}
+			if got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestResolvePackMode(t *testing.T) {
 	cases := []struct {
 		in   string

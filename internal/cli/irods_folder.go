@@ -65,6 +65,32 @@ func resolvePackMode(raw string) (packMode, error) {
 	return "", fmt.Errorf("invalid --pack value %q (use: auto, tar.gz, none)", raw)
 }
 
+// mergeArchiveAndPack reconciles the --archive boolean alias with
+// the --pack string flag.
+//
+//   - archive=false → use the resolved --pack value as-is.
+//   - archive=true, --pack unset / auto / tar.gz → packTarGz.
+//   - archive=true, --pack none (or anything other than tar.gz) →
+//     error; the two flags disagree.
+//
+// --archive is a discoverable shorthand for `--pack tar.gz` that
+// bypasses the density check + prompt. Returns the resolved
+// packMode or an error if the user passed conflicting values.
+func mergeArchiveAndPack(archive bool, packRaw string) (packMode, error) {
+	pack, err := resolvePackMode(packRaw)
+	if err != nil {
+		return "", err
+	}
+	if !archive {
+		return pack, nil
+	}
+	normalised := strings.ToLower(strings.TrimSpace(packRaw))
+	if normalised != "" && normalised != "auto" && pack != packTarGz {
+		return "", fmt.Errorf("--archive and --pack %s conflict; pick one", packRaw)
+	}
+	return packTarGz, nil
+}
+
 // runIRODSUploadFolder handles a single folder argument. Most of the
 // parameters mirror runIRODSUpload's; collected here to keep that function
 // readable.

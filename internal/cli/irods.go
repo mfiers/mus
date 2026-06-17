@@ -155,7 +155,7 @@ func resolveIRODSCollection(env *config.Env, overrideDataProject, overrideRemote
 func newIRODSUploadCmd() *cobra.Command {
 	// IRON's upload is idempotent by default: matching size+modtime → skip;
 	// different → overwrite. There is no "force" concept to expose.
-	var exclusive, newer, dryRun, noELNComment, forceH5adUpload bool
+	var exclusive, newer, dryRun, noELNComment, forceH5adUpload, archive bool
 	var dataProject, remoteName, packRaw, message string
 	verify := true // verify-checksum on by default; opt-out below
 	cmd := &cobra.Command{
@@ -174,7 +174,8 @@ func newIRODSUploadCmd() *cobra.Command {
 			"the folder) — no per-file sidecars are written inside the folder. mus\n" +
 			"profiles the folder and, if it has too many small files (density check),\n" +
 			"prompts to bundle into <folder>.tar.gz before upload. Force the choice\n" +
-			"with --pack tar.gz / --pack none. The folder sidecar also carries a\n" +
+			"with --archive / -A (== --pack tar.gz) to always archive, or --pack\n" +
+			"none to always upload as-is. The folder sidecar also carries a\n" +
 			"recursive_sha256 Merkle hash so `mus check <folder>.mus` can detect\n" +
 			"local drift later.\n\n" +
 			"IRON handles file vs directory automatically; --verify-checksum (default\n" +
@@ -185,7 +186,7 @@ func newIRODSUploadCmd() *cobra.Command {
 			if msg == "" {
 				return fmt.Errorf("`mus irods upload` requires a -m / --message describing why this upload is happening")
 			}
-			pack, err := resolvePackMode(packRaw)
+			pack, err := mergeArchiveAndPack(archive, packRaw)
 			if err != nil {
 				return err
 			}
@@ -210,6 +211,9 @@ func newIRODSUploadCmd() *cobra.Command {
 		"override the experiment-name component of the remote path")
 	cmd.Flags().StringVar(&packRaw, "pack", "auto",
 		"folder packing: auto (prompt on TTY) | tar.gz | none")
+	cmd.Flags().BoolVarP(&archive, "archive", "A", false,
+		"force-archive folder args into <folder>.tar.gz before upload — "+
+			"shorthand for --pack tar.gz; skips the density check + prompt")
 	cmd.Flags().Bool("cleanup-archive", false,
 		"after a successful tar.gz upload, delete the local archive (default: keep + warn)")
 	cmd.Flags().Bool("no-metadata", false,
