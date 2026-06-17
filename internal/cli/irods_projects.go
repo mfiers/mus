@@ -38,17 +38,19 @@ func newIRODSProjectsCmd() *cobra.Command {
 			"this before `mus eln link` / `mus config set data_project` to\n" +
 			"avoid colliding with an existing project.\n\n" +
 			"Output is one project per line, alphabetically. With --details,\n" +
-			"adds:\n" +
-			"  - iRODS owner (u-number of whoever created the subcollection)\n" +
-			"  - iRODS creation date\n" +
-			"  - iRODS last-modified time (max DATA_MODIFY_TIME under the\n" +
-			"    project; one extra genquery per project — slower with many)\n" +
-			"  - local folder you most recently uploaded from for this\n" +
-			"    project on this machine (from ~/.local/share/mus/local_projects.json,\n" +
-			"    updated automatically on every `mus irods upload` / `mus s3 upload`)\n\n" +
-			"This is a passive read against the iCAT — no AVU stamping is\n" +
-			"required for a project to show up; the subcollection's mere\n" +
-			"existence under <irods_home>/project/ is the source of truth.",
+			"runs one `iron tree` per project to summarise:\n" +
+			"  - files       data-object count in the project subtree\n" +
+			"  - size        sum of DATA_SIZE across those objects\n" +
+			"  - uploaders   comma-joined sorted u-numbers of the people\n" +
+			"                whose creator stamp shows up in the subtree\n" +
+			"  - last upload max modified time across the data objects\n" +
+			"  - local folder the most recent folder on THIS machine that\n" +
+			"                uploaded to the project (from\n" +
+			"                ~/.local/share/mus/local_projects.json — written\n" +
+			"                automatically on every `mus irods upload` /\n" +
+			"                `mus s3 upload` going forward)\n\n" +
+			"--details touches each project's iRODS subtree once, so the\n" +
+			"command is noticeably slower with many large projects.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runIRODSProjects(cmd, details)
@@ -96,7 +98,7 @@ func runIRODSProjects(cmd *cobra.Command, details bool) error {
 	}
 	if details {
 		enrichWithLocalFolders(rows)
-		enrichWithIRODSLastModified(ctx, client, parent, rows)
+		enrichWithIRODSTreeStats(ctx, client, parent, rows)
 	}
 	writeProjects(stdout, rows, details)
 	return nil
@@ -131,40 +133,53 @@ func enrichWithLocalFolders(rows []projectRow) {
 	}
 }
 
-// enrichWithIRODSLastModified asks iRODS for the most recent
-// modification time under each project's collection. One
-// `iron tree --json <project>` call per project, walking the
-// subtree and taking the max of the `modified` field. Slow with
-// many large projects but bounded; called only when --details.
+// enrichWithIRODSTreeStats walks each project's iRODS subtree and
+// extracts file count, total bytes, distinct uploaders (creator
+// u-numbers), and the most recent modify time. One
+// `iron tree --json <project>` call per project — slow with many
+// large projects but bounded; called only when --details.
 //
-// Best-effort: a per-project failure leaves that row's LastUpload
-// empty; the rest still get their value. Errors are silent.
+// Best-effort: a per-project tree failure leaves that row's stats
+// empty; the rest still get their values. Errors are silent.
 //
 // We avoid iCAT genquery here — iron 0.4.67 rejects LIKE / multi-
 // table projections in `iron query`. `iron tree --json` is the
 // reliable cross-version primitive.
-func enrichWithIRODSLastModified(ctx context.Context, client *iron.Client, parent string, rows []projectRow) {
+func enrichWithIRODSTreeStats(ctx context.Context, client *iron.Client, parent string, rows []projectRow) {
 	for i := range rows {
 		projectPath := parent + "/" + rows[i].Name
-		raw, err := client.TreeJSON(ctx, projectPath, "name", "checksum", "date")
+		raw, err := client.TreeJSON(ctx, projectPath, "name", "size", "checksum", "date", "creator")
 		if err != nil {
 			continue
 		}
-		newest := newestModifiedInTreeJSON(raw)
-		if newest != "" {
-			rows[i].LastUpload = newest
-		}
+		stats := projectStatsFromTreeJSON(raw)
+		rows[i].FileCount = stats.fileCount
+		rows[i].TotalBytes = stats.totalBytes
+		rows[i].Uploaders = stats.uploaders
+		rows[i].LastUpload = stats.lastUpload
 	}
 }
 
-// newestModifiedInTreeJSON parses iron tree's NDJSON output and
-// returns the most recent `modified` value (formatted compactly)
-// across every data object in the tree. Returns "" when nothing
-// usable is found.
-func newestModifiedInTreeJSON(raw string) string {
+// projectTreeStats is the per-project summary extracted from one
+// `iron tree --json` response. Internal — fields are wired into
+// projectRow by enrichWithIRODSTreeStats.
+type projectTreeStats struct {
+	fileCount  int
+	totalBytes int64
+	uploaders  string // comma-joined sorted set
+	lastUpload string // formatted YYYY-MM-DD or empty
+}
+
+// projectStatsFromTreeJSON parses iron tree's NDJSON and rolls up
+// stats across all DATA OBJECTS (not collections) in the subtree.
+// Collections are identified by absent `checksum`; data objects by
+// presence of one.
+func projectStatsFromTreeJSON(raw string) projectTreeStats {
 	scanner := bufio.NewScanner(strings.NewReader(raw))
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
-	var best string // store raw mtime; lexicographic sort works for ISO/epoch within one encoding
+	var stats projectTreeStats
+	uploaders := map[string]bool{}
+	var bestRawMod string
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || line[0] != '{' {
@@ -175,21 +190,32 @@ func newestModifiedInTreeJSON(raw string) string {
 			continue
 		}
 		checksum, _ := m["checksum"].(string)
-		if checksum == "" { // collection, not data object
-			continue
+		if checksum == "" {
+			continue // collection
 		}
-		mod, _ := m["modified"].(string)
-		if mod == "" {
-			continue
+		stats.fileCount++
+		if sz, ok := m["size"].(float64); ok {
+			stats.totalBytes += int64(sz)
 		}
-		if mod > best {
-			best = mod
+		if creator, ok := m["creator"].(string); ok && creator != "" {
+			uploaders[creator] = true
+		}
+		if mod, ok := m["modified"].(string); ok && mod > bestRawMod {
+			bestRawMod = mod
 		}
 	}
-	if best == "" {
-		return ""
+	if len(uploaders) > 0 {
+		keys := make([]string, 0, len(uploaders))
+		for k := range uploaders {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		stats.uploaders = strings.Join(keys, ", ")
 	}
-	return formatICATTime(best)
+	if bestRawMod != "" {
+		stats.lastUpload = formatICATTime(bestRawMod)
+	}
+	return stats
 }
 
 // formatICATTime renders an iCAT DATA_MODIFY_TIME string compactly.
@@ -215,13 +241,14 @@ func formatICATTime(raw string) string {
 	return raw
 }
 
-// projectRow holds one collection's metadata. Only `Name` is
+// projectRow holds one project's display fields. Only `Name` is
 // populated unless --details was requested.
 type projectRow struct {
 	Name        string
-	Owner       string
-	CreateTime  string
-	LastUpload  string // iCAT: max DATA_MODIFY_TIME under the project (--details)
+	FileCount   int    // data objects in the project subtree (--details)
+	TotalBytes  int64  // sum of DATA_SIZE across the subtree (--details)
+	Uploaders   string // comma-joined sorted set of `creator` u-numbers (--details)
+	LastUpload  string // max modified across data objects (--details)
 	LocalFolder string // ~/.local/share/mus/local_projects.json (--details)
 }
 
@@ -339,9 +366,9 @@ func ironListEntryFromMap(m map[string]any) ironListEntry {
 }
 
 // writeProjects renders rows to w. Plain list when !details;
-// aligned table when details. Column widths are computed per call
-// so a few unusually long owner / folder values don't push the
-// other rows out of alignment.
+// aligned table when details. The "uploaders" column tends to be
+// the widest after "name" (multi-author projects). "local folder"
+// is the unbounded trailing column.
 func writeProjects(w io.Writer, rows []projectRow, details bool) {
 	if !details {
 		for _, r := range rows {
@@ -349,46 +376,61 @@ func writeProjects(w io.Writer, rows []projectRow, details bool) {
 		}
 		return
 	}
-	widths := computeColumnWidths(rows,
-		[]string{"name", "owner", "created", "last upload", "local folder"})
-	header := fmt.Sprintf("%-*s  %-*s  %-*s  %-*s  %s",
-		widths[0], "name",
-		widths[1], "owner",
-		widths[2], "created",
-		widths[3], "last upload",
+
+	// Pre-render the right-aligned numeric / size cells so width
+	// computation matches what we actually print.
+	files := make([]string, len(rows))
+	sizes := make([]string, len(rows))
+	for i, r := range rows {
+		if r.FileCount > 0 {
+			files[i] = fmt.Sprintf("%d", r.FileCount)
+		}
+		if r.TotalBytes > 0 {
+			sizes[i] = humanBytes(r.TotalBytes)
+		}
+	}
+
+	nameW := len("name")
+	filesW := len("files")
+	sizeW := len("size")
+	uploadersW := len("uploaders")
+	dateW := len("last upload")
+	for i, r := range rows {
+		if len(r.Name) > nameW {
+			nameW = len(r.Name)
+		}
+		if len(files[i]) > filesW {
+			filesW = len(files[i])
+		}
+		if len(sizes[i]) > sizeW {
+			sizeW = len(sizes[i])
+		}
+		if len(r.Uploaders) > uploadersW {
+			uploadersW = len(r.Uploaders)
+		}
+		if len(r.LastUpload) > dateW {
+			dateW = len(r.LastUpload)
+		}
+	}
+
+	header := fmt.Sprintf("%-*s  %*s  %*s  %-*s  %-*s  %s",
+		nameW, "name",
+		filesW, "files",
+		sizeW, "size",
+		uploadersW, "uploaders",
+		dateW, "last upload",
 		"local folder")
 	fmt.Fprintln(w, header)
 	fmt.Fprintln(w, strings.Repeat("-", len(header)))
-	for _, r := range rows {
-		fmt.Fprintf(w, "%-*s  %-*s  %-*s  %-*s  %s\n",
-			widths[0], r.Name,
-			widths[1], r.Owner,
-			widths[2], r.CreateTime,
-			widths[3], r.LastUpload,
+	for i, r := range rows {
+		fmt.Fprintf(w, "%-*s  %*s  %*s  %-*s  %-*s  %s\n",
+			nameW, r.Name,
+			filesW, files[i],
+			sizeW, sizes[i],
+			uploadersW, r.Uploaders,
+			dateW, r.LastUpload,
 			r.LocalFolder)
 	}
-}
-
-// computeColumnWidths returns the max-of(header-label, longest-cell)
-// for the first 4 columns. The 5th (local folder) is unbounded —
-// rendered without a fixed width.
-func computeColumnWidths(rows []projectRow, headers []string) []int {
-	widths := make([]int, len(headers))
-	for i, h := range headers {
-		widths[i] = len(h)
-	}
-	for _, r := range rows {
-		cells := []string{r.Name, r.Owner, r.CreateTime, r.LastUpload}
-		for i, c := range cells {
-			if i >= len(widths)-1 { // skip the unbounded trailing column
-				break
-			}
-			if len(c) > widths[i] {
-				widths[i] = len(c)
-			}
-		}
-	}
-	return widths
 }
 
 // escapeGenquerySingleQuotes doubles every ' so the value is safe

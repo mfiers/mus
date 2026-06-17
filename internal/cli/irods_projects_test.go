@@ -57,31 +57,6 @@ func TestParseIronListJSON_EmptyIsNoError(t *testing.T) {
 	}
 }
 
-func TestNewestModifiedInTreeJSON(t *testing.T) {
-	raw := strings.Join([]string{
-		`{"name": "/p/Fiers2025/exp1", "modified": "2025-01-01T00:00:00Z"}`,
-		`{"name": "/p/Fiers2025/exp1/a.h5ad", "checksum": "x", "modified": "2025-06-10T12:00:00Z"}`,
-		`{"name": "/p/Fiers2025/exp1/b.h5ad", "checksum": "y", "modified": "2026-06-14T08:00:00Z"}`,
-		`{"name": "/p/Fiers2025/exp1/c.h5ad", "checksum": "z", "modified": "2025-12-31T23:59:00Z"}`,
-	}, "\n")
-	got := newestModifiedInTreeJSON(raw)
-	if got != "2026-06-14" {
-		t.Errorf("expected newest=2026-06-14, got %q", got)
-	}
-}
-
-func TestNewestModifiedInTreeJSON_IgnoresCollections(t *testing.T) {
-	// Collection (no checksum) with an even newer modified field
-	// should NOT be picked — we only care about data objects.
-	raw := strings.Join([]string{
-		`{"name": "/p/Fiers2025/exp1", "modified": "2099-12-31T00:00:00Z"}`,
-		`{"name": "/p/Fiers2025/exp1/a.h5ad", "checksum": "x", "modified": "2025-06-10T12:00:00Z"}`,
-	}, "\n")
-	got := newestModifiedInTreeJSON(raw)
-	if got != "2025-06-10" {
-		t.Errorf("collection mtime leaked in; got %q", got)
-	}
-}
 
 func TestEscapeGenquerySingleQuotes(t *testing.T) {
 	cases := []struct{ in, want string }{
@@ -116,10 +91,12 @@ func TestWriteProjects_PlainList(t *testing.T) {
 func TestWriteProjects_DetailsAligned(t *testing.T) {
 	var buf bytes.Buffer
 	rows := []projectRow{
-		{Name: "Fiers2025", Owner: "u0089478", CreateTime: "2026-04-12",
-			LastUpload: "2026-06-14", LocalFolder: "/data/1/users/mark/microglia (2026-06-14)"},
-		{Name: "DeWulf2024", Owner: "u9999999", CreateTime: "2024-09-01",
-			LastUpload: "2025-01-12", LocalFolder: ""},
+		{Name: "Fiers2025", FileCount: 127, TotalBytes: 4_200_000_000,
+			Uploaders: "u0089478, u1234567",
+			LastUpload: "2026-06-14",
+			LocalFolder: "/data/1/users/mark/microglia (2026-06-14)"},
+		{Name: "DeWulf2024", FileCount: 15, TotalBytes: 250_000,
+			Uploaders: "u0089478", LastUpload: "2025-01-12"},
 	}
 	writeProjects(&buf, rows, true)
 	out := buf.String()
@@ -128,8 +105,9 @@ func TestWriteProjects_DetailsAligned(t *testing.T) {
 		t.Fatalf("expected 4 lines; got %d:\n%s", len(lines), out)
 	}
 	for _, want := range []string{
-		"name", "owner", "created", "last upload", "local folder",
-		"Fiers2025", "u0089478", "DeWulf2024",
+		"name", "files", "size", "uploaders", "last upload", "local folder",
+		"Fiers2025", "DeWulf2024",
+		"127", "u0089478, u1234567",
 		"2026-06-14", "/data/1/users/mark/microglia",
 	} {
 		if !strings.Contains(out, want) {
@@ -142,10 +120,45 @@ func TestWriteProjects_EmptyDetailsTable(t *testing.T) {
 	var buf bytes.Buffer
 	writeProjects(&buf, nil, true)
 	out := buf.String()
-	for _, want := range []string{"name", "owner", "created", "last upload", "local folder"} {
+	for _, want := range []string{"name", "files", "size", "uploaders", "last upload", "local folder"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("empty-table header missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestProjectStatsFromTreeJSON_AggregatesObjectsOnly(t *testing.T) {
+	raw := strings.Join([]string{
+		`{"name":"/p/Fiers2025/exp1"}`,
+		`{"name":"/p/Fiers2025/exp1/a.h5ad","checksum":"x","modified":"2025-06-10T12:00:00Z","size":1000,"creator":"u0089478"}`,
+		`{"name":"/p/Fiers2025/exp1/b.h5ad","checksum":"y","modified":"2026-06-14T08:00:00Z","size":5000,"creator":"u0089478"}`,
+		`{"name":"/p/Fiers2025/exp2"}`,
+		`{"name":"/p/Fiers2025/exp2/c.h5ad","checksum":"z","modified":"2025-12-31T23:59:00Z","size":700,"creator":"u1234567"}`,
+	}, "\n")
+	stats := projectStatsFromTreeJSON(raw)
+	if stats.fileCount != 3 {
+		t.Errorf("fileCount: got %d, want 3", stats.fileCount)
+	}
+	if stats.totalBytes != 6700 {
+		t.Errorf("totalBytes: got %d, want 6700", stats.totalBytes)
+	}
+	if stats.uploaders != "u0089478, u1234567" {
+		t.Errorf("uploaders: got %q, want sorted comma-joined set", stats.uploaders)
+	}
+	if stats.lastUpload != "2026-06-14" {
+		t.Errorf("lastUpload: got %q, want 2026-06-14", stats.lastUpload)
+	}
+}
+
+func TestProjectStatsFromTreeJSON_EmptyTree(t *testing.T) {
+	// Only collections, no data objects.
+	raw := strings.Join([]string{
+		`{"name":"/p/Empty"}`,
+		`{"name":"/p/Empty/sub"}`,
+	}, "\n")
+	stats := projectStatsFromTreeJSON(raw)
+	if stats.fileCount != 0 || stats.totalBytes != 0 || stats.uploaders != "" || stats.lastUpload != "" {
+		t.Errorf("expected zero stats for empty tree; got %+v", stats)
 	}
 }
 
