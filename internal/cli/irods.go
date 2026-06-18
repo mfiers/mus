@@ -526,7 +526,13 @@ func newIRODSCheckCmd() *cobra.Command {
 		Short: "verify local sha256 against the remote checksum reported by IRON",
 		Long: "By default:\n" +
 			"  - file sidecar              → hash local file vs iron checksum of remote\n" +
-			"  - folder sidecar + archived  → hash local archive vs iron checksum of remote\n" +
+			"  - folder sidecar + archived  → (a) hash local <name>.tar.gz vs iron\n" +
+			"                                     checksum of the remote archive object\n" +
+			"                                 (b) if the source folder is still next\n" +
+			"                                     to the sidecar, walk it and compare\n" +
+			"                                     its Merkle hash to the sidecar's\n" +
+			"                                     recursive_sha256 (skipped silently\n" +
+			"                                     when source has been removed)\n" +
 			"  - folder sidecar + as-is     → local Merkle drift only (no remote round-trip)\n\n" +
 			"With --deep, the as-is folder case fully walks `iron tree --json` and\n" +
 			"compares every remote file's checksum against the local one. Slow on big\n" +
@@ -651,30 +657,59 @@ func irodsCheckFolder(ctx context.Context, cache *hashcache.Cache,
 	stdout := os.Stdout
 
 	if doc.Archive != nil && doc.Archive.Filename != "" {
-		// Archived: hash local archive, ask iron for the remote checksum.
+		// Archived: hash local archive vs iron's reported remote
+		// checksum. If the source folder is still present alongside
+		// the archive, additionally walk it and compare its Merkle
+		// hash against the sidecar's recursive_sha256 — this is the
+		// "source still represents what got archived?" check.
 		archivePath := filepath.Join(filepath.Dir(scPath), doc.Archive.Filename)
 		if _, err := os.Stat(archivePath); err != nil {
 			fmt.Fprintf(stderr, "MISSING  %s  (archive sibling absent — `mus irods get %s` to fetch)\n",
 				archivePath, scPath)
 			return 0, 1
 		}
+		fail := 0
+
+		// 1. archive bytes vs iRODS.
 		localSum, err := cache.Sum(archivePath)
 		if err != nil {
 			fmt.Fprintf(stderr, "ERROR    %s: %v\n", archivePath, err)
-			return 0, 1
+			return 1, 1
 		}
 		remoteSum, err := client.Checksum(ctx, doc.IRODS.Path)
 		if err != nil {
 			fmt.Fprintf(stderr, "ERROR    %s remote checksum: %v\n", archivePath, err)
-			return 0, 1
+			return 1, 1
 		}
 		if strings.EqualFold(localSum, remoteSum) {
 			fmt.Fprintf(stdout, "OK       %s  (archive)\n", archivePath)
-			return 1, 0
+		} else {
+			fmt.Fprintf(stderr, "MISMATCH %s  local=%s remote=%s  (archive)\n",
+				archivePath, short(localSum), short(remoteSum))
+			fail = 1
 		}
-		fmt.Fprintf(stderr, "MISMATCH %s  local=%s remote=%s\n",
-			archivePath, short(localSum), short(remoteSum))
-		return 1, 1
+
+		// 2. (optional) source folder Merkle vs sidecar.
+		// Skipped silently when the source has been removed (e.g.
+		// after `mus rm`) — that's a normal state for an archived
+		// deposit and not a failure.
+		dataPath := sidecar.DataPath(scPath)
+		if st, err := os.Stat(dataPath); err == nil && st.IsDir() &&
+			doc.Folder != nil && doc.Folder.RecursiveSha256 != "" {
+			actual, err := folder.RecursiveSHA256(dataPath, cache.Sum)
+			if err != nil {
+				fmt.Fprintf(stderr, "ERROR    %s Merkle: %v\n", dataPath, err)
+				fail = 1
+			} else if strings.EqualFold(actual, doc.Folder.RecursiveSha256) {
+				fmt.Fprintf(stdout, "OK       %s  (source Merkle matches archive)\n", dataPath)
+			} else {
+				fmt.Fprintf(stderr,
+					"MISMATCH %s  local Merkle drift since archive (now=%s, sidecar=%s)\n",
+					dataPath, short(actual), short(doc.Folder.RecursiveSha256))
+				fail = 1
+			}
+		}
+		return 1, fail
 	}
 
 	// As-is folder upload — iRODS object is a collection. No per-call iron
