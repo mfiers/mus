@@ -176,24 +176,38 @@ func runIRODSUploadFolder(
 	return fmt.Errorf("unknown pack mode %q", chosen)
 }
 
-// promptPackChoice prompts the user to choose between tar.gz, as-is, cancel.
-// Loops up to 3 times on invalid input.
+// promptPackChoice prompts the user to choose between archiving
+// (tar.gz), uploading unarchived, or cancelling. Loops up to 3
+// times on invalid input.
+//
+// Shortcut letters:
+//
+//	a → archive (pack into <name>.tar.gz)
+//	u → unarchived (upload the source folder as-is)
+//	c → cancel
+//
+// Legacy letters `t` (for "tar") and the old `a` meaning "as-is"
+// were ambiguous — `a` semantically suggests "archive", not the
+// opposite. The new letters disambiguate. We still accept the
+// older spellings as hidden aliases (`tar`, `tar.gz`, `targz`,
+// `as-is`, `asis`) so muscle-memory or tooling that types out the
+// full word keeps working; only the LETTER `a` flipped meaning.
 func promptPackChoice(stdin io.Reader, stdout io.Writer) (packMode, error) {
 	r := bufio.NewReader(stdin)
 	for attempts := 0; attempts < 3; attempts++ {
 		fmt.Fprintf(stdout, "  → too many small files for direct upload; pick:\n")
-		fmt.Fprintf(stdout, "    [t] pack as tar.gz and upload the archive\n")
-		fmt.Fprintf(stdout, "    [a] upload as-is anyway\n")
+		fmt.Fprintf(stdout, "    [a] archive: pack as tar.gz and upload the archive\n")
+		fmt.Fprintf(stdout, "    [u] unarchived: upload the folder as-is anyway\n")
 		fmt.Fprintf(stdout, "    [c] cancel\n")
-		fmt.Fprintf(stdout, "  Choice [t/a/c]: ")
+		fmt.Fprintf(stdout, "  Choice [a/u/c]: ")
 		line, err := r.ReadString('\n')
 		if err != nil && err != io.EOF {
 			return "", err
 		}
 		switch strings.ToLower(strings.TrimSpace(line)) {
-		case "t", "tar", "tar.gz", "targz":
+		case "a", "archive", "tar", "tar.gz", "targz":
 			return packTarGz, nil
-		case "a", "as-is", "asis":
+		case "u", "unarchived", "as-is", "asis":
 			return packNone, nil
 		case "c", "cancel", "":
 			return "cancel", nil
