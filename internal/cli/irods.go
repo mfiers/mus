@@ -520,35 +520,83 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 }
 
 func newIRODSCheckCmd() *cobra.Command {
-	var deep bool
+	var deep, silent bool
 	cmd := &cobra.Command{
 		Use:   "check [SIDECAR_OR_FILE...]",
 		Short: "verify local sha256 against the remote checksum reported by IRON",
-		Long: "By default:\n" +
-			"  - file sidecar              → hash local file vs iron checksum of remote\n" +
-			"  - folder sidecar + archived  → (a) hash local <name>.tar.gz vs iron\n" +
-			"                                     checksum of the remote archive object\n" +
-			"                                 (b) if the source folder is still next\n" +
-			"                                     to the sidecar, walk it and compare\n" +
-			"                                     its Merkle hash to the sidecar's\n" +
-			"                                     recursive_sha256 (skipped silently\n" +
-			"                                     when source has been removed)\n" +
-			"  - folder sidecar + as-is     → local Merkle drift only (no remote round-trip)\n\n" +
-			"With --deep, the as-is folder case fully walks `iron tree --json` and\n" +
-			"compares every remote file's checksum against the local one. Slow on big\n" +
-			"trees, but the only way to confirm bytes-on-disk match bytes-on-iRODS for\n" +
-			"folders that were uploaded as collections.",
+		Long: "Runs a sequence of explicit checks per sidecar, printing one line each:\n\n" +
+			"    STATUS    check-name           target                  (why)\n\n" +
+			"STATUS is OK / MISMATCH / ERROR / MISSING / SKIP. Every line carries the\n" +
+			"check name (file-vs-iRODS, archive-vs-iRODS, source-merkle, …) so the\n" +
+			"output is grep-friendly and the reason for each result is visible.\n\n" +
+			"Checks per sidecar shape:\n" +
+			"  - file sidecar               → file-vs-iRODS\n" +
+			"  - folder sidecar + archived  → archive-vs-iRODS\n" +
+			"                                 source-merkle (skipped if source removed)\n" +
+			"  - folder sidecar + as-is     → source-merkle\n" +
+			"                                 deep-walk-vs-iRODS (skipped unless --deep)\n\n" +
+			"--deep walks `iron tree --json` for as-is folder uploads and compares\n" +
+			"every remote file's checksum against the local one. Slow on big trees,\n" +
+			"but the only way to confirm bytes-on-disk == bytes-on-iRODS for as-is\n" +
+			"folder deposits.\n\n" +
+			"--silent suppresses OK / SKIP lines; failures (MISMATCH / ERROR /\n" +
+			"MISSING) and the final summary still print.",
 		Args: cobra.MinimumNArgs(0),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runIRODSCheck(cmd, args, deep)
+			return runIRODSCheck(cmd, args, deep, silent)
 		},
 	}
 	cmd.Flags().BoolVar(&deep, "deep", false,
 		"for as-is folder sidecars, walk iron tree to compare every file's checksum")
+	cmd.Flags().BoolVar(&silent, "silent", false,
+		"only print failures + summary; suppress per-check OK / SKIP lines")
 	return cmd
 }
 
-func runIRODSCheck(cmd *cobra.Command, args []string, deep bool) error {
+// checkPrinter centralises status-line formatting for `mus irods check`.
+// Every check funnels through one of its methods so the wire format stays
+// consistent (STATUS  check  target  (note)) and `--silent` is honoured
+// in exactly one place. Failures always print; OK / SKIP suppressible.
+type checkPrinter struct {
+	silent bool
+	stdout io.Writer
+	stderr io.Writer
+}
+
+func (cp *checkPrinter) printLine(w io.Writer, status, check, target, note string) {
+	if note == "" {
+		fmt.Fprintf(w, "%-9s %-22s %s\n", status, check, target)
+		return
+	}
+	fmt.Fprintf(w, "%-9s %-22s %s  (%s)\n", status, check, target, note)
+}
+
+// ok / skip are suppressible.
+func (cp *checkPrinter) ok(check, target, note string) {
+	if cp.silent {
+		return
+	}
+	cp.printLine(cp.stdout, "OK", check, target, note)
+}
+func (cp *checkPrinter) skip(check, target, note string) {
+	if cp.silent {
+		return
+	}
+	cp.printLine(cp.stdout, "SKIP", check, target, note)
+}
+
+// Failures always print on stderr regardless of --silent.
+func (cp *checkPrinter) mismatch(check, target, note string) {
+	cp.printLine(cp.stderr, "MISMATCH", check, target, note)
+}
+func (cp *checkPrinter) errf(check, target, format string, args ...any) {
+	cp.printLine(cp.stderr, "ERROR", check, target, fmt.Sprintf(format, args...))
+}
+func (cp *checkPrinter) missing(check, target, note string) {
+	cp.printLine(cp.stderr, "MISSING", check, target, note)
+}
+
+func runIRODSCheck(cmd *cobra.Command, args []string, deep, silent bool) error {
 	if len(args) == 0 {
 		args = []string{"."}
 	}
@@ -563,6 +611,12 @@ func runIRODSCheck(cmd *cobra.Command, args []string, deep bool) error {
 		return err
 	}
 	ctx := cmd.Context()
+
+	cp := &checkPrinter{
+		silent: silent,
+		stdout: cmd.OutOrStdout(),
+		stderr: cmd.ErrOrStderr(),
+	}
 
 	var sidecars []string
 	for _, a := range args {
@@ -593,45 +647,47 @@ func runIRODSCheck(cmd *cobra.Command, args []string, deep bool) error {
 	for _, sc := range sidecars {
 		doc, err := sidecar.Read(sc)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ERROR %s: %v\n", sc, err)
+			cp.errf("read-sidecar", sc, "%v", err)
 			failed++
 			continue
 		}
 		if doc.IRODS == nil || doc.IRODS.Path == "" {
+			cp.skip("file-vs-iRODS", sc, "sidecar has no irods_path")
 			continue
 		}
 		dataPath := sidecar.DataPath(sc)
 
-		// Folder sidecars: pick the right thing to hash + compare.
+		// Folder sidecars: their own sequence of checks.
 		if doc.Kind == "folder" {
-			c, f := irodsCheckFolder(ctx, cache, client, sc, doc, deep)
+			c, f := irodsCheckFolder(ctx, cache, client, sc, doc, deep, cp)
 			checked += c
 			failed += f
 			continue
 		}
 
+		// File sidecar: one check, file bytes vs iRODS checksum.
 		localSum, err := cache.Sum(dataPath)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ERROR %s: %v\n", dataPath, err)
+			cp.errf("file-vs-iRODS", dataPath, "local hash: %v", err)
 			failed++
 			continue
 		}
 		remoteSum, err := client.Checksum(ctx, doc.IRODS.Path)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ERROR %s remote checksum: %v\n", dataPath, err)
+			cp.errf("file-vs-iRODS", dataPath, "remote checksum: %v", err)
 			failed++
 			continue
 		}
 		checked++
 		if strings.EqualFold(localSum, remoteSum) {
-			fmt.Printf("OK       %s\n", dataPath)
+			cp.ok("file-vs-iRODS", dataPath, "local sha256 == remote checksum")
 		} else {
-			fmt.Fprintf(os.Stderr, "MISMATCH %s  local=%s remote=%s\n",
-				dataPath, short(localSum), short(remoteSum))
+			cp.mismatch("file-vs-iRODS", dataPath,
+				fmt.Sprintf("local=%s remote=%s", short(localSum), short(remoteSum)))
 			failed++
 		}
 	}
-	fmt.Printf("checked %d, failed %d\n", checked, failed)
+	fmt.Fprintf(cp.stdout, "checked %d, failed %d\n", checked, failed)
 	if failed > 0 {
 		return fmt.Errorf("%d failure(s)", failed)
 	}
@@ -651,116 +707,180 @@ func runIRODSCheck(cmd *cobra.Command, args []string, deep bool) error {
 //
 // Returns (checked, failed) — caller folds into the running totals.
 func irodsCheckFolder(ctx context.Context, cache *hashcache.Cache,
-	client *iron.Client, scPath string, doc *sidecar.Doc, deep bool) (int, int) {
-
-	stderr := os.Stderr
-	stdout := os.Stdout
+	client *iron.Client, scPath string, doc *sidecar.Doc, deep bool, cp *checkPrinter) (int, int) {
 
 	if doc.Archive != nil && doc.Archive.Filename != "" {
-		// Archived: hash local archive vs iron's reported remote
-		// checksum. If the source folder is still present alongside
-		// the archive, additionally walk it and compare its Merkle
-		// hash against the sidecar's recursive_sha256 — this is the
-		// "source still represents what got archived?" check.
-		archivePath := filepath.Join(filepath.Dir(scPath), doc.Archive.Filename)
-		if _, err := os.Stat(archivePath); err != nil {
-			fmt.Fprintf(stderr, "MISSING  %s  (archive sibling absent — `mus irods get %s` to fetch)\n",
-				archivePath, scPath)
-			return 0, 1
-		}
-		fail := 0
+		return irodsCheckFolderArchived(ctx, cache, client, scPath, doc, cp)
+	}
+	return irodsCheckFolderAsIs(ctx, cache, client, scPath, doc, deep, cp)
+}
 
-		// 1. archive bytes vs iRODS.
-		localSum, err := cache.Sum(archivePath)
-		if err != nil {
-			fmt.Fprintf(stderr, "ERROR    %s: %v\n", archivePath, err)
-			return 1, 1
-		}
-		remoteSum, err := client.Checksum(ctx, doc.IRODS.Path)
-		if err != nil {
-			fmt.Fprintf(stderr, "ERROR    %s remote checksum: %v\n", archivePath, err)
-			return 1, 1
-		}
-		if strings.EqualFold(localSum, remoteSum) {
-			fmt.Fprintf(stdout, "OK       %s  (archive)\n", archivePath)
-		} else {
-			fmt.Fprintf(stderr, "MISMATCH %s  local=%s remote=%s  (archive)\n",
-				archivePath, short(localSum), short(remoteSum))
-			fail = 1
-		}
+// irodsCheckFolderArchived runs the two checks for an archived
+// folder deposit: archive bytes vs iRODS, and (when source still
+// present) source Merkle vs sidecar.recursive_sha256.
+func irodsCheckFolderArchived(ctx context.Context, cache *hashcache.Cache,
+	client *iron.Client, scPath string, doc *sidecar.Doc, cp *checkPrinter) (int, int) {
 
-		// 2. (optional) source folder Merkle vs sidecar.
-		// Skipped silently when the source has been removed (e.g.
-		// after `mus rm`) — that's a normal state for an archived
-		// deposit and not a failure.
-		dataPath := sidecar.DataPath(scPath)
-		if st, err := os.Stat(dataPath); err == nil && st.IsDir() &&
-			doc.Folder != nil && doc.Folder.RecursiveSha256 != "" {
-			actual, err := folder.RecursiveSHA256(dataPath, cache.Sum)
-			if err != nil {
-				fmt.Fprintf(stderr, "ERROR    %s Merkle: %v\n", dataPath, err)
-				fail = 1
-			} else if strings.EqualFold(actual, doc.Folder.RecursiveSha256) {
-				fmt.Fprintf(stdout, "OK       %s  (source Merkle matches archive)\n", dataPath)
-			} else {
-				fmt.Fprintf(stderr,
-					"MISMATCH %s  local Merkle drift since archive (now=%s, sidecar=%s)\n",
-					dataPath, short(actual), short(doc.Folder.RecursiveSha256))
-				fail = 1
-			}
-		}
-		return 1, fail
+	archivePath := filepath.Join(filepath.Dir(scPath), doc.Archive.Filename)
+	if _, err := os.Stat(archivePath); err != nil {
+		cp.missing("archive-vs-iRODS", archivePath,
+			fmt.Sprintf("archive sibling absent — `mus irods get %s` to fetch", scPath))
+		// Without the local archive we can't do either check; still
+		// try source-merkle if the source folder is around.
+		_ = checkSourceMerkleIfPresent(scPath, doc, cache, cp, "archive missing")
+		return 0, 1
+	}
+	fail := 0
+
+	// 1. archive bytes vs iRODS.
+	localSum, err := cache.Sum(archivePath)
+	if err != nil {
+		cp.errf("archive-vs-iRODS", archivePath, "local hash: %v", err)
+		return 1, 1
+	}
+	remoteSum, err := client.Checksum(ctx, doc.IRODS.Path)
+	if err != nil {
+		cp.errf("archive-vs-iRODS", archivePath, "remote checksum: %v", err)
+		return 1, 1
+	}
+	if strings.EqualFold(localSum, remoteSum) {
+		cp.ok("archive-vs-iRODS", archivePath, "local archive sha256 == remote checksum")
+	} else {
+		cp.mismatch("archive-vs-iRODS", archivePath,
+			fmt.Sprintf("local=%s remote=%s", short(localSum), short(remoteSum)))
+		fail = 1
 	}
 
-	// As-is folder upload — iRODS object is a collection. No per-call iron
-	// checksum exists for collections. We fall back to LOCAL Merkle drift
-	// detection, which is what `mus check` already does. Surface that with
-	// a clear status so users know nothing is being compared against iRODS.
+	// 2. source folder Merkle vs sidecar (when source is still present).
+	if checkSourceMerkleIfPresent(scPath, doc, cache, cp, "") {
+		// nothing extra; checkSourceMerkleIfPresent printed its own line
+	}
+	if mergedFolderMerkleFailed(scPath, doc, cache) {
+		fail = 1
+	}
+	return 1, fail
+}
+
+// checkSourceMerkleIfPresent prints either an OK/MISMATCH/ERROR or a
+// SKIP line describing the source-merkle check. Returns true when a
+// substantive (non-skip) line was printed — caller usually doesn't
+// care but the bool is useful for tests / callers that branch on
+// whether the check actually ran.
+//
+// The fail bookkeeping is computed by mergedFolderMerkleFailed (which
+// recomputes the hash; cheap thanks to the local sha256 cache).
+//
+// skipNote, when non-empty, is appended to the SKIP reason — used by
+// the archive-missing case to explain why we still tried.
+func checkSourceMerkleIfPresent(scPath string, doc *sidecar.Doc,
+	cache *hashcache.Cache, cp *checkPrinter, skipNote string) bool {
+
 	dataPath := sidecar.DataPath(scPath)
 	st, err := os.Stat(dataPath)
 	if err != nil || !st.IsDir() {
-		fmt.Fprintf(stderr, "MISSING  %s  (source folder absent)\n", dataPath)
+		why := "source folder absent (normal after `mus rm`)"
+		if skipNote != "" {
+			why = skipNote + "; " + why
+		}
+		cp.skip("source-merkle", dataPath, why)
+		return false
+	}
+	if doc.Folder == nil || doc.Folder.RecursiveSha256 == "" {
+		cp.skip("source-merkle", dataPath, "sidecar has no recursive_sha256")
+		return false
+	}
+	actual, err := folder.RecursiveSHA256(dataPath, cache.Sum)
+	if err != nil {
+		cp.errf("source-merkle", dataPath, "%v", err)
+		return true
+	}
+	if strings.EqualFold(actual, doc.Folder.RecursiveSha256) {
+		cp.ok("source-merkle", dataPath, "folder Merkle == sidecar recursive_sha256")
+		return true
+	}
+	cp.mismatch("source-merkle", dataPath,
+		fmt.Sprintf("local Merkle drift now=%s, sidecar=%s",
+			short(actual), short(doc.Folder.RecursiveSha256)))
+	return true
+}
+
+// mergedFolderMerkleFailed re-evaluates whether the source-merkle
+// check would have failed. Used by the archived-folder path to fold
+// the source-merkle outcome into the failure count without making
+// checkSourceMerkleIfPresent return multi-state.
+//
+// Returns false when the check was skipped (source absent, sidecar
+// missing recursive_sha256). Returns true only on a real failure
+// (mismatch or hash error).
+func mergedFolderMerkleFailed(scPath string, doc *sidecar.Doc, cache *hashcache.Cache) bool {
+	dataPath := sidecar.DataPath(scPath)
+	st, err := os.Stat(dataPath)
+	if err != nil || !st.IsDir() {
+		return false
+	}
+	if doc.Folder == nil || doc.Folder.RecursiveSha256 == "" {
+		return false
+	}
+	actual, err := folder.RecursiveSHA256(dataPath, cache.Sum)
+	if err != nil {
+		return true
+	}
+	return !strings.EqualFold(actual, doc.Folder.RecursiveSha256)
+}
+
+// irodsCheckFolderAsIs runs the source-merkle check (always) and the
+// deep per-file walk (only when --deep) for an as-is folder deposit.
+// iRODS doesn't expose a single-call checksum for collections, so
+// there's no analogue of archive-vs-iRODS here.
+func irodsCheckFolderAsIs(ctx context.Context, cache *hashcache.Cache,
+	client *iron.Client, scPath string, doc *sidecar.Doc, deep bool, cp *checkPrinter) (int, int) {
+
+	dataPath := sidecar.DataPath(scPath)
+	st, err := os.Stat(dataPath)
+	if err != nil || !st.IsDir() {
+		cp.missing("source-merkle", dataPath, "source folder absent")
+		cp.skip("deep-walk-vs-iRODS", dataPath, "source missing — nothing to compare")
 		return 0, 1
 	}
 	if doc.Folder == nil || doc.Folder.RecursiveSha256 == "" {
-		fmt.Fprintf(stderr, "STALE    %s  (sidecar has no recursive_sha256)\n", dataPath)
+		cp.errf("source-merkle", dataPath, "sidecar has no recursive_sha256")
+		cp.skip("deep-walk-vs-iRODS", dataPath, "no baseline to compare against")
 		return 0, 1
 	}
 	actual, err := folder.RecursiveSHA256(dataPath, cache.Sum)
 	if err != nil {
-		fmt.Fprintf(stderr, "ERROR    %s: %v\n", dataPath, err)
+		cp.errf("source-merkle", dataPath, "%v", err)
 		return 0, 1
 	}
 	if !strings.EqualFold(actual, doc.Folder.RecursiveSha256) {
-		fmt.Fprintf(stderr, "MISMATCH %s  local Merkle drift (now=%s, sidecar=%s)\n",
-			dataPath, short(actual), short(doc.Folder.RecursiveSha256))
-		// Local already disagrees with sidecar; --deep wouldn't add info.
+		cp.mismatch("source-merkle", dataPath,
+			fmt.Sprintf("local Merkle drift now=%s, sidecar=%s",
+				short(actual), short(doc.Folder.RecursiveSha256)))
+		cp.skip("deep-walk-vs-iRODS", dataPath, "source already differs from sidecar")
 		return 1, 1
 	}
+	cp.ok("source-merkle", dataPath, "folder Merkle == sidecar recursive_sha256")
 
 	if !deep {
-		fmt.Fprintf(stdout,
-			"OK       %s  (local Merkle ok; pass --deep for per-file iRODS comparison)\n",
-			dataPath)
+		cp.skip("deep-walk-vs-iRODS", dataPath,
+			"--deep not set; per-file iRODS comparison skipped")
 		return 1, 0
 	}
 
-	// Deep mode: walk the remote collection's tree, build a map of remote
-	// relpath → checksum, then compare every local file to its remote
-	// counterpart. Slow but exact.
+	// Deep walk.
 	mism, miss, extra, derr := deepFolderCheckAgainstIRODS(ctx, cache, client,
-		dataPath, doc.IRODS.Path, stdout, stderr)
+		dataPath, doc.IRODS.Path, cp.stdout, cp.stderr)
 	if derr != nil {
-		fmt.Fprintf(stderr, "ERROR    %s deep check: %v\n", dataPath, derr)
+		cp.errf("deep-walk-vs-iRODS", dataPath, "%v", derr)
 		return 1, 1
 	}
 	if mism+miss+extra > 0 {
-		fmt.Fprintf(stderr,
-			"MISMATCH %s  per-file deep check: %d mismatched, %d missing on iRODS, %d extra on iRODS\n",
-			dataPath, mism, miss, extra)
+		cp.mismatch("deep-walk-vs-iRODS", dataPath,
+			fmt.Sprintf("%d mismatched, %d missing on iRODS, %d extra on iRODS",
+				mism, miss, extra))
 		return 1, 1
 	}
-	fmt.Fprintf(stdout, "OK       %s  (deep: every file matches iRODS)\n", dataPath)
+	cp.ok("deep-walk-vs-iRODS", dataPath, "every file matches iRODS")
 	return 1, 0
 }
 
