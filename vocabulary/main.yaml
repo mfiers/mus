@@ -131,14 +131,24 @@ vocabulary:
     - mixed             # truly heterogeneous; not a substitute for honest enumeration
 
   technology:
-    # 10x Genomics — main protocols + chemistries.
+    # 10x Genomics — Chromium single-cell chemistries.
     - 10x_chromium_3p_v2
     - 10x_chromium_3p_v3
-    - 10x_chromium_5p
+    - 10x_chromium_3p_v3.1     # dual-index update of v3
+    - 10x_chromium_3p_v4       # GEM-X 3' chemistry (Chromium X / Xo, 2024)
+    - 10x_chromium_3p_HT       # High Throughput 3' (Chip M)
+    - 10x_chromium_5p          # 5' v1 (legacy; use when version not recorded)
+    - 10x_chromium_5p_v2       # 5' v2 (dual-index, current)
+    - 10x_chromium_5p_HT       # High Throughput 5'
+    - 10x_chromium_flex        # probe-based, fixed-cell (FFPE / fresh-fixed)
     - 10x_chromium             # use only when chemistry/version unknown
+    - 10x_chromium_ATAC        # single-cell ATAC-seq (standalone, not multiome)
     - 10x_multiome             # joint RNA + ATAC
-    - 10x_visium               # spatial — gene expression
-    - 10x_xenium               # spatial — imaging
+    # 10x Genomics — spatial.
+    - 10x_visium               # original spatial gene expression
+    - 10x_visium_HD            # high-density spatial (2024)
+    - 10x_xenium               # in situ imaging — base panel
+    - 10x_xenium_prime         # 5K-plex panel (Xenium Prime)
     # Other single-cell protocols.
     - Smart-seq2
     - Smart-seq3
