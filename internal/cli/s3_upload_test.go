@@ -36,6 +36,192 @@ func TestS3KeyFor_AllShapes(t *testing.T) {
 	}
 }
 
+func TestS3KeyForDE(t *testing.T) {
+	cases := []struct {
+		name, dp, deFolder, basename, want string
+	}{
+		{"basic", "Fiers2025", "main_model", "results.tsv",
+			"__incoming/Fiers2025/de/main_model/results.tsv"},
+		{"gz", "Fiers2025", "sex_strat", "results.tsv.gz",
+			"__incoming/Fiers2025/de/sex_strat/results.tsv.gz"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := s3KeyForDE(tc.dp, tc.deFolder, tc.basename)
+			if got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestS3KeyForDE_PanicsOnPathSeparators(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic on path in de_folder")
+		}
+	}()
+	_ = s3KeyForDE("F25", "a/b", "x.tsv")
+}
+
+func TestClassifyFileExt(t *testing.T) {
+	cases := []struct {
+		path string
+		want uploadKind
+		ok   bool
+	}{
+		{"foo.h5ad", uploadKindH5ad, true},
+		{"foo.tsv", uploadKindDE, true},
+		{"foo.csv", uploadKindDE, true},
+		{"foo.tsv.gz", uploadKindDE, true},
+		{"foo.csv.gz", uploadKindDE, true},
+		{"foo.TSV.GZ", uploadKindDE, true},
+		{"foo.parquet", 0, false},
+		{"foo.txt", 0, false},
+		{"foo", 0, false},
+	}
+	for _, tc := range cases {
+		got, ok := classifyFileExt(tc.path)
+		if ok != tc.ok || got != tc.want {
+			t.Errorf("classifyFileExt(%q) = (%v,%v), want (%v,%v)",
+				tc.path, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+func TestClassifyUploadArgs_FileArgs(t *testing.T) {
+	dir := t.TempDir()
+	h5ad := filepath.Join(dir, "data.h5ad")
+	tsv := filepath.Join(dir, "results.tsv")
+	for _, p := range []string{h5ad, tsv} {
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := classifyUploadArgs([]string{h5ad, tsv})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 entries; got %d: %+v", len(got), got)
+	}
+	if got[0].Kind != uploadKindH5ad || got[1].Kind != uploadKindDE {
+		t.Errorf("kinds: got %+v", got)
+	}
+	// Parent dir basename → t.TempDir()'s last segment.
+	if got[1].ParentDir != filepath.Base(dir) {
+		t.Errorf("DE ParentDir: got %q, want %q", got[1].ParentDir, filepath.Base(dir))
+	}
+}
+
+func TestClassifyUploadArgs_FolderArg(t *testing.T) {
+	root := t.TempDir()
+	// Mix: h5ad at root, DE inside de/, ignore .mus sidecars.
+	if err := os.WriteFile(filepath.Join(root, "data.h5ad"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "data.h5ad.mus"), []byte("sha=x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	deDir := filepath.Join(root, "de", "main_model")
+	if err := os.MkdirAll(deDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deDir, "results.tsv"), []byte("h\nr\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := classifyUploadArgs([]string{root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 entries (1 h5ad + 1 DE; sidecar skipped); got %d: %+v", len(got), got)
+	}
+	kinds := map[uploadKind]int{}
+	for _, e := range got {
+		kinds[e.Kind]++
+	}
+	if kinds[uploadKindH5ad] != 1 || kinds[uploadKindDE] != 1 {
+		t.Errorf("kind tally: %+v; want 1 h5ad + 1 DE", kinds)
+	}
+	// DE ParentDir should be the immediate folder ("main_model").
+	for _, e := range got {
+		if e.Kind == uploadKindDE && e.ParentDir != "main_model" {
+			t.Errorf("DE ParentDir: got %q, want main_model", e.ParentDir)
+		}
+	}
+}
+
+func TestClassifyUploadArgs_RejectsUnknownExt(t *testing.T) {
+	dir := t.TempDir()
+	bad := filepath.Join(dir, "data.parquet")
+	if err := os.WriteFile(bad, []byte("PAR1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := classifyUploadArgs([]string{bad})
+	if err == nil {
+		t.Error("expected error on .parquet positional")
+	}
+	if !strings.Contains(err.Error(), "unsupported file extension") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestClassifyUploadArgs_EmptyFolderErrors(t *testing.T) {
+	dir := t.TempDir() // no .h5ad / .tsv / .csv inside
+	_, err := classifyUploadArgs([]string{dir})
+	if err == nil {
+		t.Error("expected error on folder with no supported files")
+	}
+}
+
+func TestS3KeysFor(t *testing.T) {
+	cases := []struct {
+		ent           uploadEntry
+		dp, sub       string
+		wantData      string
+		wantSidecar   string
+		errExpected   bool
+	}{
+		{
+			ent:         uploadEntry{AbsPath: "/p/d.h5ad", Kind: uploadKindH5ad, ParentDir: "p"},
+			dp:          "F25",
+			wantData:    "__incoming/F25/d.h5ad",
+			wantSidecar: "__incoming/F25/d.h5ad.mus",
+		},
+		{
+			ent:         uploadEntry{AbsPath: "/p/d.h5ad", Kind: uploadKindH5ad, ParentDir: "p"},
+			dp:          "F25",
+			sub:         "rev2",
+			wantData:    "__incoming/F25/rev2/d.h5ad",
+			wantSidecar: "__incoming/F25/rev2/d.h5ad.mus",
+		},
+		{
+			ent:         uploadEntry{AbsPath: "/p/de/main_model/r.tsv", Kind: uploadKindDE, ParentDir: "main_model"},
+			dp:          "F25",
+			wantData:    "__incoming/F25/de/main_model/r.tsv",
+			wantSidecar: "__incoming/F25/de/main_model/r.tsv.mus",
+		},
+	}
+	for i, tc := range cases {
+		d, s, err := s3KeysFor(tc.ent, tc.dp, tc.sub)
+		if tc.errExpected {
+			if err == nil {
+				t.Errorf("case %d: expected error", i)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("case %d: %v", i, err)
+			continue
+		}
+		if d != tc.wantData || s != tc.wantSidecar {
+			t.Errorf("case %d: got (%q,%q), want (%q,%q)", i, d, s, tc.wantData, tc.wantSidecar)
+		}
+	}
+}
+
 func TestS3KeyFor_PanicsOnPathSeparatorInSubfolder(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
