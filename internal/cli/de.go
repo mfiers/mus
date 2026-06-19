@@ -304,18 +304,38 @@ func checkOneDEFile(cache *hashcache.Cache, path string, env *config.Env,
 	}
 	out.ok("dataset", describeDataset(datasetID, datasetH5ad))
 
-	// 4c. Optional vark cross-check — when the `vark` binary is on
-	//     PATH, query the catalog for this data_project and verify
-	//     the declared de_dataset_id / de_dataset_h5ad resolves to
-	//     a real entry. Warns on no match (typo or first-time
-	//     deposit). Never blocks the check — anthive is the
-	//     authoritative resolver at ingest.
-	if vark.Available() {
-		reportVarkCheck(env, dataProject, datasetID, datasetH5ad, out)
-	} else {
+	// 4c. Co-ingest detection: if de_dataset_h5ad is set AND the
+	//     file is present locally (next to the DE file OR one
+	//     level up — the two documented co-ingest layouts), this
+	//     is a NEW h5ad being uploaded alongside the DE. No catalog
+	//     id exists yet — anthive will assign one at ingest by
+	//     matching basename. Report it explicitly so the depositor
+	//     knows the link is established locally.
+	coIngest := ""
+	if datasetH5ad != "" {
+		coIngest = findCoIngestH5ad(path, datasetH5ad)
+		if coIngest != "" {
+			out.ok("co-ingest", fmt.Sprintf(
+				"local h5ad found at %s — anthive will resolve at ingest", coIngest))
+		}
+	}
+
+	// 4d. Optional vark cross-check. Catalog query happens only
+	//     when there's a meaningful question to answer:
+	//     - de_dataset_id set → check if the 3-char code resolves
+	//     - de_dataset_h5ad set AND NOT co-ingest → check by title
+	//     - co-ingest case → SKIP with "expected for new h5ad"
+	//       (the catalog won't have it yet by construction)
+	switch {
+	case !vark.Available():
 		out.skip("vark-check",
 			"`vark` not on PATH — install vark to enable pre-deposit "+
 				"catalog cross-check (https://codeberg.org/mfiers/vark)")
+	case coIngest != "":
+		out.skip("vark-check",
+			"co-ingest deposit — anthive assigns the dataset id at ingest, no pre-check needed")
+	default:
+		reportVarkCheck(env, dataProject, datasetID, datasetH5ad, out)
 	}
 
 	// 5. Method (auto-fill from format).
@@ -428,6 +448,45 @@ func reportSoftFields(env *config.Env, out *deReporter) (anyUnset bool) {
 		}
 	}
 	return
+}
+
+// findCoIngestH5ad looks for a co-ingested h5ad sibling. Returns
+// the absolute path of the matching file or "" when not found.
+// Walks the two documented layouts:
+//
+//   - flat:       upload/<basename>.h5ad           +  upload/<de-file>
+//                 → check same dir as `dePath`
+//
+//   - nested:     upload/<basename>.h5ad           +  upload/de/.../<de-file>
+//                 → walk up from dePath's dir, max 4 levels (covers
+//                   upload/de/<analysis>/<de-file>)
+//
+// Match is by exact basename comparison; we accept the basename
+// as the depositor wrote it in de_dataset_h5ad (with or without
+// the .h5ad suffix). Sibling sidecar (*.mus) presence is NOT
+// required — `mus de check` may run before `mus h5ad check`.
+func findCoIngestH5ad(dePath, basename string) string {
+	// Normalise: depositor might have written it with or without
+	// the .h5ad suffix. Try both.
+	candidates := []string{basename}
+	if !strings.HasSuffix(basename, ".h5ad") {
+		candidates = append(candidates, basename+".h5ad")
+	}
+	dir := filepath.Dir(dePath)
+	for level := 0; level < 4; level++ {
+		for _, c := range candidates {
+			candidate := filepath.Join(dir, c)
+			if st, err := os.Stat(candidate); err == nil && !st.IsDir() {
+				return candidate
+			}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break // hit filesystem root
+		}
+		dir = parent
+	}
+	return ""
 }
 
 // isGzippedFile reports whether path ends in `.gz` (case-insensitive).

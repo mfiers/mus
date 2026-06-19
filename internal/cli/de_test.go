@@ -80,6 +80,90 @@ func hasFlag(args []string, names ...string) bool {
 	return false
 }
 
+func TestDECheck_CoIngestDetected_FlatLayout(t *testing.T) {
+	dir := t.TempDir()
+	writeMusCfg(t, dir,
+		"data_project=Fiers2025",
+		"de_dataset_h5ad=Single.Grafts.h5ad",
+	)
+	if err := os.WriteFile(filepath.Join(dir, "Single.Grafts.h5ad"),
+		[]byte("h5ad placeholder"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeDETSV(t, filepath.Join(dir, "de.tsv"),
+		"names\tlogfoldchanges\tpvals_adj",
+		"G1\t0.1\t0.5")
+
+	stdout, _, err := runDECheckForTest(t, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "co-ingest") {
+		t.Errorf("expected co-ingest line:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "local h5ad found at") {
+		t.Errorf("co-ingest line missing local-found phrasing:\n%s", stdout)
+	}
+	// vark-check should explicitly mark itself skipped FOR the
+	// co-ingest reason (not for a misleading "not in catalog").
+	if !strings.Contains(stdout, "co-ingest deposit — anthive assigns") {
+		t.Errorf("vark-check should defer to anthive on co-ingest:\n%s", stdout)
+	}
+}
+
+func TestDECheck_CoIngestDetected_NestedDELayout(t *testing.T) {
+	dir := t.TempDir()
+	writeMusCfg(t, dir,
+		"data_project=Fiers2025",
+		"de_dataset_h5ad=Single.Grafts.h5ad",
+	)
+	if err := os.WriteFile(filepath.Join(dir, "Single.Grafts.h5ad"),
+		[]byte("h5ad placeholder"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	deDir := filepath.Join(dir, "de", "main_model")
+	if err := os.MkdirAll(deDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeDETSV(t, filepath.Join(deDir, "results.tsv"),
+		"names\tlogfoldchanges\tpvals_adj",
+		"G1\t0.1\t0.5")
+
+	stdout, _, err := runDECheckForTest(t, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "co-ingest") || !strings.Contains(stdout, "Single.Grafts.h5ad") {
+		t.Errorf("nested layout should still find the h5ad above the de/ subdir:\n%s", stdout)
+	}
+}
+
+func TestDECheck_NoCoIngest_FallsBackToVarkOrSkip(t *testing.T) {
+	dir := t.TempDir()
+	writeMusCfg(t, dir,
+		"data_project=Fiers2025",
+		"de_dataset_h5ad=Nonexistent.h5ad",
+	)
+	writeDETSV(t, filepath.Join(dir, "de.tsv"),
+		"names\tlogfoldchanges\tpvals_adj",
+		"G1\t0.1\t0.5")
+
+	stdout, _, err := runDECheckForTest(t, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No co-ingest line should appear.
+	if strings.Contains(stdout, "co-ingest") {
+		t.Errorf("co-ingest line should NOT appear when h5ad isn't local:\n%s", stdout)
+	}
+	// vark-check should still fire (with whatever outcome vark gives —
+	// either "not on PATH" or "not in catalog"). Just assert the line
+	// is present.
+	if !strings.Contains(stdout, "vark-check") {
+		t.Errorf("vark-check line missing:\n%s", stdout)
+	}
+}
+
 func TestDECheck_RequiresMessage(t *testing.T) {
 	dir := t.TempDir()
 	writeMusCfg(t, dir,
