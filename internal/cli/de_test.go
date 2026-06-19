@@ -43,7 +43,22 @@ func writeDETSV(t *testing.T, path, header, row string) {
 // runDECheckForTest runs the de check command in-process and returns
 // (stdout, stderr, error). Builds the full cobra command so flag
 // parsing + RunE are exercised — not just the inner runner.
+//
+// `-m` is mandatory on `mus de check`. To keep the test surface
+// concise the helper injects a default message when the caller
+// hasn't supplied one. Tests that explicitly want to exercise the
+// missing-message path use runDECheckRaw below.
 func runDECheckForTest(t *testing.T, args ...string) (string, string, error) {
+	if !hasFlag(args, "-m", "--message") {
+		args = append([]string{"-m", "test message"}, args...)
+	}
+	return runDECheckRaw(t, args...)
+}
+
+// runDECheckRaw is like runDECheckForTest but passes args through
+// verbatim — for tests that want to assert behaviour when -m is
+// missing or other flag-parsing concerns.
+func runDECheckRaw(t *testing.T, args ...string) (string, string, error) {
 	t.Helper()
 	cmd := newDECheckCmd()
 	var stdout, stderr bytes.Buffer
@@ -52,6 +67,155 @@ func runDECheckForTest(t *testing.T, args ...string) (string, string, error) {
 	cmd.SetArgs(args)
 	err := cmd.Execute()
 	return stdout.String(), stderr.String(), err
+}
+
+func hasFlag(args []string, names ...string) bool {
+	for _, a := range args {
+		for _, n := range names {
+			if a == n || strings.HasPrefix(a, n+"=") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func TestDECheck_RequiresMessage(t *testing.T) {
+	dir := t.TempDir()
+	writeMusCfg(t, dir,
+		"data_project=Fiers2025",
+		"de_target_id=ABC",
+	)
+	writeDETSV(t, filepath.Join(dir, "de.tsv"),
+		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
+		"G1\t1\t1\t1\t1\t1\t1")
+
+	// raw → no -m injected
+	_, _, err := runDECheckRaw(t, dir)
+	if err == nil {
+		t.Fatal("expected failure when -m is missing")
+	}
+	if !strings.Contains(err.Error(), "message") && !strings.Contains(err.Error(), "required flag") {
+		t.Errorf("expected message about required -m; got %v", err)
+	}
+}
+
+func TestDECheck_MessageWritesDescription(t *testing.T) {
+	dir := t.TempDir()
+	writeMusCfg(t, dir,
+		"data_project=Fiers2025",
+		"de_target_id=ABC",
+	)
+	writeDETSV(t, filepath.Join(dir, "de.tsv"),
+		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
+		"G1\t1\t1\t1\t1\t1\t1")
+
+	stdout, _, err := runDECheckRaw(t, "-m", "scanpy wilcoxon, donor-4 excluded", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, `"scanpy wilcoxon, donor-4 excluded"`) {
+		t.Errorf("description line missing the quoted message:\n%s", stdout)
+	}
+	body, _ := os.ReadFile(filepath.Join(dir, "de.tsv.mus"))
+	if !strings.Contains(string(body), "de_description=scanpy wilcoxon, donor-4 excluded") {
+		t.Errorf("sidecar missing de_description value:\n%s", body)
+	}
+}
+
+func TestDECheck_MessageOverridesCascadeDescription(t *testing.T) {
+	dir := t.TempDir()
+	writeMusCfg(t, dir,
+		"data_project=Fiers2025",
+		"de_target_id=ABC",
+		`de_description=stale folder-level description`,
+	)
+	writeDETSV(t, filepath.Join(dir, "de.tsv"),
+		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
+		"G1\t1\t1\t1\t1\t1\t1")
+
+	_, _, err := runDECheckRaw(t, "-m", "fresh per-check description", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := os.ReadFile(filepath.Join(dir, "de.tsv.mus"))
+	got := string(body)
+	if !strings.Contains(got, "de_description=fresh per-check description") {
+		t.Errorf("sidecar should carry -m value, not cascade:\n%s", got)
+	}
+	if strings.Contains(got, "stale folder-level description") {
+		t.Errorf("cascade description should NOT leak through:\n%s", got)
+	}
+}
+
+func TestDECheck_SoftFieldNudges(t *testing.T) {
+	dir := t.TempDir()
+	writeMusCfg(t, dir,
+		"data_project=Fiers2025",
+		"de_target_id=ABC",
+		`de_software_version=scanpy 1.10.4`,
+		// de_reference_type, de_covariates, de_filter_criteria deliberately unset
+	)
+	writeDETSV(t, filepath.Join(dir, "de.tsv"),
+		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
+		"G1\t1\t1\t1\t1\t1\t1")
+
+	stdout, _, err := runDECheckForTest(t, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Set field → OK line with value visible.
+	if !strings.Contains(stdout, "soft.de_software_version") || !strings.Contains(stdout, "scanpy 1.10.4") {
+		t.Errorf("expected OK soft.de_software_version line with value:\n%s", stdout)
+	}
+	// Unset fields → SKIP line with suggestion + the set-command hint.
+	for _, want := range []string{
+		"soft.de_reference_type",
+		"pairwise | vsrest | vsreference | vsgrandmean",
+		"soft.de_covariates",
+		"sex,age,batch",
+		"soft.de_filter_criteria",
+		"`mus config set de_filter_criteria",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("missing soft-field nudge %q:\n%s", want, stdout)
+		}
+	}
+}
+
+func TestDECheck_CompressionNudge(t *testing.T) {
+	dir := t.TempDir()
+	writeMusCfg(t, dir, "data_project=Fiers2025", "de_target_id=ABC")
+
+	// Plain .tsv → SKIP compression nudge.
+	writeDETSV(t, filepath.Join(dir, "plain.tsv"),
+		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
+		"G1\t1\t1\t1\t1\t1\t1")
+	stdout, _, err := runDECheckForTest(t, filepath.Join(dir, "plain.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"SKIP", "compression", "gzip plain.tsv", "5–10×",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("plain .tsv: expected gzip nudge with %q:\n%s", want, stdout)
+		}
+	}
+
+	// .tsv.gz → OK compression line.
+	dir2 := t.TempDir()
+	writeMusCfg(t, dir2, "data_project=Fiers2025", "de_target_id=ABC")
+	writeGzippedDE(t, filepath.Join(dir2, "de.tsv.gz"),
+		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
+		"G1\t1\t1\t1\t1\t1\t1")
+	stdout2, _, err := runDECheckForTest(t, filepath.Join(dir2, "de.tsv.gz"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout2, "OK") || !strings.Contains(stdout2, "compression") || !strings.Contains(stdout2, "gzipped") {
+		t.Errorf(".tsv.gz: expected OK compression line:\n%s", stdout2)
+	}
 }
 
 func TestDECheck_HappyPath_DESeq2(t *testing.T) {

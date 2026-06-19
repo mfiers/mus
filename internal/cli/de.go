@@ -40,25 +40,33 @@ func newDECmd() *cobra.Command {
 // --- mus de check -----------------------------------------------------------
 
 func newDECheckCmd() *cobra.Command {
-	var formatOverride string
+	var formatOverride, message string
 	var silent bool
 	cmd := &cobra.Command{
-		Use:   "check [FOLDER|FILE...]",
+		Use:   "check -m MESSAGE [FOLDER|FILE...]",
 		Short: "validate DE result files; stamp <basename>.mus on PASS",
 		Long: "Walks the given folder(s) and/or file(s), validates every\n" +
-			".tsv / .csv against one of the recognised DE formats\n" +
-			"(deseq2 / edger / scanpy / seurat / glmmseq / glmmtmb / long),\n" +
-			"and stamps a <basename>.mus sidecar carrying the de_* metadata\n" +
-			"on PASS. Files without a passing sidecar are refused by\n" +
-			"`mus s3 upload`.\n\n" +
-			"Folder-level metadata (de_target_id, de_cluster_obs_column, …)\n" +
-			"lives in the cascading mus.cfg — no separate de.cfg.\n\n" +
+			".tsv / .csv (plus .tsv.gz / .csv.gz) against one of the\n" +
+			"recognised DE formats (deseq2 / edger / scanpy / seurat /\n" +
+			"glmmseq / glmmtmb / long), and stamps a <basename>.mus sidecar\n" +
+			"carrying the de_* metadata on PASS. Files without a passing\n" +
+			"sidecar are refused by `mus s3 upload`.\n\n" +
+			"A -m / --message is REQUIRED. Like a git commit message —\n" +
+			"describes what this DE analysis is, why it was run, anything\n" +
+			"a future reader would want to know. The message is stamped as\n" +
+			"`de_description` on every sidecar this check writes, overriding\n" +
+			"any `de_description=` from the mus.cfg cascade. No silent\n" +
+			"checks.\n\n" +
+			"Folder-level metadata (de_target_id, de_cluster_obs_column,\n" +
+			"de_software_version, …) lives in the cascading mus.cfg — no\n" +
+			"separate de.cfg. Use `mus config set de_<key> <value>` to write\n" +
+			"each field once and have it cascade to every file underneath.\n\n" +
 			"Format detection is always-on (column-name signature match).\n" +
 			"--format X overrides detection when the depositor knows better.\n\n" +
 			"Verbose by default — every inference (format match, auto-filled\n" +
-			"method, computed long-format distinct sets, skipped checks) is\n" +
-			"announced on stdout. --silent suppresses everything except\n" +
-			"failures and the final summary.\n\n" +
+			"method, computed long-format distinct sets, soft-field nudges,\n" +
+			"skipped checks) is announced on stdout. --silent suppresses\n" +
+			"everything except failures and the final summary.\n\n" +
 			"Output ends with a 'Grouping by target' section that groups\n" +
 			"every passed file by its de_target_id / de_target_h5ad —\n" +
 			"useful for catching a typo before deposit.\n\n" +
@@ -66,9 +74,17 @@ func newDECheckCmd() *cobra.Command {
 			"convert to .tsv via pandas/pyarrow if you have parquet upstream).",
 		Args: cobra.MinimumNArgs(0),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDECheck(cmd, args, formatOverride, silent)
+			msg := strings.TrimSpace(message)
+			if msg == "" {
+				return fmt.Errorf("`mus de check` requires a -m / --message describing the analysis")
+			}
+			return runDECheck(cmd, args, formatOverride, msg, silent)
 		},
 	}
+	cmd.Flags().StringVarP(&message, "message", "m", "",
+		"describe what this DE analysis is / why this check is running (REQUIRED) — "+
+			"stamped as de_description on every sidecar")
+	_ = cmd.MarkFlagRequired("message")
 	cmd.Flags().StringVar(&formatOverride, "format", "",
 		"override format detection (one of: "+strings.Join(de.FormatNames(), ", ")+")")
 	cmd.Flags().BoolVar(&silent, "silent", false,
@@ -103,7 +119,7 @@ type dePassFile struct {
 	Cluster    string
 }
 
-func runDECheck(cmd *cobra.Command, args []string, formatOverride string, silent bool) error {
+func runDECheck(cmd *cobra.Command, args []string, formatOverride, message string, silent bool) error {
 	if len(args) == 0 {
 		args = []string{"."}
 	}
@@ -156,7 +172,7 @@ func runDECheck(cmd *cobra.Command, args []string, formatOverride string, silent
 			failed++
 			continue
 		}
-		ok, info := checkOneDEFile(cache, f, envForFile, override, out)
+		ok, info := checkOneDEFile(cache, f, envForFile, override, message, out)
 		checked++
 		if !ok {
 			failed++
@@ -199,9 +215,12 @@ func runDECheck(cmd *cobra.Command, args []string, formatOverride string, silent
 
 // checkOneDEFile validates one file and (on PASS) writes its
 // sidecar. Returns (true, info) on PASS, (false, _) on failure.
-// All output (verbose / failure / skip) goes through `out`.
+// All output (verbose / failure / skip) goes through `out`. The
+// `message` arg is the mandatory -m / --message value; it lands
+// as `de_description` on the stamped sidecar, overriding any
+// cascade-level de_description.
 func checkOneDEFile(cache *hashcache.Cache, path string, env *config.Env,
-	formatOverride de.Format, out *deReporter) (bool, dePassFile) {
+	formatOverride de.Format, message string, out *deReporter) (bool, dePassFile) {
 
 	out.fileHeader(path)
 
@@ -309,8 +328,26 @@ func checkOneDEFile(cache *hashcache.Cache, path string, env *config.Env,
 		}
 	}
 
-	// 7. Stamp the sidecar.
-	if err := stampDESidecar(cache, path, rep, env, chosen, method, target, targetH5ad); err != nil {
+	// 7. Description (from the mandatory -m flag).
+	out.ok("description", path, fmt.Sprintf("%q", message))
+
+	// 8. Soft-field nudges — visible audit of what's set vs. what
+	//    the depositor could fill in to make the deposit richer.
+	//    None of these block the check; suggestions are advisory.
+	reportSoftFields(env, out, path)
+
+	// 9. Storage nudge: suggest gzipping plain .tsv / .csv files.
+	if !isGzippedFile(path) {
+		out.skip("compression", path,
+			"plain "+strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")+
+				" — gzip it for ~5–10× S3 storage savings: "+
+				"`gzip "+filepath.Base(path)+"` (mus accepts .tsv.gz / .csv.gz transparently)")
+	} else {
+		out.ok("compression", path, "gzipped — good for S3 storage / bandwidth")
+	}
+
+	// 10. Stamp the sidecar.
+	if err := stampDESidecar(cache, path, rep, env, chosen, method, target, targetH5ad, message); err != nil {
 		out.errf("sidecar", path, "%v", err)
 		return false, dePassFile{}
 	}
@@ -326,11 +363,58 @@ func checkOneDEFile(cache *hashcache.Cache, path string, env *config.Env,
 	}
 }
 
+// softFieldDef describes one optional de_* cascade key for the
+// reportSoftFields nudge surface. `Suggestion` is the friendly
+// hint shown when the key is unset — drops a concrete example /
+// vocabulary so the depositor doesn't have to guess.
+type softFieldDef struct {
+	Key        string
+	Suggestion string // shown on SKIP; should fit on one line
+}
+
+// softFieldList enumerates the cascade keys reportSoftFields walks
+// per file. de_method is intentionally OMITTED here — it's auto-
+// filled from de_format and printed by its own check earlier.
+// de_cluster / de_cluster_obs_column are also separate (already
+// printed by the cluster-validation block when opted in).
+var softFieldList = []softFieldDef{
+	{"de_software_version", `e.g. "scanpy 1.10.4" / "DESeq2 1.42.0"`},
+	{"de_reference_type",
+		`one of (free text, no enforced vocab): pairwise | vsrest | vsreference | vsgrandmean`},
+	{"de_covariates", `comma-separated list, e.g. "sex,age,batch"`},
+	{"de_filter_criteria", `e.g. "expressed in ≥3 cells per sample"`},
+}
+
+// reportSoftFields walks softFieldList and emits one check line per
+// field: OK with the value when the cascade carries it, SKIP with
+// a one-line example when it doesn't. Purely advisory — does not
+// affect PASS / FAIL accounting.
+func reportSoftFields(env *config.Env, out *deReporter, path string) {
+	for _, f := range softFieldList {
+		v := env.String(f.Key)
+		if v != "" {
+			out.ok("soft."+f.Key, path, v)
+		} else {
+			out.skip("soft."+f.Key, path,
+				"unset — "+f.Suggestion+". Set: `mus config set "+f.Key+" \"...\"`")
+		}
+	}
+}
+
+// isGzippedFile reports whether path ends in `.gz` (case-insensitive).
+// Distinct from internal/de.isGzipped because that one is unexported;
+// duplicating one-line predicate here is cheaper than exporting the
+// other.
+func isGzippedFile(path string) bool {
+	return strings.EqualFold(filepath.Ext(path), ".gz")
+}
+
 // stampDESidecar writes / refreshes the per-file sidecar at
 // <path>.mus with the DE block populated from the report +
-// cascade.
+// cascade. `message` is the mandatory -m / --message value;
+// it lands as `de_description`, overriding any cascade value.
 func stampDESidecar(cache *hashcache.Cache, path string, rep *de.Report,
-	env *config.Env, chosen de.Format, method, target, targetH5ad string) error {
+	env *config.Env, chosen de.Format, method, target, targetH5ad, message string) error {
 
 	scPath := sidecar.SidecarPath(path)
 	doc, err := readMaybe(scPath)
@@ -372,7 +456,7 @@ func stampDESidecar(cache *hashcache.Cache, path string, rep *de.Report,
 		ReferenceType:         env.String("de_reference_type"),
 		Covariates:            env.List("de_covariates"),
 		FilterCriteria:        env.String("de_filter_criteria"),
-		Description:           env.String("de_description"),
+		Description:           message, // mandatory -m flag value; overrides cascade de_description
 		RowCount:              rep.RowCount,
 		InspectedAt:           time.Now().UTC().Truncate(time.Second),
 		InspectedSha256:       sha,
