@@ -25,6 +25,7 @@ import (
 
 	"codeberg.org/mfiers/mus/internal/config"
 	"codeberg.org/mfiers/mus/internal/de"
+	"codeberg.org/mfiers/mus/internal/h5ad"
 	"codeberg.org/mfiers/mus/internal/hashcache"
 	"codeberg.org/mfiers/mus/internal/sidecar"
 	"codeberg.org/mfiers/mus/internal/vark"
@@ -351,15 +352,22 @@ func checkOneDEFile(cache *hashcache.Cache, path string, env *config.Env,
 		out.ok("method", fmt.Sprintf("set in cascade: %q", method))
 	}
 
-	// 6. Cluster validation (light: just report; deep validation
-	//    against datasetID h5ad obs comes in a later commit).
+	// 6. Cluster validation.
 	//
 	// Only surface cluster-related lines when the depositor has
 	// opted into per-cluster DE — either by declaring a cluster
 	// value or by naming an obs column.
+	//
+	// Deep validation (cluster value ∈ obs[col]) runs ONLY when
+	// the target h5ad is locally present (co-ingest path). For
+	// catalog-resident datasets (only de_dataset_id known) we
+	// SKIP with an explicit "anthive validates at ingest" — the
+	// catalog query layer doesn't expose per-column unique values
+	// so mus can't pre-check without a local file.
 	cluster := env.String("de_cluster")
 	clusterCol := env.String("de_cluster_obs_column")
 	if cluster != "" || clusterCol != "" {
+		clusterFail := false
 		switch {
 		case cluster == "":
 			out.skip("cluster-validation",
@@ -368,9 +376,15 @@ func checkOneDEFile(cache *hashcache.Cache, path string, env *config.Env,
 			out.skip("cluster-validation",
 				"de_cluster set but de_cluster_obs_column unset — "+
 					"OK for multi-factorial designs")
-		default:
+		case coIngest == "":
 			out.skip("cluster-validation", fmt.Sprintf(
-				"deferred (will check %q is in dataset h5ad obs[%s])", cluster, clusterCol))
+				"target h5ad not locally present — anthive validates %q ∈ obs[%s] at ingest",
+				cluster, clusterCol))
+		default:
+			clusterFail = !validateClusterAgainstH5ad(coIngest, clusterCol, cluster, out)
+		}
+		if clusterFail {
+			return false, dePassFile{}, false
 		}
 	}
 
@@ -448,6 +462,65 @@ func reportSoftFields(env *config.Env, out *deReporter) (anyUnset bool) {
 		}
 	}
 	return
+}
+
+// validateClusterAgainstH5ad runs the deep cluster-validation
+// check: read the unique values of target_h5ad.obs[col] via the
+// embedded Python helper, confirm the depositor's `cluster` value
+// is one of them. Returns true on PASS.
+//
+// HARD failure on mismatch (reports a stable subset of obs values
+// for context). Helper failures (uv missing, file unreadable, obs
+// column absent) are SOFT — surfaced as SKIP so the depositor sees
+// the reason but the upload isn't blocked. Rationale: cluster-
+// value typos are caught at anthive ingest anyway; mus's role is
+// to catch them earlier when easy, not to block the deposit when
+// the inspection layer has trouble.
+func validateClusterAgainstH5ad(h5adPath, col, cluster string, out *deReporter) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	values, err := h5ad.ObsValues(ctx, h5adPath, col, nil)
+	if err != nil {
+		// Surface as SKIP — we don't block on inspection failure.
+		// anthive ingest is the authoritative resolver if mus
+		// couldn't pre-check.
+		out.skip("cluster-validation",
+			fmt.Sprintf("could not read obs[%s] from %s: %v — anthive validates at ingest",
+				col, filepath.Base(h5adPath), err))
+		return true
+	}
+	if containsString(values, cluster) {
+		out.ok("cluster-validation",
+			fmt.Sprintf("%q ∈ obs[%s] of %s (%d distinct values)",
+				cluster, col, filepath.Base(h5adPath), len(values)))
+		return true
+	}
+	// Mismatch: HARD fail with a helpful sample of what IS in obs[col].
+	preview := previewStrings(values, 8)
+	out.errf("cluster-validation",
+		"de_cluster=%q is NOT in obs[%s] of %s (have %d values; e.g. %s)",
+		cluster, col, filepath.Base(h5adPath), len(values), preview)
+	return false
+}
+
+// containsString — case-sensitive set-membership for the cluster
+// value. anthive treats obs values as opaque strings, so we do too.
+func containsString(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
+}
+
+// previewStrings returns up to n items, comma-joined, with an
+// elided "...(N more)" suffix when there are more.
+func previewStrings(items []string, n int) string {
+	if len(items) <= n {
+		return strings.Join(items, ", ")
+	}
+	return strings.Join(items[:n], ", ") + fmt.Sprintf(", ...(%d more)", len(items)-n)
 }
 
 // findCoIngestH5ad looks for a co-ingested h5ad sibling. Returns

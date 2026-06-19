@@ -80,6 +80,39 @@ func hasFlag(args []string, names ...string) bool {
 	return false
 }
 
+func TestDECheck_ClusterValidation_NoLocalH5adSkips(t *testing.T) {
+	// Catalog-resident case: only de_dataset_id is set, no local
+	// h5ad to inspect. Cluster validation cannot run; mus SKIPs with
+	// "anthive validates at ingest" — does NOT fail the deposit.
+	dir := t.TempDir()
+	writeMusCfg(t, dir,
+		"data_project=Fiers2025",
+		"de_dataset_id=CMR",
+		"de_cluster_obs_column=leiden",
+	)
+	deDir := filepath.Join(dir, "per_cluster", "DAM")
+	if err := os.MkdirAll(deDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeMusCfg(t, deDir, "de_cluster=microglia.DAM")
+	writeDETSV(t, filepath.Join(deDir, "results.tsv"),
+		"names\tlogfoldchanges\tpvals_adj",
+		"G1\t0.1\t0.5")
+	stdout, _, err := runDECheckForTest(t, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "cluster-validation") {
+		t.Errorf("expected cluster-validation line:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "target h5ad not locally present") {
+		t.Errorf("expected SKIP reason about no local h5ad:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "anthive validates") {
+		t.Errorf("expected mention that anthive resolves at ingest:\n%s", stdout)
+	}
+}
+
 func TestDECheck_CoIngestDetected_FlatLayout(t *testing.T) {
 	dir := t.TempDir()
 	writeMusCfg(t, dir,
