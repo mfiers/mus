@@ -12,6 +12,7 @@ package cli
 // knows better than the column-signature matcher.
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -26,6 +27,7 @@ import (
 	"codeberg.org/mfiers/mus/internal/de"
 	"codeberg.org/mfiers/mus/internal/hashcache"
 	"codeberg.org/mfiers/mus/internal/sidecar"
+	"codeberg.org/mfiers/mus/internal/vark"
 )
 
 func newDECmd() *cobra.Command {
@@ -302,6 +304,20 @@ func checkOneDEFile(cache *hashcache.Cache, path string, env *config.Env,
 	}
 	out.ok("dataset", describeDataset(datasetID, datasetH5ad))
 
+	// 4c. Optional vark cross-check — when the `vark` binary is on
+	//     PATH, query the catalog for this data_project and verify
+	//     the declared de_dataset_id / de_dataset_h5ad resolves to
+	//     a real entry. Warns on no match (typo or first-time
+	//     deposit). Never blocks the check — anthive is the
+	//     authoritative resolver at ingest.
+	if vark.Available() {
+		reportVarkCheck(env, dataProject, datasetID, datasetH5ad, out)
+	} else {
+		out.skip("vark-check",
+			"`vark` not on PATH — install vark to enable pre-deposit "+
+				"catalog cross-check (https://codeberg.org/mfiers/vark)")
+	}
+
 	// 5. Method (auto-fill from format).
 	method := env.String("de_method")
 	if method == "" {
@@ -420,6 +436,57 @@ func reportSoftFields(env *config.Env, out *deReporter) (anyUnset bool) {
 // other.
 func isGzippedFile(path string) bool {
 	return strings.EqualFold(filepath.Ext(path), ".gz")
+}
+
+// reportVarkCheck runs the optional vark pre-flight against the
+// anthive catalog. Surfaces ONE status line:
+//
+//   - OK    when de_dataset_id or de_dataset_h5ad resolves to a
+//           dataset in the data_project
+//   - SKIP  when no match (typo or first-time deposit — anthive
+//           is the final authority; mus does not block)
+//   - SKIP  when the vark query itself errors out (timeout, auth,
+//           network — best-effort, never blocks)
+//
+// Only invoked when vark.Available() — caller already checked.
+func reportVarkCheck(env *config.Env, dataProject, datasetID, datasetH5ad string, out *deReporter) {
+	ctx, cancel := context.WithTimeout(context.Background(), vark.DefaultQueryTimeout)
+	defer cancel()
+
+	all, err := vark.ListDatasets(ctx)
+	if err != nil {
+		out.skip("vark-check",
+			fmt.Sprintf("vark query failed: %v — anthive will resolve at ingest", err))
+		return
+	}
+	datasets := vark.FilterByDataProject(all, dataProject)
+
+	// Try id first (preferred), then h5ad basename.
+	var hit *vark.Dataset
+	if datasetID != "" {
+		hit = vark.FindByFileID(datasets, datasetID)
+	}
+	if hit == nil && datasetH5ad != "" {
+		hit = vark.FindByH5ad(datasets, datasetH5ad)
+	}
+	if hit != nil {
+		out.ok("vark-check",
+			fmt.Sprintf("%s resolves to %s (%q) in catalog",
+				or(datasetID, datasetH5ad), hit.ID, hit.Title))
+		return
+	}
+
+	// No match — almost certainly a typo OR a first-time deposit
+	// against a not-yet-cataloged dataset. Make the depositor see
+	// it; anthive will reject on the ingest side if it's a typo.
+	hint := datasetID
+	if hint == "" {
+		hint = datasetH5ad
+	}
+	out.skip("vark-check",
+		fmt.Sprintf("%q not in catalog under data_project=%s "+
+			"(typo? first-time deposit? — anthive resolves at ingest)",
+			hint, dataProject))
 }
 
 // stampDESidecar writes / refreshes the per-file sidecar at
