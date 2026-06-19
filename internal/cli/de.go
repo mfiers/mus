@@ -446,10 +446,14 @@ func isDECandidate(path string) bool {
 	if sidecar.IsSidecar(path) {
 		return false
 	}
-	ext := strings.ToLower(filepath.Ext(path))
-	switch ext {
-	case ".tsv", ".csv":
-		return true
+	// Accept plain + gzipped TSV/CSV. The gz path is decompressed
+	// transparently in internal/de.Inspect; from mus's perspective
+	// .tsv.gz is just .tsv that takes less S3 quota.
+	lower := strings.ToLower(path)
+	for _, ext := range []string{".tsv", ".csv", ".tsv.gz", ".csv.gz"} {
+		if strings.HasSuffix(lower, ext) {
+			return true
+		}
 	}
 	return false
 }

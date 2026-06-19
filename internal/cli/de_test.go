@@ -2,11 +2,27 @@ package cli
 
 import (
 	"bytes"
+	gz "compress/gzip"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func writeGzippedDE(t *testing.T, path, header, row string) {
+	t.Helper()
+	var buf bytes.Buffer
+	w := gz.NewWriter(&buf)
+	if _, err := w.Write([]byte(header + "\n" + row + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // writeMusCfg writes a folder-level mus.cfg with the given lines.
 func writeMusCfg(t *testing.T, dir string, lines ...string) {
@@ -88,6 +104,34 @@ func TestDECheck_HappyPath_DESeq2(t *testing.T) {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("sidecar missing %q\nbody:\n%s", want, body)
 		}
+	}
+}
+
+func TestDECheck_AcceptsGzippedDESeq2(t *testing.T) {
+	dir := t.TempDir()
+	writeMusCfg(t, dir,
+		"data_project=Fiers2025",
+		"de_target_id=SGF",
+	)
+	writeGzippedDE(t, filepath.Join(dir, "de.tsv.gz"),
+		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
+		"G1\t1\t1\t1\t1\t1\t1")
+	stdout, _, err := runDECheckForTest(t, dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, want := range []string{
+		"detected deseq2", "data_project", "Fiers2025", "PASS recorded",
+		"checked 1, passed 1",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("missing %q in:\n%s", want, stdout)
+		}
+	}
+	// Sidecar lands at <file>.tsv.gz.mus (existing pattern: data
+	// filename + .mus, no special-casing for compression).
+	if _, err := os.Stat(filepath.Join(dir, "de.tsv.gz.mus")); err != nil {
+		t.Errorf("expected sidecar at de.tsv.gz.mus: %v", err)
 	}
 }
 

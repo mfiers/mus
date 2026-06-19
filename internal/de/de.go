@@ -22,6 +22,7 @@ package de
 
 import (
 	"bufio"
+	"compress/gzip"
 	"encoding/csv"
 	"fmt"
 	"io"
@@ -99,6 +100,12 @@ type Report struct {
 // format, Inspect ALSO computes the distinct {term × contrast}
 // sets — this is the only path that reads the full body; other
 // formats stop after the header.
+//
+// Compressed inputs (.tsv.gz / .csv.gz) are detected by extension
+// and decompressed transparently — same format detection,
+// validation, and long-format aggregation as the plain variant.
+// The hash recorded in the sidecar is over the COMPRESSED bytes
+// on disk (whatever the depositor uploaded).
 func Inspect(path string) (*Report, error) {
 	if isParquet(path) {
 		return nil, &ErrParquet{Path: path}
@@ -109,7 +116,17 @@ func Inspect(path string) (*Report, error) {
 	}
 	defer f.Close()
 
-	header, reader, delim, err := readHeader(f, path)
+	var src io.Reader = f
+	if isGzipped(path) {
+		gz, err := gzip.NewReader(f)
+		if err != nil {
+			return nil, fmt.Errorf("opening gzip stream for %s: %w", path, err)
+		}
+		defer gz.Close()
+		src = gz
+	}
+
+	header, reader, delim, err := readHeader(src, path)
 	if err != nil {
 		return nil, err
 	}
@@ -258,15 +275,16 @@ func isParquet(path string) bool {
 	return ext == ".parquet" || ext == ".pq"
 }
 
-// readHeader reads the first line, splits on the file's likely
-// delimiter (TSV → tab; CSV → comma; .csv falls through to comma),
-// and returns the headers + a reader positioned at the first data
-// row + the chosen delimiter. The reader returned is the same
-// underlying file handle wrapped in a buffered reader; the file
-// position has advanced past the header.
-func readHeader(f *os.File, path string) ([]string, *bufio.Reader, rune, error) {
+// readHeader reads the first line from src, splits on the path's
+// likely delimiter (TSV → tab; CSV → comma; .gz suffix stripped
+// first), and returns the headers + a buffered reader positioned
+// at the first data row + the chosen delimiter.
+//
+// src is an io.Reader rather than *os.File because the caller may
+// have wrapped a *os.File in a gzip.Reader for compressed input.
+func readHeader(src io.Reader, path string) ([]string, *bufio.Reader, rune, error) {
 	delim := delimiterFromPath(path)
-	br := bufio.NewReader(f)
+	br := bufio.NewReader(src)
 	line, err := br.ReadString('\n')
 	if err != nil && err != io.EOF {
 		return nil, nil, 0, fmt.Errorf("reading header: %w", err)
@@ -284,8 +302,12 @@ func readHeader(f *os.File, path string) ([]string, *bufio.Reader, rune, error) 
 	return header, br, delim, nil
 }
 
+// delimiterFromPath picks tab / comma based on the data-file
+// extension. Strips a trailing .gz first so .tsv.gz / .csv.gz
+// resolve correctly.
 func delimiterFromPath(path string) rune {
-	switch strings.ToLower(filepath.Ext(path)) {
+	stripped := stripGzExt(path)
+	switch strings.ToLower(filepath.Ext(stripped)) {
 	case ".tsv", ".txt":
 		return '\t'
 	case ".csv":
@@ -293,6 +315,25 @@ func delimiterFromPath(path string) rune {
 	}
 	// default to tab — DE tooling skews TSV
 	return '\t'
+}
+
+// isGzipped reports whether the path ends in `.gz` (compressed
+// DE input). We trust the extension; gzip's magic bytes would
+// confirm it but the extension is the contract with the catalog
+// (anthive reads .tsv.gz vs .tsv as the same logical resource).
+func isGzipped(path string) bool {
+	return strings.EqualFold(filepath.Ext(path), ".gz")
+}
+
+// stripGzExt drops a trailing .gz suffix (case-insensitive),
+// returning the inner extension carrier ("foo.tsv.gz" → "foo.tsv").
+// Used by delimiterFromPath so .tsv.gz routes through the .tsv
+// branch.
+func stripGzExt(path string) string {
+	if isGzipped(path) {
+		return path[:len(path)-len(".gz")]
+	}
+	return path
 }
 
 // splitDelim splits a line on `delim`. We use encoding/csv for the

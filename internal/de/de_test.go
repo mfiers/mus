@@ -1,11 +1,32 @@
 package de
 
 import (
+	"bytes"
+	"compress/gzip"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// writeGzipFile compresses body and writes <dir>/<name> (which
+// should end in .gz). Returns the absolute path.
+func writeGzipFile(t *testing.T, dir, name, body string) string {
+	t.Helper()
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	if _, err := gw.Write([]byte(body)); err != nil {
+		t.Fatal(err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, name)
+	if err := os.WriteFile(p, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
 
 // writeFile writes body to <dir>/<name>; returns the absolute path.
 func writeFile(t *testing.T, dir, name, body string) string {
@@ -134,6 +155,81 @@ func TestInspect_Long_ComputesDistinctTermContrast(t *testing.T) {
 	}
 	if !equalStringSlice(rep.ContrastSet, wantContrasts) {
 		t.Errorf("contrasts: %v, want %v", rep.ContrastSet, wantContrasts)
+	}
+}
+
+func TestInspect_TSVGz_DecompressTransparently(t *testing.T) {
+	dir := t.TempDir()
+	body := strings.Join([]string{
+		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
+		"G1\t12.3\t1.4\t0.2\t6.5\t1e-9\t1e-7",
+		"G2\t45.6\t-0.7\t0.3\t-2.1\t0.03\t0.04",
+	}, "\n") + "\n"
+	p := writeGzipFile(t, dir, "de.tsv.gz", body)
+	rep, err := Inspect(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Format != FormatDESeq2 {
+		t.Errorf("gz file should detect deseq2; got %q (header=%v)", rep.Format, rep.HeaderCols)
+	}
+	if rep.RowCount != 2 {
+		t.Errorf("gz row count: got %d, want 2", rep.RowCount)
+	}
+}
+
+func TestInspect_CSVGz_QuotedFieldsRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	body := strings.Join([]string{
+		`gene_id,effsize,pvalue,padj,term,contrast`,
+		`G1,1.2,1e-5,1e-4,interaction,"K,sexM_vs_W,sexF"`,
+		`G2,-0.8,0.01,0.05,interaction,"K,sexM_vs_W,sexF"`,
+	}, "\n") + "\n"
+	p := writeGzipFile(t, dir, "long.csv.gz", body)
+	rep, err := Inspect(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Format != FormatLong {
+		t.Fatalf("got %q; want long", rep.Format)
+	}
+	if len(rep.ContrastSet) != 1 || rep.ContrastSet[0] != "K,sexM_vs_W,sexF" {
+		t.Errorf("gz CSV with quoted commas: contrast set = %v", rep.ContrastSet)
+	}
+}
+
+func TestInspect_GzCorruptReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	// Plain text with a .gz extension — gzip.NewReader will reject
+	// it cleanly.
+	p := writeFile(t, dir, "fake.tsv.gz", "this is not gzip")
+	_, err := Inspect(p)
+	if err == nil {
+		t.Fatal("expected gzip-decode error")
+	}
+	if !strings.Contains(err.Error(), "gzip") {
+		t.Errorf("expected gzip-related error message; got: %v", err)
+	}
+}
+
+func TestDelimiterFromPath_StripsGzSuffix(t *testing.T) {
+	cases := []struct {
+		path string
+		want rune
+	}{
+		{"foo.tsv", '\t'},
+		{"foo.csv", ','},
+		{"foo.tsv.gz", '\t'},
+		{"foo.csv.gz", ','},
+		{"foo.TSV.GZ", '\t'},     // case-insensitive
+		{"foo.weird", '\t'},      // default
+		{"foo.csv.GZ", ','},      // mixed-case
+	}
+	for _, tc := range cases {
+		got := delimiterFromPath(tc.path)
+		if got != tc.want {
+			t.Errorf("delimiterFromPath(%q) = %q, want %q", tc.path, got, tc.want)
+		}
 	}
 }
 
