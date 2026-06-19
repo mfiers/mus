@@ -165,20 +165,34 @@ func runDECheck(cmd *cobra.Command, args []string, formatOverride, message strin
 
 	var passed []dePassFile
 	checked, failed := 0, 0
+	anyUnsetSoft := false
 	for _, f := range files {
 		envForFile, err := loadEnv(filepath.Dir(f))
 		if err != nil {
-			out.errf("load-cascade", f, "%v", err)
+			out.fileHeader(f)
+			out.errf("load-cascade", "%v", err)
 			failed++
 			continue
 		}
-		ok, info := checkOneDEFile(cache, f, envForFile, override, message, out)
+		ok, info, unsetSoft := checkOneDEFile(cache, f, envForFile, override, message, out)
 		checked++
+		if unsetSoft {
+			anyUnsetSoft = true
+		}
 		if !ok {
 			failed++
 			continue
 		}
 		passed = append(passed, info)
+	}
+
+	// Print the soft-parameter hint ONCE, only when at least one
+	// file had an unset soft field. Keeps the output compact for
+	// fully-annotated deposits; gives the depositor a one-line
+	// pointer when something's missing.
+	if anyUnsetSoft && !silent {
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "Set soft parameters via: mus config set <NAME> <VALUE>")
 	}
 
 	// Grouping by target — the killer feature anthive4 asked for.
@@ -214,91 +228,91 @@ func runDECheck(cmd *cobra.Command, args []string, formatOverride, message strin
 }
 
 // checkOneDEFile validates one file and (on PASS) writes its
-// sidecar. Returns (true, info) on PASS, (false, _) on failure.
+// sidecar. Returns (ok, info, unsetSoft) — `ok` is the PASS flag,
+// `info` populates the grouping summary, `unsetSoft` is true when
+// at least one soft cascade field was missing (used by the caller
+// to print the one-shot "Set soft parameters …" hint).
+//
 // All output (verbose / failure / skip) goes through `out`. The
 // `message` arg is the mandatory -m / --message value; it lands
 // as `de_description` on the stamped sidecar, overriding any
 // cascade-level de_description.
+//
+// Status lines are compact: status + check label + (note). The
+// file path is in the per-file header above the lines, never
+// repeated per row.
 func checkOneDEFile(cache *hashcache.Cache, path string, env *config.Env,
-	formatOverride de.Format, message string, out *deReporter) (bool, dePassFile) {
+	formatOverride de.Format, message string, out *deReporter) (bool, dePassFile, bool) {
 
 	out.fileHeader(path)
 
 	// 1. Inspect (format detect + body scan).
 	rep, err := de.Inspect(path)
 	if err != nil {
-		if de.IsParquetError(err) {
-			out.errf("format", path, "%v", err)
-		} else {
-			out.errf("format", path, "%v", err)
-		}
-		return false, dePassFile{}
+		out.errf("format", "%v", err)
+		return false, dePassFile{}, false
 	}
 	chosen := rep.Format
 	if formatOverride != de.FormatUnknown {
 		chosen = formatOverride
 		rep.Format = formatOverride
-		out.ok("format", path,
-			fmt.Sprintf("override --format=%s", formatOverride))
+		out.ok("format", fmt.Sprintf("override --format=%s", formatOverride))
 	} else if chosen == de.FormatUnknown {
 		// Validate will produce the right error; let it speak.
 	} else {
-		out.ok("format", path, fmt.Sprintf(
+		out.ok("format", fmt.Sprintf(
 			"detected %s (matched: %s)",
 			chosen, strings.Join(rep.MatchedCols, ", ")))
 	}
 
 	// 2. Validate.
 	if err := de.Validate(rep); err != nil {
-		out.errf("format", path, "%v", err)
-		return false, dePassFile{}
+		out.errf("format", "%v", err)
+		return false, dePassFile{}, false
 	}
-	out.ok("rows", path, fmt.Sprintf("%d data rows", rep.RowCount))
+	out.ok("rows", fmt.Sprintf("%d data rows", rep.RowCount))
 
 	// 3. Long-format auto: stamp the distinct set.
 	if rep.Format == de.FormatLong {
-		out.ok("long-format-aggregation", path, fmt.Sprintf(
+		out.ok("long-format-aggregation", fmt.Sprintf(
 			"terms=%s; contrasts=%s",
 			strings.Join(rep.TermSet, ", "),
 			strings.Join(rep.ContrastSet, ", ")))
 	}
 
-	// 4a. data_project (HARD) — anthive's grouping key. Without it,
-	//     the upload gate can't compute an S3 destination prefix
-	//     and ant-ingest can't locate the deposit's catalog home.
+	// 4a. data_project (HARD).
 	dataProject := env.String("data_project")
 	if dataProject == "" {
-		out.errf("data_project", path,
+		out.errf("data_project",
 			"data_project not set in cascade — "+
 				"`mus config set data_project NameYear` (or `mus eln link <id>`)")
-		return false, dePassFile{}
+		return false, dePassFile{}, false
 	}
-	out.ok("data_project", path, dataProject)
+	out.ok("data_project", dataProject)
 
 	// 4b. Target dataset (HARD-one-of).
 	target := env.String("de_target_id")
 	targetH5ad := env.String("de_target_h5ad")
 	if target == "" && targetH5ad == "" {
-		out.errf("target", path,
-			"neither de_target_id nor de_target_h5ad set in cascade — "+
+		out.errf("target",
+			"neither de_target_id nor de_target_h5ad set — "+
 				"`mus config set de_target_id <ID>` (preferred) or "+
 				"`mus config set de_target_h5ad <BASENAME>`")
-		return false, dePassFile{}
+		return false, dePassFile{}, false
 	}
-	out.ok("target", path, describeTarget(target, targetH5ad))
+	out.ok("target", describeTarget(target, targetH5ad))
 
 	// 5. Method (auto-fill from format).
 	method := env.String("de_method")
 	if method == "" {
 		method = de.MethodFromFormat(chosen)
 		if method != "" {
-			out.ok("method", path,
-				fmt.Sprintf("auto-filled %q from de_format=%s", method, chosen))
+			out.ok("method", fmt.Sprintf("auto-filled %q from de_format=%s", method, chosen))
 		} else {
-			out.skip("method", path, "no canonical name for de_format=long")
+			out.skip("method", "no canonical name for de_format=long")
 		}
 	} else {
-		out.ok("method", path, fmt.Sprintf("set in cascade: %q", method))
+		out.ok("method", fmt.Sprintf("set in cascade: %q", method))
 	}
 
 	// 6. Cluster validation (light: just report; deep validation
@@ -306,52 +320,47 @@ func checkOneDEFile(cache *hashcache.Cache, path string, env *config.Env,
 	//
 	// Only surface cluster-related lines when the depositor has
 	// opted into per-cluster DE — either by declaring a cluster
-	// value or by naming an obs column. Most deposits (e.g. a
-	// single wilcoxon across the whole dataset) aren't per-cluster
-	// and don't need this noise.
-	cluster := env.String("de_cluster") // can also be per-file in sidecar (future)
+	// value or by naming an obs column.
+	cluster := env.String("de_cluster")
 	clusterCol := env.String("de_cluster_obs_column")
 	if cluster != "" || clusterCol != "" {
 		switch {
 		case cluster == "":
-			out.skip("cluster-validation", path,
-				"de_cluster_obs_column=\""+clusterCol+"\" set but no de_cluster on this file — nothing to validate")
+			out.skip("cluster-validation",
+				`de_cluster_obs_column set but no de_cluster on this file — nothing to validate`)
 		case clusterCol == "":
-			out.skip("cluster-validation", path,
-				"de_cluster=\""+cluster+"\" set but de_cluster_obs_column unset — "+
-					"OK for multi-factorial designs; set the obs column to enable validation")
+			out.skip("cluster-validation",
+				"de_cluster set but de_cluster_obs_column unset — "+
+					"OK for multi-factorial designs")
 		default:
-			// Real validation lands in a follow-up commit (task #91).
-			out.skip("cluster-validation", path, fmt.Sprintf(
-				"deferred (will check %q is in target_h5ad.obs[%s]) — "+
-					"placeholder until task #91 wires the inspector", cluster, clusterCol))
+			out.skip("cluster-validation", fmt.Sprintf(
+				"deferred (will check %q is in target_h5ad.obs[%s])", cluster, clusterCol))
 		}
 	}
 
 	// 7. Description (from the mandatory -m flag).
-	out.ok("description", path, fmt.Sprintf("%q", message))
+	out.ok("description", fmt.Sprintf("%q", message))
 
-	// 8. Soft-field nudges — visible audit of what's set vs. what
-	//    the depositor could fill in to make the deposit richer.
-	//    None of these block the check; suggestions are advisory.
-	reportSoftFields(env, out, path)
+	// 8. Soft-field nudges. Returns true when at least one soft
+	//    field was unset — propagates to the caller for the
+	//    one-shot bottom hint.
+	unsetSoft := reportSoftFields(env, out)
 
 	// 9. Storage nudge: suggest gzipping plain .tsv / .csv files.
 	if !isGzippedFile(path) {
-		out.skip("compression", path,
-			"plain "+strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")+
-				" — gzip it for ~5–10× S3 storage savings: "+
-				"`gzip "+filepath.Base(path)+"` (mus accepts .tsv.gz / .csv.gz transparently)")
+		ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")
+		out.skip("compression",
+			"plain "+ext+" — `gzip` for ~5–10× S3 savings")
 	} else {
-		out.ok("compression", path, "gzipped — good for S3 storage / bandwidth")
+		out.ok("compression", "gzipped — good for S3 storage / bandwidth")
 	}
 
 	// 10. Stamp the sidecar.
 	if err := stampDESidecar(cache, path, rep, env, chosen, method, target, targetH5ad, message); err != nil {
-		out.errf("sidecar", path, "%v", err)
-		return false, dePassFile{}
+		out.errf("sidecar", "%v", err)
+		return false, dePassFile{}, unsetSoft
 	}
-	out.ok("sidecar", sidecar.SidecarPath(path), "PASS recorded")
+	out.ok("sidecar", "PASS recorded")
 
 	return true, dePassFile{
 		Path:       path,
@@ -360,45 +369,49 @@ func checkOneDEFile(cache *hashcache.Cache, path string, env *config.Env,
 		TargetID:   target,
 		TargetH5ad: targetH5ad,
 		Cluster:    cluster,
-	}
+	}, unsetSoft
 }
 
 // softFieldDef describes one optional de_* cascade key for the
-// reportSoftFields nudge surface. `Suggestion` is the friendly
-// hint shown when the key is unset — drops a concrete example /
-// vocabulary so the depositor doesn't have to guess.
+// reportSoftFields nudge surface. `Suggestion` is the short
+// example / value menu shown when the key is unset.
 type softFieldDef struct {
 	Key        string
-	Suggestion string // shown on SKIP; should fit on one line
+	Suggestion string // value menu / example — kept compact for one-line display
 }
 
 // softFieldList enumerates the cascade keys reportSoftFields walks
 // per file. de_method is intentionally OMITTED here — it's auto-
 // filled from de_format and printed by its own check earlier.
-// de_cluster / de_cluster_obs_column are also separate (already
-// printed by the cluster-validation block when opted in).
+// de_cluster / de_cluster_obs_column are separate (printed by the
+// cluster-validation block when opted in).
 var softFieldList = []softFieldDef{
-	{"de_software_version", `e.g. "scanpy 1.10.4" / "DESeq2 1.42.0"`},
-	{"de_reference_type",
-		`one of (free text, no enforced vocab): pairwise | vsrest | vsreference | vsgrandmean`},
-	{"de_covariates", `comma-separated list, e.g. "sex,age,batch"`},
-	{"de_filter_criteria", `e.g. "expressed in ≥3 cells per sample"`},
+	{"de_software_version", `scanpy 1.10.4 / DESeq2 1.42.0`},
+	{"de_reference_type", `pairwise | vsrest | vsreference | vsgrandmean`},
+	{"de_covariates", `sex,age,batch`},
+	{"de_filter_criteria", `expressed in ≥3 cells per sample`},
 }
 
 // reportSoftFields walks softFieldList and emits one check line per
-// field: OK with the value when the cascade carries it, SKIP with
-// a one-line example when it doesn't. Purely advisory — does not
-// affect PASS / FAIL accounting.
-func reportSoftFields(env *config.Env, out *deReporter, path string) {
+// field. Set → OK with the value; unset → SKIP with a compact
+// "suggest: <values>" note. Returns true when at least one field
+// was unset, so the caller can print the once-per-run
+// "Set soft parameters via …" hint at the bottom of the output.
+//
+// Labels render as "<key> (soft)" so the depositor reads the
+// status as belonging to the named cascade key directly.
+func reportSoftFields(env *config.Env, out *deReporter) (anyUnset bool) {
 	for _, f := range softFieldList {
+		label := f.Key + " (soft)"
 		v := env.String(f.Key)
 		if v != "" {
-			out.ok("soft."+f.Key, path, v)
+			out.ok(label, v)
 		} else {
-			out.skip("soft."+f.Key, path,
-				"unset — "+f.Suggestion+". Set: `mus config set "+f.Key+" \"...\"`")
+			out.skip(label, "unset — suggest: "+f.Suggestion)
+			anyUnset = true
 		}
 	}
+	return
 }
 
 // isGzippedFile reports whether path ends in `.gz` (case-insensitive).
@@ -575,6 +588,10 @@ func groupPassedByTarget(rows []dePassFile) map[string][]dePassFile {
 // deReporter mirrors irods checkPrinter's role: one per-check
 // line, suppressible OK / SKIP via --silent, failures always print
 // on stderr.
+//
+// Compact format: status + check name + parenthesised note. The
+// file path is printed ONCE in the per-file header above the
+// status lines, never repeated per row.
 type deReporter struct {
 	stdout io.Writer
 	stderr io.Writer
@@ -596,28 +613,31 @@ func (r *deReporter) section(name string) {
 	fmt.Fprintf(r.stdout, "\n%s\n", name)
 }
 
-func (r *deReporter) printLine(w io.Writer, status, check, target, note string) {
+// printLine writes one status row. Width 30 on the check column
+// accommodates the longest label we use ("de_software_version (soft)"
+// at 26 chars + buffer).
+func (r *deReporter) printLine(w io.Writer, status, check, note string) {
 	if note == "" {
-		fmt.Fprintf(w, "  %-9s %-26s %s\n", status, check, target)
+		fmt.Fprintf(w, "  %-5s %s\n", status, check)
 		return
 	}
-	fmt.Fprintf(w, "  %-9s %-26s %s  (%s)\n", status, check, target, note)
+	fmt.Fprintf(w, "  %-5s %-30s (%s)\n", status, check, note)
 }
 
-func (r *deReporter) ok(check, target, note string) {
+func (r *deReporter) ok(check, note string) {
 	if r.silent {
 		return
 	}
-	r.printLine(r.stdout, "OK", check, target, note)
+	r.printLine(r.stdout, "OK", check, note)
 }
-func (r *deReporter) skip(check, target, note string) {
+func (r *deReporter) skip(check, note string) {
 	if r.silent {
 		return
 	}
-	r.printLine(r.stdout, "SKIP", check, target, note)
+	r.printLine(r.stdout, "SKIP", check, note)
 }
-func (r *deReporter) errf(check, target, format string, args ...any) {
-	r.printLine(r.stderr, "ERROR", check, target, fmt.Sprintf(format, args...))
+func (r *deReporter) errf(check, format string, args ...any) {
+	r.printLine(r.stderr, "ERROR", check, fmt.Sprintf(format, args...))
 }
 
 // deHowtoText is the depositor primer for DE deposits — printed

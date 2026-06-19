@@ -164,22 +164,82 @@ func TestDECheck_SoftFieldNudges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Set field → OK line with value visible.
-	if !strings.Contains(stdout, "soft.de_software_version") || !strings.Contains(stdout, "scanpy 1.10.4") {
-		t.Errorf("expected OK soft.de_software_version line with value:\n%s", stdout)
-	}
-	// Unset fields → SKIP line with suggestion + the set-command hint.
+	// Labels render as `<key> (soft)`.
 	for _, want := range []string{
-		"soft.de_reference_type",
-		"pairwise | vsrest | vsreference | vsgrandmean",
-		"soft.de_covariates",
-		"sex,age,batch",
-		"soft.de_filter_criteria",
-		"`mus config set de_filter_criteria",
+		"de_software_version (soft)",
+		"scanpy 1.10.4",
+		"de_reference_type (soft)",
+		"unset — suggest: pairwise | vsrest | vsreference | vsgrandmean",
+		"de_covariates (soft)",
+		"unset — suggest: sex,age,batch",
+		"de_filter_criteria (soft)",
+		"unset — suggest: expressed in ≥3 cells per sample",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("missing soft-field nudge %q:\n%s", want, stdout)
 		}
+	}
+	// Old "soft.<key>" prefix must be gone.
+	if strings.Contains(stdout, "soft.de_") {
+		t.Errorf("legacy soft.<key> prefix leaked:\n%s", stdout)
+	}
+	// `mus config set` should appear ONCE at the bottom, not per row.
+	if cnt := strings.Count(stdout, "mus config set"); cnt != 1 {
+		t.Errorf("expected `mus config set` to appear once (bottom hint), got %d occurrences:\n%s", cnt, stdout)
+	}
+	if !strings.Contains(stdout, "Set soft parameters via: mus config set <NAME> <VALUE>") {
+		t.Errorf("missing bottom hint:\n%s", stdout)
+	}
+}
+
+func TestDECheck_BottomHintSkippedWhenAllSoftFieldsSet(t *testing.T) {
+	dir := t.TempDir()
+	writeMusCfg(t, dir,
+		"data_project=Fiers2025",
+		"de_target_id=ABC",
+		`de_software_version=scanpy 1.10.4`,
+		`de_reference_type=pairwise`,
+		`de_covariates=sex,age`,
+		`de_filter_criteria=≥3 cells`,
+	)
+	writeDETSV(t, filepath.Join(dir, "de.tsv"),
+		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
+		"G1\t1\t1\t1\t1\t1\t1")
+	stdout, _, err := runDECheckForTest(t, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stdout, "Set soft parameters via") {
+		t.Errorf("bottom hint should be omitted when nothing is unset:\n%s", stdout)
+	}
+	// And no per-row mus config set either.
+	if strings.Contains(stdout, "mus config set") {
+		t.Errorf("`mus config set` should be absent when all soft fields set:\n%s", stdout)
+	}
+}
+
+func TestDECheck_StatusLinesDontRepeatFilename(t *testing.T) {
+	dir := t.TempDir()
+	writeMusCfg(t, dir,
+		"data_project=Fiers2025",
+		"de_target_id=ABC",
+	)
+	writeDETSV(t, filepath.Join(dir, "de.tsv"),
+		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
+		"G1\t1\t1\t1\t1\t1\t1")
+	stdout, _, err := runDECheckForTest(t, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The file path should appear in the per-file header [path] AND
+	// in the grouping summary footer (relative path there). Each
+	// status line should NOT carry the full path.
+	// Count absolute-path occurrences; anything more than the header
+	// + grouping is leakage.
+	abs := filepath.Join(dir, "de.tsv")
+	if cnt := strings.Count(stdout, abs); cnt > 1 {
+		t.Errorf("status lines repeating full path %d times (want ≤1, just the header):\n%s",
+			cnt, stdout)
 	}
 }
 
@@ -196,7 +256,7 @@ func TestDECheck_CompressionNudge(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"SKIP", "compression", "gzip plain.tsv", "5–10×",
+		"SKIP", "compression", "plain tsv", "`gzip`", "5–10×",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("plain .tsv: expected gzip nudge with %q:\n%s", want, stdout)
