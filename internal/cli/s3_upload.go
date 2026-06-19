@@ -49,47 +49,56 @@ func newS3UploadCmd() *cobra.Command {
 	var staticFiles []string
 	var subfolder string
 	cmd := &cobra.Command{
-		Use:   "upload -m MESSAGE [--subfolder NAME] [--static FILE]... [FILE...]",
-		Short: "upload h5ad and/or static file(s) to s3://<bucket>/<data_project>/",
-		Long: "Uploads each .h5ad positional arg to the bucket configured by\n" +
-			"`mus s3 login`. Every mus S3 upload lands under the fixed staging\n" +
-			"prefix `__incoming/<data_project>/…` — depositor (or downstream)\n" +
-			"later promotes from there to the proper catalog location.\n\n" +
-			"Layout:\n\n" +
-			"  s3://<bucket>/__incoming/<data_project>/<basename>.h5ad             (no --subfolder)\n" +
-			"  s3://<bucket>/__incoming/<data_project>/<basename>.h5ad.mus         (collapsed sidecar; next to each h5ad)\n" +
-			"  s3://<bucket>/__incoming/<data_project>/<subfolder>/<basename>.h5ad (with --subfolder NAME)\n" +
-			"  s3://<bucket>/__incoming/<data_project>/static/<basename>           (--static FILE)\n\n" +
-			"COLLAPSED SIDECAR (.h5ad.mus next to each h5ad):\n" +
+		Use:   "upload -m MESSAGE [--subfolder NAME] [--static FILE]... [FILE_OR_FOLDER...]",
+		Short: "upload h5ad / DE / static file(s) to s3://<bucket>/__incoming/<data_project>/",
+		Long: "Uploads the listed file(s) and/or folder(s) to the bucket\n" +
+			"configured by `mus s3 login`. Every mus S3 upload lands under\n" +
+			"the fixed staging prefix __incoming/<data_project>/ — depositor\n" +
+			"(or a downstream process) later promotes from there to the\n" +
+			"catalog location.\n\n" +
+			"Accepted positional args (file OR folder; folders recurse):\n" +
+			"  - .h5ad                           → h5ad gate, h5ad-shape S3 key\n" +
+			"  - .tsv / .csv / .tsv.gz / .csv.gz → DE gate, de/<parent-dir>/ S3 key\n\n" +
+			"Layout on S3:\n\n" +
+			"  s3://<bucket>/__incoming/<data_project>/<basename>.h5ad\n" +
+			"  s3://<bucket>/__incoming/<data_project>/<basename>.h5ad.mus           (collapsed sidecar)\n" +
+			"  s3://<bucket>/__incoming/<data_project>/<subfolder>/<basename>.h5ad   (--subfolder NAME)\n" +
+			"  s3://<bucket>/__incoming/<data_project>/de/<parent-dir>/<basename>    (DE file; <parent-dir>\n" +
+			"                                                                         is the local folder\n" +
+			"                                                                         the DE file came from)\n" +
+			"  s3://<bucket>/__incoming/<data_project>/de/<parent-dir>/<basename>.mus (collapsed DE sidecar)\n" +
+			"  s3://<bucket>/__incoming/<data_project>/static/<basename>             (--static FILE)\n\n" +
+			"COLLAPSED SIDECAR (<basename>.mus next to every primary):\n" +
 			"Single KEY=VALUE file holding the EFFECTIVE metadata at upload\n" +
 			"time — every mus.cfg key in the cascade (root-most → deepest,\n" +
-			"deeper overrides) overlaid with the file's own .h5ad.mus (sidecar\n" +
-			"wins for scalar conflicts; list keys merge per the cascade\n" +
-			"semantics). Includes the freshly-stamped s3_* block. Replaces the\n" +
-			"previous tar.gz archive — a downstream `mv` keeps data + .mus\n" +
-			"paired and the metadata is plain KEY=VALUE, no unpacking needed.\n\n" +
-			"--subfolder NAME (optional): writes the h5ad + its collapsed\n" +
-			"sidecar under <data_project>/NAME/. Single path segment only;\n" +
-			"\"static\", \".\", and \"..\" are reserved / refused.\n\n" +
+			"deeper overrides) overlaid with the file's own .mus sidecar\n" +
+			"(sidecar wins for scalar conflicts; list keys merge per the\n" +
+			"cascade semantics). Includes the freshly-stamped s3_* block.\n\n" +
+			"GATES — refused atomically (no partial uploads):\n" +
+			"  - h5ad positionals must carry a fresh `mus h5ad check` PASS\n" +
+			"    (file sha + vocab sha + check version all current);\n" +
+			"    --force-h5ad-upload bypasses (NOT recommended)\n" +
+			"  - DE positionals must carry a fresh `mus de check` PASS\n" +
+			"    (file sha + de.CheckVersion both current); no bypass — the\n" +
+			"    check is cheap (cached-pass is stat-fast)\n" +
+			"  - data_project is set in the cascade\n" +
+			"  - configured bucket exists on S3\n" +
+			"  - -m / --message describes why this upload is happening\n\n" +
+			"--subfolder NAME (optional, h5ad-only): writes the h5ad + its\n" +
+			"collapsed sidecar under __incoming/<dp>/NAME/. Single path\n" +
+			"segment only; \"static\", \".\", and \"..\" are reserved. DE files\n" +
+			"ignore --subfolder; they use their local parent-dir name as the\n" +
+			"<de_folder> segment.\n\n" +
 			"--static FILE (repeatable): ALWAYS lands at\n" +
 			"__incoming/<data_project>/static/<basename> regardless of\n" +
 			"--subfolder. Static files are auxiliary assets (images, JSON,\n" +
 			"PDFs) — no h5ad gate, no sidecar update, no collapsed sidecar\n" +
-			"uploaded. Only the upload message lands as x-amz-meta. Static-only\n" +
-			"invocations (no positional args) are accepted.\n\n" +
-			"Strict gates — every .h5ad positional must pass ALL of:\n\n" +
-			"  - filename ends in .h5ad\n" +
-			"  - sidecar carries a fresh `mus h5ad check` PASS (file sha +\n" +
-			"    vocab sha + check version all current)\n" +
-			"  - data_project is set in the cascade (used as the key prefix)\n" +
-			"  - configured bucket exists on S3\n" +
-			"  - -m / --message describes why this upload is happening\n\n" +
-			"Mus_* biology metadata (organism, tissue, technology, …) is stamped\n" +
-			"on h5ad S3 objects as x-amz-meta-* headers, mirroring the iRODS AVU\n" +
-			"set. The local *.h5ad.mus sidecar gets s3_url / s3_bucket / s3_key /\n" +
-			"s3_etag / s3_uploaded_at written.\n\n" +
-			"--force-h5ad-upload bypasses the h5ad PASS gate (NOT recommended\n" +
-			"— depositor's responsibility to know what they're skipping).",
+			"uploaded. Only the upload message lands as x-amz-meta. Static-\n" +
+			"only invocations (no positional args) are accepted.\n\n" +
+			"Mus_* biology metadata (organism, tissue, technology, …) is\n" +
+			"stamped on each S3 object as x-amz-meta-* headers, mirroring\n" +
+			"the iRODS AVU set. Each primary's local *.mus sidecar gets\n" +
+			"s3_url / s3_bucket / s3_key / s3_etag / s3_uploaded_at written.",
 		Args: cobra.MinimumNArgs(0),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			msg := strings.TrimSpace(message)
@@ -97,7 +106,7 @@ func newS3UploadCmd() *cobra.Command {
 				return fmt.Errorf("`mus s3 upload` requires a -m / --message describing why this upload is happening")
 			}
 			if len(args) == 0 && len(staticFiles) == 0 {
-				return fmt.Errorf("`mus s3 upload` requires at least one .h5ad file or --static FILE")
+				return fmt.Errorf("`mus s3 upload` requires at least one file/folder positional or --static FILE")
 			}
 			cleanSub, err := validateSubfolder(subfolder)
 			if err != nil {
@@ -147,6 +156,29 @@ func validateSubfolder(raw string) (string, error) {
 // location. Hard-coded, NOT configurable: keeping all in-flight
 // deposits under one well-known prefix is the whole point.
 const s3IncomingPrefix = "__incoming"
+
+// s3KeyForDE builds the canonical S3 key for a differential-
+// expression deposit. The shape is:
+//
+//	__incoming/<data_project>/de/<de_folder>/<basename>
+//
+// where `de_folder` is the basename of the local directory the
+// DE file came from (typically the analysis name — main_model,
+// sex_stratified, etc.). Two DE runs against the same target
+// h5ad land under different prefixes when they live in different
+// local folders. Both `de_folder` and `basename` MUST be final
+// path components.
+func s3KeyForDE(dataProject, deFolder, basename string) string {
+	if strings.ContainsAny(basename, "/\\") {
+		panic(fmt.Sprintf(
+			"s3KeyForDE: basename must be a final path component, got %q", basename))
+	}
+	if strings.ContainsAny(deFolder, "/\\") {
+		panic(fmt.Sprintf(
+			"s3KeyForDE: de_folder must be a single segment, got %q", deFolder))
+	}
+	return s3IncomingPrefix + "/" + dataProject + "/de/" + deFolder + "/" + basename
+}
 
 // s3KeyFor builds the canonical S3 key for a mus deposit. The key
 // shape is always:
@@ -219,6 +251,122 @@ func buildCollapsedSidecar(h5adPath string) ([]byte, error) {
 	return envformat.Marshal(merged)
 }
 
+// uploadKind classifies each positional argument by destination
+// shape on S3. Used by `mus s3 upload` to route h5ad vs DE files
+// per file rather than refusing the whole batch when a non-h5ad
+// shows up.
+type uploadKind int
+
+const (
+	uploadKindH5ad uploadKind = iota + 1
+	uploadKindDE
+)
+
+// uploadEntry is one resolved positional → upload target. Folder
+// positionals expand into multiple entries; file positionals into
+// one.
+type uploadEntry struct {
+	AbsPath string
+	Kind    uploadKind
+	// ParentDir is the basename of the directory holding the file.
+	// For DE files this becomes the <de_folder> segment in the S3
+	// key: `__incoming/<dp>/de/<ParentDir>/<basename>`. Unused for
+	// h5ad entries.
+	ParentDir string
+}
+
+// classifyUploadArgs expands folder positionals (recursive walk)
+// and classifies each file by extension. Returns one uploadEntry
+// per file. .mus sidecars are skipped (they ride alongside their
+// data file as collapsed sidecars built at upload time).
+//
+// Errors when:
+//   - a file positional has an extension mus doesn't support
+//   - a folder positional contains zero supported files
+//   - a path doesn't exist
+//
+// Folder positionals that contain a mix of h5ad + DE files are
+// fine — each lands at its own S3 prefix.
+func classifyUploadArgs(args []string) ([]uploadEntry, error) {
+	if len(args) == 0 {
+		return nil, nil
+	}
+	var out []uploadEntry
+	seen := map[string]bool{}
+	add := func(abs string, kind uploadKind) {
+		if seen[abs] {
+			return
+		}
+		seen[abs] = true
+		out = append(out, uploadEntry{
+			AbsPath:   abs,
+			Kind:      kind,
+			ParentDir: filepath.Base(filepath.Dir(abs)),
+		})
+	}
+	for _, raw := range args {
+		abs, err := filepath.Abs(raw)
+		if err != nil {
+			return nil, err
+		}
+		st, err := os.Stat(abs)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", raw, err)
+		}
+		if st.IsDir() {
+			folderHits := 0
+			err := filepath.WalkDir(abs, func(p string, d os.DirEntry, werr error) error {
+				if werr != nil {
+					return werr
+				}
+				if d.IsDir() {
+					return nil
+				}
+				if sidecar.IsSidecar(p) {
+					return nil
+				}
+				if k, ok := classifyFileExt(p); ok {
+					add(p, k)
+					folderHits++
+				}
+				return nil
+			})
+			if err != nil {
+				return nil, fmt.Errorf("walk %s: %w", abs, err)
+			}
+			if folderHits == 0 {
+				return nil, fmt.Errorf("%s: no .h5ad / .tsv / .csv / .tsv.gz / .csv.gz files found", abs)
+			}
+			continue
+		}
+		k, ok := classifyFileExt(abs)
+		if !ok {
+			return nil, fmt.Errorf(
+				"%s: unsupported file extension — mus s3 upload accepts .h5ad / .tsv / .csv / .tsv.gz / .csv.gz "+
+					"(use --static for any other file)", abs)
+		}
+		add(abs, k)
+	}
+	return out, nil
+}
+
+// classifyFileExt picks an uploadKind for `path` based on its
+// extension. Returns (_, false) for anything mus s3 upload doesn't
+// handle directly. Compressed variants share the kind of the
+// inner extension.
+func classifyFileExt(path string) (uploadKind, bool) {
+	lower := strings.ToLower(path)
+	if strings.HasSuffix(lower, ".h5ad") {
+		return uploadKindH5ad, true
+	}
+	for _, ext := range []string{".tsv", ".csv", ".tsv.gz", ".csv.gz"} {
+		if strings.HasSuffix(lower, ext) {
+			return uploadKindDE, true
+		}
+	}
+	return 0, false
+}
+
 // validateStaticFiles checks that every --static path is a regular
 // existing file with a unique basename across the list (since they
 // all land in the same <data_project>/static/ prefix and a duplicate
@@ -254,22 +402,29 @@ func runS3Upload(cmd *cobra.Command, args, staticFiles []string, subfolder, mess
 	stderr := cmd.ErrOrStderr()
 	ctx := cmd.Context()
 
-	// Pre-flight: every positional must be an .h5ad. --static files
-	// are validated separately and may have any extension.
-	for _, a := range args {
-		if !strings.HasSuffix(a, ".h5ad") {
-			return fmt.Errorf("%s: positional args must be .h5ad (use --static for any other file; got %s)",
-				a, filepath.Ext(a))
-		}
+	// Classify each positional (file or folder) into typed
+	// uploadEntries. Folder args expand recursively. Unknown
+	// extensions in a file arg → hard error; in a folder arg →
+	// silently skipped (we only refuse a folder that contains
+	// ZERO supported files).
+	entries, err := classifyUploadArgs(args)
+	if err != nil {
+		return err
 	}
+	if len(entries) == 0 && len(staticFiles) == 0 {
+		return fmt.Errorf("`mus s3 upload` requires at least one .h5ad / .tsv / .csv file or --static FILE")
+	}
+
 	if err := validateStaticFiles(staticFiles); err != nil {
 		return err
 	}
-	// Refuse multi-source-folder invocations up-front: each folder
-	// has its own cascade, and the collapsed sidecars on S3 would
-	// quietly inherit whatever cwd the depositor happened to be in.
-	// Run once per source folder so the cascade matches.
-	if err := requireSingleSourceFolder(args); err != nil {
+	// Refuse multi-source-folder invocations for h5ad entries —
+	// h5ads share a key under <data_project>/, so two h5ads with
+	// the same basename in different source folders would collide.
+	// DE files don't have this problem (they land under
+	// de/<parent-dir>/<basename>, scoped by parent dir).
+	h5adArgs := h5adArgsOnly(entries)
+	if err := requireSingleSourceFolder(h5adArgs); err != nil {
 		return err
 	}
 
@@ -298,12 +453,27 @@ func runS3Upload(cmd *cobra.Command, args, staticFiles []string, subfolder, mess
 		return err
 	}
 	defer cache.Close()
-	failures, err := gateH5adForUpload(ctx, cache, args, forceH5adGate)
-	if err != nil {
-		return err
+	if len(h5adArgs) > 0 {
+		failures, err := gateH5adForUpload(ctx, cache, h5adArgs, forceH5adGate)
+		if err != nil {
+			return err
+		}
+		if len(failures) > 0 {
+			return formatH5adGateError(failures)
+		}
 	}
-	if len(failures) > 0 {
-		return formatH5adGateError(failures)
+	// DE freshness gate — every DE file must carry a cached PASS
+	// from `mus de check`. No --force flag; depositor re-runs the
+	// check (cheap on a stat-fast cached pass).
+	deArgs := deArgsOnly(entries)
+	if len(deArgs) > 0 {
+		deFailures, err := gateDEForUpload(cache, deArgs)
+		if err != nil {
+			return err
+		}
+		if len(deFailures) > 0 {
+			return formatDEGateError(deFailures)
+		}
 	}
 
 	// S3 client + bucket existence check (do this BEFORE any upload
@@ -331,37 +501,36 @@ func runS3Upload(cmd *cobra.Command, args, staticFiles []string, subfolder, mess
 			cfg.Bucket, cfg.Endpoint)
 	}
 
-	// Upload loop — primaries + a per-h5ad collapsed sidecar. The
-	// sidecar carries the merged cascade + freshly-stamped s3_*
-	// block, so the depositor can later move data + .mus together
-	// without losing context.
-	for _, raw := range args {
-		abs, err := filepath.Abs(raw)
+	// Upload loop — primaries + a per-file collapsed sidecar. Each
+	// uploadEntry carries a Kind so we route h5ad and DE files to
+	// their respective S3 key shapes. Failure on any primary is
+	// fatal (returns), but a collapsed-sidecar failure is logged
+	// and the loop continues — the primary + x-amz-meta have
+	// already landed and that's the load-bearing artefact.
+	for _, ent := range entries {
+		dataKey, sidecarKey, err := s3KeysFor(ent, dataProject, subfolder)
 		if err != nil {
 			return err
 		}
-		scPath := sidecar.SidecarPath(abs)
+		scPath := sidecar.SidecarPath(ent.AbsPath)
 		doc, err := sidecar.Read(scPath)
 		if err != nil {
 			return fmt.Errorf("read sidecar %s: %w", scPath, err)
 		}
 		if doc == nil {
-			return fmt.Errorf("%s: missing sidecar (run `mus h5ad check` first)", abs)
+			return fmt.Errorf("%s: missing sidecar (run `mus %s check` first)",
+				ent.AbsPath, checkSubcommandFor(ent.Kind))
 		}
 
 		// Fold cascade biology so the object metadata is populated
 		// even when the sidecar hasn't been re-stamped recently.
 		stampBioFromEnv(doc, env)
-
-		// Key layout: __incoming/<data_project>/[<subfolder>/]<basename>.
-		// subfolder is the validated --subfolder flag (empty ⇒ data_project root).
-		key := s3KeyFor(dataProject, subfolder, filepath.Base(abs))
 		meta := s3MetadataFromDoc(doc, message)
 
-		fmt.Fprintf(stdout, "→ s3://%s/%s\n", cfg.Bucket, key)
-		result, err := client.Upload(ctx, cfg.Bucket, key, abs, meta)
+		fmt.Fprintf(stdout, "→ s3://%s/%s\n", cfg.Bucket, dataKey)
+		result, err := client.Upload(ctx, cfg.Bucket, dataKey, ent.AbsPath, meta)
 		if err != nil {
-			fmt.Fprintf(stderr, "  ✘ upload failed for %s: %v\n", abs, err)
+			fmt.Fprintf(stderr, "  ✘ upload failed for %s: %v\n", ent.AbsPath, err)
 			return err
 		}
 		fmt.Fprintf(stdout, "  ✓ etag=%s\n", strings.Trim(result.ETag, `"`))
@@ -383,25 +552,25 @@ func runS3Upload(cmd *cobra.Command, args, staticFiles []string, subfolder, mess
 		// can later show "the most recent local folder you uploaded
 		// from for project X". Best-effort — silent on every error.
 		if lp, err := localprojects.Open(""); err == nil {
-			lp.RecordBestEffort(dataProject, filepath.Dir(abs))
+			lp.RecordBestEffort(dataProject, filepath.Dir(ent.AbsPath))
 		}
 
-		// Build the collapsed .mus (cascade + local sidecar merged
-		// into one KEY=VALUE blob) and upload next to the primary.
-		// Collapsed-sidecar failures log but do NOT roll back the
-		// primary — data + x-amz-meta have already landed.
-		collapsed, err := buildCollapsedSidecar(abs)
+		// Build + upload the collapsed sidecar next to the primary.
+		// Same KEY=VALUE grammar as the on-disk .mus; cascade is
+		// folded in so the depositor (or a downstream `mv`) can
+		// pair data + sidecar without referencing the cascade
+		// tree. Errors here log + continue — primary already on S3.
+		collapsed, err := buildCollapsedSidecar(ent.AbsPath)
 		if err != nil {
 			fmt.Fprintf(stderr,
 				"  ⚠ collapsed sidecar build failed for %s: %v — primary already uploaded\n",
-				abs, err)
+				ent.AbsPath, err)
 			continue
 		}
-		sidecarKey := s3KeyFor(dataProject, subfolder, filepath.Base(scPath))
 		tmpFile, err := os.CreateTemp("", "mus-collapsed-sidecar-*.mus")
 		if err != nil {
 			fmt.Fprintf(stderr,
-				"  ⚠ tempfile for collapsed sidecar failed for %s: %v\n", abs, err)
+				"  ⚠ tempfile for collapsed sidecar failed for %s: %v\n", ent.AbsPath, err)
 			continue
 		}
 		tmpPath := tmpFile.Name()
@@ -411,14 +580,14 @@ func runS3Upload(cmd *cobra.Command, args, staticFiles []string, subfolder, mess
 			os.Remove(tmpPath)
 			fmt.Fprintf(stderr,
 				"  ⚠ write collapsed sidecar failed for %s: %v / %v\n",
-				abs, writeErr, closeErr)
+				ent.AbsPath, writeErr, closeErr)
 			continue
 		}
 		fmt.Fprintf(stdout, "  + s3://%s/%s\n", cfg.Bucket, sidecarKey)
 		if _, err := client.Upload(ctx, cfg.Bucket, sidecarKey, tmpPath, meta); err != nil {
 			fmt.Fprintf(stderr,
 				"  ⚠ collapsed sidecar upload failed for %s: %v — primary already uploaded\n",
-				abs, err)
+				ent.AbsPath, err)
 		}
 		os.Remove(tmpPath)
 	}
@@ -448,6 +617,69 @@ func runS3Upload(cmd *cobra.Command, args, staticFiles []string, subfolder, mess
 		}
 	}
 	return nil
+}
+
+// s3KeysFor returns the (data, sidecar) S3 key pair for one
+// uploadEntry. h5ad files land at the configured subfolder under
+// __incoming/<dp>/; DE files land at __incoming/<dp>/de/<ParentDir>/.
+// Both pairs share a common base — the sidecar key is just the
+// data key plus the existing .mus suffix.
+func s3KeysFor(ent uploadEntry, dataProject, subfolder string) (dataKey, sidecarKey string, err error) {
+	switch ent.Kind {
+	case uploadKindH5ad:
+		dataKey = s3KeyFor(dataProject, subfolder, filepath.Base(ent.AbsPath))
+	case uploadKindDE:
+		if ent.ParentDir == "" {
+			return "", "", fmt.Errorf(
+				"%s: cannot derive de_folder segment (file has no parent directory)",
+				ent.AbsPath)
+		}
+		dataKey = s3KeyForDE(dataProject, ent.ParentDir, filepath.Base(ent.AbsPath))
+	default:
+		return "", "", fmt.Errorf("%s: unknown upload kind %d (internal bug)",
+			ent.AbsPath, ent.Kind)
+	}
+	sidecarKey = dataKey + ".mus"
+	return dataKey, sidecarKey, nil
+}
+
+// h5adArgsOnly returns the absolute paths of every uploadEntry
+// whose kind is h5ad. Used to feed the existing
+// requireSingleSourceFolder / gateH5adForUpload helpers, which
+// were written before mus s3 upload accepted DE files.
+func h5adArgsOnly(entries []uploadEntry) []string {
+	var out []string
+	for _, e := range entries {
+		if e.Kind == uploadKindH5ad {
+			out = append(out, e.AbsPath)
+		}
+	}
+	return out
+}
+
+// deArgsOnly is the dual of h5adArgsOnly — every DE-kind entry's
+// path. Fed into gateDEForUpload to enforce the cached `mus de
+// check` PASS before any DE file's bytes leave the machine.
+func deArgsOnly(entries []uploadEntry) []string {
+	var out []string
+	for _, e := range entries {
+		if e.Kind == uploadKindDE {
+			out = append(out, e.AbsPath)
+		}
+	}
+	return out
+}
+
+// checkSubcommandFor maps an uploadKind to the user-facing
+// subcommand a depositor runs to satisfy the gate. Used in error
+// messages so the suggested fix is concrete ("run `mus de check`"
+// vs "run `mus h5ad check`").
+func checkSubcommandFor(k uploadKind) string {
+	switch k {
+	case uploadKindDE:
+		return "de"
+	}
+	return "h5ad"
 }
 
 // s3MetadataFromDoc builds the x-amz-meta-* set for an S3 PutObject

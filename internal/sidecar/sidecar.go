@@ -195,6 +195,40 @@ type Doc struct {
 	S3          *S3
 	Bio         *Bio
 	H5ad        *H5ad
+	DE          *DE
+}
+
+// DE is populated on sidecars for differential-expression result
+// files (.tsv / .csv that pass `mus de check`). Persisted with the
+// `de_*` key prefix so multiple per-file annotation layers (Bio,
+// H5ad, DE) can coexist in one envformat document without name
+// collisions.
+//
+// Term / Contrast are LIST-typed when the depositor sets
+// de_term=auto / de_contrast=auto on a `long`-format file —
+// `mus de check` computes the distinct {term × contrast} set from
+// the body and stamps it sorted+comma-joined. For one-term /
+// one-contrast presets (deseq2 etc) they're single-value strings.
+type DE struct {
+	Format             string   // de_format: deseq2 | edger | scanpy | seurat | glmmseq | glmmtmb | long
+	Method             string   // de_method: auto-filled from Format if unset (DESeq2, edgeR, …)
+	Term               []string // de_term: stratification term(s); list when long-format auto
+	Contrast           []string // de_contrast: contrast label(s); list when long-format auto
+	Cluster            string   // de_cluster: per-file cluster label, e.g. "microglia.DAM" (free text)
+	DatasetID           string   // de_dataset_id: 3-char anthive id of the target h5ad (preferred)
+	DatasetH5ad         string   // de_dataset_h5ad: basename within data_project (escape hatch for co-ingest)
+	ClusterObsColumn   string   // de_cluster_obs_column: obs column in target h5ad for cluster validation
+	SoftwareVersion    string   // de_software_version: e.g. "DESeq2 1.42.0"
+	ReferenceType      string   // de_reference_type: e.g. "vsreference" / "pairwise" / "vsgrandmean"
+	Covariates         []string // de_covariates: e.g. ["sex", "age", "batch"]
+	FilterCriteria     string   // de_filter_criteria: e.g. "expressed in ≥3 cells per sample"
+	Description        string   // de_description: free text
+	RowCount           int64    // de_row_count: data rows in the file at check time
+
+	// Cache keys — same shape as the H5ad block.
+	InspectedAt           time.Time // de_check_passed_at
+	InspectedSha256       string    // de_inspected_sha256: file sha at check time
+	InspectedCheckVersion int       // de_check_version: bumps invalidate the cached PASS
 }
 
 // FolderInfo is populated on folder-level sidecars (Kind=="folder").
@@ -255,6 +289,15 @@ var sidecarListKeys = map[string]bool{
 	"disease_ontology_term_id":   true,
 	// H5ad (file-shape; truly h5ad-specific):
 	"h5ad_layers": true,
+	// DE (differential-expression result files). de_term + de_contrast
+	// become multi-value when `de_format=long` and the depositor set
+	// term=auto / contrast=auto — `mus de check` computes the distinct
+	// set across the body and stamps it sorted+comma-joined. For
+	// single-term presets (deseq2 etc) they're still single strings
+	// but the list-typed path serialises a 1-element list just fine.
+	"de_term":       true,
+	"de_contrast":   true,
+	"de_covariates": true,
 }
 
 func parseOpts() envformat.Options {
@@ -451,6 +494,29 @@ func docToMap(d *Doc) map[string]any {
 			out["h5ad_inspected_check_version"] = strconv.Itoa(d.H5ad.InspectedCheckVersion)
 		}
 	}
+	if d.DE != nil {
+		putStr(out, "de_format", d.DE.Format)
+		putStr(out, "de_method", d.DE.Method)
+		putList(out, "de_term", d.DE.Term)
+		putList(out, "de_contrast", d.DE.Contrast)
+		putStr(out, "de_cluster", d.DE.Cluster)
+		putStr(out, "de_dataset_id", d.DE.DatasetID)
+		putStr(out, "de_dataset_h5ad", d.DE.DatasetH5ad)
+		putStr(out, "de_cluster_obs_column", d.DE.ClusterObsColumn)
+		putStr(out, "de_software_version", d.DE.SoftwareVersion)
+		putStr(out, "de_reference_type", d.DE.ReferenceType)
+		putList(out, "de_covariates", d.DE.Covariates)
+		putStr(out, "de_filter_criteria", d.DE.FilterCriteria)
+		putStr(out, "de_description", d.DE.Description)
+		if d.DE.RowCount > 0 {
+			out["de_row_count"] = strconv.FormatInt(d.DE.RowCount, 10)
+		}
+		putTime(out, "de_check_passed_at", d.DE.InspectedAt)
+		putStr(out, "de_inspected_sha256", d.DE.InspectedSha256)
+		if d.DE.InspectedCheckVersion > 0 {
+			out["de_check_version"] = strconv.Itoa(d.DE.InspectedCheckVersion)
+		}
+	}
 	return out
 }
 
@@ -567,6 +633,27 @@ func docFromMap(in map[string]any) (*Doc, error) {
 			InspectedSha256:       getStr(in, "h5ad_inspected_sha256"),
 			InspectedVocabSha256:  getStr(in, "h5ad_inspected_vocab_sha256"),
 			InspectedCheckVersion: parseInt(getStr(in, "h5ad_inspected_check_version"), 0),
+		}
+	}
+	if hasPrefix(in, "de_") {
+		d.DE = &DE{
+			Format:                getStr(in, "de_format"),
+			Method:                getStr(in, "de_method"),
+			Term:                  getList(in, "de_term"),
+			Contrast:              getList(in, "de_contrast"),
+			Cluster:               getStr(in, "de_cluster"),
+			DatasetID:              getStr(in, "de_dataset_id"),
+			DatasetH5ad:            getStr(in, "de_dataset_h5ad"),
+			ClusterObsColumn:      getStr(in, "de_cluster_obs_column"),
+			SoftwareVersion:       getStr(in, "de_software_version"),
+			ReferenceType:         getStr(in, "de_reference_type"),
+			Covariates:            getList(in, "de_covariates"),
+			FilterCriteria:        getStr(in, "de_filter_criteria"),
+			Description:           getStr(in, "de_description"),
+			RowCount:              parseInt64(getStr(in, "de_row_count"), 0),
+			InspectedAt:           parseTime(getStr(in, "de_check_passed_at")),
+			InspectedSha256:       getStr(in, "de_inspected_sha256"),
+			InspectedCheckVersion: parseInt(getStr(in, "de_check_version"), 0),
 		}
 	}
 	return d, nil

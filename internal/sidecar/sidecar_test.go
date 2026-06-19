@@ -326,3 +326,125 @@ func TestSidecarFlatFormat(t *testing.T) {
 		}
 	}
 }
+
+func TestDEBlockRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	scPath := filepath.Join(dir, "carlo_mg_DAM_vs_homeo.tsv.mus")
+
+	now := time.Now().UTC().Truncate(time.Second)
+	in := &Doc{
+		File: FileInfo{Sha256: "abc"},
+		DE: &DE{
+			Format:                "deseq2",
+			Method:                "DESeq2",
+			Term:                  []string{"cluster"},
+			Contrast:              []string{"DAM_vs_homeo"},
+			Cluster:               "microglia.DAM",
+			DatasetID:              "SGF",
+			DatasetH5ad:            "Single.Grafts.h5ad",
+			ClusterObsColumn:      "leiden_cluster",
+			SoftwareVersion:       "DESeq2 1.42.0",
+			ReferenceType:         "pairwise",
+			Covariates:            []string{"sex", "batch"},
+			FilterCriteria:        "expressed in ≥3 cells per sample",
+			Description:           "Per-cluster DE for the DAM vs homeostatic contrast.",
+			RowCount:              18569,
+			InspectedAt:           now,
+			InspectedSha256:       "deadbeef",
+			InspectedCheckVersion: 1,
+		},
+	}
+	if err := Write(scPath, in); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(scPath)
+	for _, want := range []string{
+		"de_format=deseq2",
+		"de_method=DESeq2",
+		"de_term=cluster",
+		"de_contrast=DAM_vs_homeo",
+		"de_cluster=microglia.DAM",
+		"de_dataset_id=SGF",
+		"de_dataset_h5ad=Single.Grafts.h5ad",
+		"de_cluster_obs_column=leiden_cluster",
+		"de_software_version=DESeq2 1.42.0",
+		"de_reference_type=pairwise",
+		"de_covariates=sex,batch",
+		"de_row_count=18569",
+		"de_inspected_sha256=deadbeef",
+		"de_check_version=1",
+	} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("missing %q in:\n%s", want, raw)
+		}
+	}
+
+	// Roundtrip via Read.
+	got, err := Read(scPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DE == nil {
+		t.Fatal("DE block lost on roundtrip")
+	}
+	if got.DE.Format != "deseq2" {
+		t.Errorf("Format: got %q", got.DE.Format)
+	}
+	if !equalStringSlice(got.DE.Term, []string{"cluster"}) {
+		t.Errorf("Term: %v", got.DE.Term)
+	}
+	if got.DE.Cluster != "microglia.DAM" {
+		t.Errorf("Cluster: %q", got.DE.Cluster)
+	}
+	if got.DE.DatasetID != "SGF" {
+		t.Errorf("DatasetID: %q", got.DE.DatasetID)
+	}
+	if got.DE.RowCount != 18569 {
+		t.Errorf("RowCount: %d", got.DE.RowCount)
+	}
+	if got.DE.InspectedCheckVersion != 1 {
+		t.Errorf("CheckVersion: %d", got.DE.InspectedCheckVersion)
+	}
+}
+
+func TestDEBlock_LongFormatMultiValueTermContrast(t *testing.T) {
+	// de_format=long with multi-value term/contrast should
+	// roundtrip as proper lists thanks to the list-key registration.
+	dir := t.TempDir()
+	scPath := filepath.Join(dir, "long.tsv.mus")
+	in := &Doc{
+		File: FileInfo{Sha256: "x"},
+		DE: &DE{
+			Format:   "long",
+			Term:     []string{"genotype", "genotype:sex", "sex"},
+			Contrast: []string{"K:M_vs_W:F", "K_vs_W", "M_vs_F"},
+			DatasetID: "ABC",
+			RowCount: 55707,
+		},
+	}
+	if err := Write(scPath, in); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Read(scPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !equalStringSlice(got.DE.Term, []string{"genotype", "genotype:sex", "sex"}) {
+		t.Errorf("Term list lost on roundtrip: %v", got.DE.Term)
+	}
+	if !equalStringSlice(got.DE.Contrast, []string{"K:M_vs_W:F", "K_vs_W", "M_vs_F"}) {
+		t.Errorf("Contrast list lost on roundtrip: %v", got.DE.Contrast)
+	}
+}
+
+func equalStringSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

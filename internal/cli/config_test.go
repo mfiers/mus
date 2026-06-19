@@ -203,6 +203,34 @@ func TestResolveConfigKey_CaseAndUnderscoreNormalises(t *testing.T) {
 	}
 }
 
+func TestResolveConfigKey_DEKeysAccepted(t *testing.T) {
+	// Every de_* key the DE-ingest contract relies on must pass the
+	// resolveConfigKey gate; otherwise `mus config set de_dataset_id …`
+	// rejects the depositor's input with "not a recognised mus key".
+	keys := []string{
+		"de_dataset_id", "de_dataset_h5ad",
+		"de_format", "de_method",
+		"de_cluster", "de_cluster_obs_column",
+		"de_term", "de_contrast",
+		"de_software_version", "de_reference_type",
+		"de_covariates", "de_filter_criteria", "de_description",
+	}
+	for _, k := range keys {
+		var stderr bytes.Buffer
+		got, err := resolveConfigKey(k, false, &stderr)
+		if err != nil {
+			t.Errorf("de key %q rejected: %v", k, err)
+			continue
+		}
+		if got != k {
+			t.Errorf("de key %q got rewritten to %q", k, got)
+		}
+		if stderr.Len() != 0 {
+			t.Errorf("de key %q produced noise: %q", k, stderr.String())
+		}
+	}
+}
+
 func TestResolveConfigKey_UnknownRejectsWithSuggestion(t *testing.T) {
 	var stderr bytes.Buffer
 	_, err := resolveConfigKey("organisme", false, &stderr) // French typo
