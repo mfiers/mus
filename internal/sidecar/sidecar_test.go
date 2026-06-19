@@ -340,8 +340,8 @@ func TestDEBlockRoundtrip(t *testing.T) {
 			Term:                  []string{"cluster"},
 			Contrast:              []string{"DAM_vs_homeo"},
 			Cluster:               "microglia.DAM",
-			TargetID:              "SGF",
-			TargetH5ad:            "Single.Grafts.h5ad",
+			DatasetID:              "SGF",
+			DatasetH5ad:            "Single.Grafts.h5ad",
 			ClusterObsColumn:      "leiden_cluster",
 			SoftwareVersion:       "DESeq2 1.42.0",
 			ReferenceType:         "pairwise",
@@ -364,8 +364,8 @@ func TestDEBlockRoundtrip(t *testing.T) {
 		"de_term=cluster",
 		"de_contrast=DAM_vs_homeo",
 		"de_cluster=microglia.DAM",
-		"de_target_id=SGF",
-		"de_target_h5ad=Single.Grafts.h5ad",
+		"de_dataset_id=SGF",
+		"de_dataset_h5ad=Single.Grafts.h5ad",
 		"de_cluster_obs_column=leiden_cluster",
 		"de_software_version=DESeq2 1.42.0",
 		"de_reference_type=pairwise",
@@ -396,8 +396,8 @@ func TestDEBlockRoundtrip(t *testing.T) {
 	if got.DE.Cluster != "microglia.DAM" {
 		t.Errorf("Cluster: %q", got.DE.Cluster)
 	}
-	if got.DE.TargetID != "SGF" {
-		t.Errorf("TargetID: %q", got.DE.TargetID)
+	if got.DE.DatasetID != "SGF" {
+		t.Errorf("DatasetID: %q", got.DE.DatasetID)
 	}
 	if got.DE.RowCount != 18569 {
 		t.Errorf("RowCount: %d", got.DE.RowCount)
@@ -418,7 +418,7 @@ func TestDEBlock_LongFormatMultiValueTermContrast(t *testing.T) {
 			Format:   "long",
 			Term:     []string{"genotype", "genotype:sex", "sex"},
 			Contrast: []string{"K:M_vs_W:F", "K_vs_W", "M_vs_F"},
-			TargetID: "ABC",
+			DatasetID: "ABC",
 			RowCount: 55707,
 		},
 	}

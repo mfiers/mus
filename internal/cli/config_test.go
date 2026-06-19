@@ -205,10 +205,10 @@ func TestResolveConfigKey_CaseAndUnderscoreNormalises(t *testing.T) {
 
 func TestResolveConfigKey_DEKeysAccepted(t *testing.T) {
 	// Every de_* key the DE-ingest contract relies on must pass the
-	// resolveConfigKey gate; otherwise `mus config set de_target_id …`
+	// resolveConfigKey gate; otherwise `mus config set de_dataset_id …`
 	// rejects the depositor's input with "not a recognised mus key".
 	keys := []string{
-		"de_target_id", "de_target_h5ad",
+		"de_dataset_id", "de_dataset_h5ad",
 		"de_format", "de_method",
 		"de_cluster", "de_cluster_obs_column",
 		"de_term", "de_contrast",

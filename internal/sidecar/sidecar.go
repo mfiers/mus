@@ -215,8 +215,8 @@ type DE struct {
 	Term               []string // de_term: stratification term(s); list when long-format auto
 	Contrast           []string // de_contrast: contrast label(s); list when long-format auto
 	Cluster            string   // de_cluster: per-file cluster label, e.g. "microglia.DAM" (free text)
-	TargetID           string   // de_target_id: 3-char anthive id of the target h5ad (preferred)
-	TargetH5ad         string   // de_target_h5ad: basename within data_project (escape hatch for co-ingest)
+	DatasetID           string   // de_dataset_id: 3-char anthive id of the target h5ad (preferred)
+	DatasetH5ad         string   // de_dataset_h5ad: basename within data_project (escape hatch for co-ingest)
 	ClusterObsColumn   string   // de_cluster_obs_column: obs column in target h5ad for cluster validation
 	SoftwareVersion    string   // de_software_version: e.g. "DESeq2 1.42.0"
 	ReferenceType      string   // de_reference_type: e.g. "vsreference" / "pairwise" / "vsgrandmean"
@@ -500,8 +500,8 @@ func docToMap(d *Doc) map[string]any {
 		putList(out, "de_term", d.DE.Term)
 		putList(out, "de_contrast", d.DE.Contrast)
 		putStr(out, "de_cluster", d.DE.Cluster)
-		putStr(out, "de_target_id", d.DE.TargetID)
-		putStr(out, "de_target_h5ad", d.DE.TargetH5ad)
+		putStr(out, "de_dataset_id", d.DE.DatasetID)
+		putStr(out, "de_dataset_h5ad", d.DE.DatasetH5ad)
 		putStr(out, "de_cluster_obs_column", d.DE.ClusterObsColumn)
 		putStr(out, "de_software_version", d.DE.SoftwareVersion)
 		putStr(out, "de_reference_type", d.DE.ReferenceType)
@@ -642,8 +642,8 @@ func docFromMap(in map[string]any) (*Doc, error) {
 			Term:                  getList(in, "de_term"),
 			Contrast:              getList(in, "de_contrast"),
 			Cluster:               getStr(in, "de_cluster"),
-			TargetID:              getStr(in, "de_target_id"),
-			TargetH5ad:            getStr(in, "de_target_h5ad"),
+			DatasetID:              getStr(in, "de_dataset_id"),
+			DatasetH5ad:            getStr(in, "de_dataset_h5ad"),
 			ClusterObsColumn:      getStr(in, "de_cluster_obs_column"),
 			SoftwareVersion:       getStr(in, "de_software_version"),
 			ReferenceType:         getStr(in, "de_reference_type"),

@@ -73,7 +73,7 @@ var knownConfigKeys = []string{
 	// `mus de check` reads these from the cascading mus.cfg; the
 	// per-file <basename>.mus sidecar then carries the same de_*
 	// keys after a passing check.
-	"de_target_id", "de_target_h5ad",
+	"de_dataset_id", "de_dataset_h5ad",
 	"de_format", "de_method",
 	"de_cluster", "de_cluster_obs_column",
 	"de_term", "de_contrast",

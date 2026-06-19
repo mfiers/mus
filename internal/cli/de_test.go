@@ -84,7 +84,7 @@ func TestDECheck_RequiresMessage(t *testing.T) {
 	dir := t.TempDir()
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
-		"de_target_id=ABC",
+		"de_dataset_id=ABC",
 	)
 	writeDETSV(t, filepath.Join(dir, "de.tsv"),
 		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
@@ -104,7 +104,7 @@ func TestDECheck_MessageWritesDescription(t *testing.T) {
 	dir := t.TempDir()
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
-		"de_target_id=ABC",
+		"de_dataset_id=ABC",
 	)
 	writeDETSV(t, filepath.Join(dir, "de.tsv"),
 		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
@@ -127,7 +127,7 @@ func TestDECheck_MessageOverridesCascadeDescription(t *testing.T) {
 	dir := t.TempDir()
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
-		"de_target_id=ABC",
+		"de_dataset_id=ABC",
 		`de_description=stale folder-level description`,
 	)
 	writeDETSV(t, filepath.Join(dir, "de.tsv"),
@@ -152,7 +152,7 @@ func TestDECheck_SoftFieldNudges(t *testing.T) {
 	dir := t.TempDir()
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
-		"de_target_id=ABC",
+		"de_dataset_id=ABC",
 		`de_software_version=scanpy 1.10.4`,
 		// de_reference_type, de_covariates, de_filter_criteria deliberately unset
 	)
@@ -196,7 +196,7 @@ func TestDECheck_BottomHintSkippedWhenAllSoftFieldsSet(t *testing.T) {
 	dir := t.TempDir()
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
-		"de_target_id=ABC",
+		"de_dataset_id=ABC",
 		`de_software_version=scanpy 1.10.4`,
 		`de_reference_type=pairwise`,
 		`de_covariates=sex,age`,
@@ -222,7 +222,7 @@ func TestDECheck_StatusLinesDontRepeatFilename(t *testing.T) {
 	dir := t.TempDir()
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
-		"de_target_id=ABC",
+		"de_dataset_id=ABC",
 	)
 	writeDETSV(t, filepath.Join(dir, "de.tsv"),
 		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
@@ -245,7 +245,7 @@ func TestDECheck_StatusLinesDontRepeatFilename(t *testing.T) {
 
 func TestDECheck_CompressionNudge(t *testing.T) {
 	dir := t.TempDir()
-	writeMusCfg(t, dir, "data_project=Fiers2025", "de_target_id=ABC")
+	writeMusCfg(t, dir, "data_project=Fiers2025", "de_dataset_id=ABC")
 
 	// Plain .tsv → SKIP compression nudge.
 	writeDETSV(t, filepath.Join(dir, "plain.tsv"),
@@ -265,7 +265,7 @@ func TestDECheck_CompressionNudge(t *testing.T) {
 
 	// .tsv.gz → OK compression line.
 	dir2 := t.TempDir()
-	writeMusCfg(t, dir2, "data_project=Fiers2025", "de_target_id=ABC")
+	writeMusCfg(t, dir2, "data_project=Fiers2025", "de_dataset_id=ABC")
 	writeGzippedDE(t, filepath.Join(dir2, "de.tsv.gz"),
 		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
 		"G1\t1\t1\t1\t1\t1\t1")
@@ -282,8 +282,8 @@ func TestDECheck_HappyPath_DESeq2(t *testing.T) {
 	dir := t.TempDir()
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
-		"de_target_id=SGF",
-		"de_target_h5ad=Single.Grafts.h5ad",
+		"de_dataset_id=SGF",
+		"de_dataset_h5ad=Single.Grafts.h5ad",
 	)
 	writeDETSV(t, filepath.Join(dir, "de.tsv"),
 		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
@@ -296,8 +296,8 @@ func TestDECheck_HappyPath_DESeq2(t *testing.T) {
 	for _, want := range []string{
 		"OK", "format", "detected deseq2", "rows", "1 data rows",
 		"data_project", "Fiers2025",
-		"target", "SGF", "method", "DESeq2",
-		"Grouping by target", "SGF (Single.Grafts.h5ad)",
+		"dataset", "SGF", "method", "DESeq2",
+		"Grouping by dataset", "SGF (Single.Grafts.h5ad)",
 		"checked 1, passed 1, failed 0",
 	} {
 		if !strings.Contains(stdout, want) {
@@ -322,7 +322,7 @@ func TestDECheck_HappyPath_DESeq2(t *testing.T) {
 	for _, want := range []string{
 		"de_format=deseq2",
 		"de_method=DESeq2",
-		"de_target_id=SGF",
+		"de_dataset_id=SGF",
 		"de_check_version=1",
 	} {
 		if !strings.Contains(string(body), want) {
@@ -335,7 +335,7 @@ func TestDECheck_AcceptsGzippedDESeq2(t *testing.T) {
 	dir := t.TempDir()
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
-		"de_target_id=SGF",
+		"de_dataset_id=SGF",
 	)
 	writeGzippedDE(t, filepath.Join(dir, "de.tsv.gz"),
 		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
@@ -363,7 +363,7 @@ func TestDECheck_LongFormat_StampsDistinctSet(t *testing.T) {
 	dir := t.TempDir()
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
-		"de_target_id=ABC",
+		"de_dataset_id=ABC",
 	)
 	body := strings.Join([]string{
 		"gene_id\teffsize\tpvalue\tpadj\tterm\tcontrast",
@@ -404,7 +404,7 @@ func TestDECheck_FailsWithoutDataProject(t *testing.T) {
 	dir := t.TempDir()
 	// data_project deliberately missing.
 	writeMusCfg(t, dir,
-		"de_target_id=SGF",
+		"de_dataset_id=SGF",
 	)
 	writeDETSV(t, filepath.Join(dir, "de.tsv"),
 		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
@@ -423,7 +423,7 @@ func TestDECheck_ClusterLinesAppearWhenOptedIn(t *testing.T) {
 	dir := t.TempDir()
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
-		"de_target_id=SGF",
+		"de_dataset_id=SGF",
 		"de_cluster_obs_column=leiden",
 	)
 	writeDETSV(t, filepath.Join(dir, "de.tsv"),
@@ -438,21 +438,21 @@ func TestDECheck_ClusterLinesAppearWhenOptedIn(t *testing.T) {
 	}
 }
 
-func TestDECheck_FailsWithoutTarget(t *testing.T) {
+func TestDECheck_FailsWithoutDataset(t *testing.T) {
 	dir := t.TempDir()
 	// data_project IS set (otherwise we'd fail on the earlier
-	// data_project gate, not the target one).
-	writeMusCfg(t, dir, "data_project=Fiers2025") // no de_target_*
+	// data_project gate, not the dataset one).
+	writeMusCfg(t, dir, "data_project=Fiers2025") // no de_dataset_*
 	writeDETSV(t, filepath.Join(dir, "de.tsv"),
 		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
 		"G1\t1\t1\t1\t1\t1\t1")
 
 	_, stderr, err := runDECheckForTest(t, dir)
 	if err == nil {
-		t.Fatal("expected failure when target unset")
+		t.Fatal("expected failure when dataset unset")
 	}
-	if !strings.Contains(stderr, "de_target_id") {
-		t.Errorf("expected 'de_target_id' hint in stderr; got:\n%s", stderr)
+	if !strings.Contains(stderr, "de_dataset_id") {
+		t.Errorf("expected 'de_dataset_id' hint in stderr; got:\n%s", stderr)
 	}
 }
 
@@ -460,7 +460,7 @@ func TestDECheck_FailsOnUnknownFormat(t *testing.T) {
 	dir := t.TempDir()
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
-		"de_target_id=ABC",
+		"de_dataset_id=ABC",
 	)
 	writeDETSV(t, filepath.Join(dir, "mystery.tsv"),
 		"gene\tfc\tp", "G1\t1\t0.5")
@@ -478,7 +478,7 @@ func TestDECheck_RejectsParquet(t *testing.T) {
 	dir := t.TempDir()
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
-		"de_target_id=ABC",
+		"de_dataset_id=ABC",
 	)
 	if err := os.WriteFile(filepath.Join(dir, "de.parquet"), []byte("PAR1"), 0o644); err != nil {
 		t.Fatal(err)
@@ -506,7 +506,7 @@ func TestDECheck_SilentSuppressesOKAndSkip(t *testing.T) {
 	dir := t.TempDir()
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
-		"de_target_id=ABC",
+		"de_dataset_id=ABC",
 	)
 	writeDETSV(t, filepath.Join(dir, "de.tsv"),
 		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
@@ -521,7 +521,7 @@ func TestDECheck_SilentSuppressesOKAndSkip(t *testing.T) {
 		t.Errorf("--silent leaked status lines:\n%s", stdout)
 	}
 	// But the grouping + summary still print.
-	for _, want := range []string{"Grouping by target", "checked 1, passed 1, failed 0"} {
+	for _, want := range []string{"Grouping by dataset", "checked 1, passed 1, failed 0"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("--silent dropped %q:\n%s", want, stdout)
 		}
@@ -532,7 +532,7 @@ func TestDECheck_FormatOverride(t *testing.T) {
 	dir := t.TempDir()
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
-		"de_target_id=ABC",
+		"de_dataset_id=ABC",
 	)
 	// File that looks like edger but pass --format=long. Override
 	// should be reported in the output.
@@ -549,12 +549,12 @@ func TestDECheck_FormatOverride(t *testing.T) {
 	}
 }
 
-func TestDECheck_GroupsByTarget(t *testing.T) {
+func TestDECheck_GroupsByDataset(t *testing.T) {
 	dir := t.TempDir()
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
-		"de_target_id=ABC",
-		"de_target_h5ad=foo.h5ad",
+		"de_dataset_id=ABC",
+		"de_dataset_h5ad=foo.h5ad",
 	)
 	writeDETSV(t, filepath.Join(dir, "a.tsv"),
 		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
@@ -568,6 +568,6 @@ func TestDECheck_GroupsByTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(stdout, "ABC (foo.h5ad) — 2 file(s)") {
-		t.Errorf("expected grouped target line:\n%s", stdout)
+		t.Errorf("expected grouped dataset line:\n%s", stdout)
 	}
 }

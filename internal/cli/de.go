@@ -57,7 +57,7 @@ func newDECheckCmd() *cobra.Command {
 			"`de_description` on every sidecar this check writes, overriding\n" +
 			"any `de_description=` from the mus.cfg cascade. No silent\n" +
 			"checks.\n\n" +
-			"Folder-level metadata (de_target_id, de_cluster_obs_column,\n" +
+			"Folder-level metadata (de_dataset_id, de_cluster_obs_column,\n" +
 			"de_software_version, …) lives in the cascading mus.cfg — no\n" +
 			"separate de.cfg. Use `mus config set de_<key> <value>` to write\n" +
 			"each field once and have it cascade to every file underneath.\n\n" +
@@ -67,8 +67,8 @@ func newDECheckCmd() *cobra.Command {
 			"method, computed long-format distinct sets, soft-field nudges,\n" +
 			"skipped checks) is announced on stdout. --silent suppresses\n" +
 			"everything except failures and the final summary.\n\n" +
-			"Output ends with a 'Grouping by target' section that groups\n" +
-			"every passed file by its de_target_id / de_target_h5ad —\n" +
+			"Output ends with a 'Grouping by dataset' section that groups\n" +
+			"every passed file by its de_dataset_id / de_dataset_h5ad —\n" +
 			"useful for catching a typo before deposit.\n\n" +
 			"Parquet input is REJECTED (no DE tool writes parquet natively;\n" +
 			"convert to .tsv via pandas/pyarrow if you have parquet upstream).",
@@ -114,8 +114,8 @@ type dePassFile struct {
 	Path       string
 	Format     de.Format
 	RowCount   int64
-	TargetID   string
-	TargetH5ad string
+	DatasetID   string
+	DatasetH5ad string
 	Cluster    string
 }
 
@@ -195,9 +195,9 @@ func runDECheck(cmd *cobra.Command, args []string, formatOverride, message strin
 		fmt.Fprintln(stdout, "Set soft parameters via: mus config set <NAME> <VALUE>")
 	}
 
-	// Grouping by target — the killer feature anthive4 asked for.
+	// Grouping by dataset — the killer feature anthive4 asked for.
 	if len(passed) > 0 {
-		out.section("Grouping by target")
+		out.section("Grouping by dataset")
 		groups := groupPassedByTarget(passed)
 		keys := make([]string, 0, len(groups))
 		for k := range groups {
@@ -291,16 +291,16 @@ func checkOneDEFile(cache *hashcache.Cache, path string, env *config.Env,
 	out.ok("data_project", dataProject)
 
 	// 4b. Target dataset (HARD-one-of).
-	target := env.String("de_target_id")
-	targetH5ad := env.String("de_target_h5ad")
-	if target == "" && targetH5ad == "" {
-		out.errf("target",
-			"neither de_target_id nor de_target_h5ad set — "+
-				"`mus config set de_target_id <ID>` (preferred) or "+
-				"`mus config set de_target_h5ad <BASENAME>`")
+	datasetID := env.String("de_dataset_id")
+	datasetH5ad := env.String("de_dataset_h5ad")
+	if datasetID == "" && datasetH5ad == "" {
+		out.errf("dataset",
+			"neither de_dataset_id nor de_dataset_h5ad set — "+
+				"`mus config set de_dataset_id <ID>` (preferred) or "+
+				"`mus config set de_dataset_h5ad <BASENAME>`")
 		return false, dePassFile{}, false
 	}
-	out.ok("target", describeTarget(target, targetH5ad))
+	out.ok("dataset", describeDataset(datasetID, datasetH5ad))
 
 	// 5. Method (auto-fill from format).
 	method := env.String("de_method")
@@ -316,7 +316,7 @@ func checkOneDEFile(cache *hashcache.Cache, path string, env *config.Env,
 	}
 
 	// 6. Cluster validation (light: just report; deep validation
-	//    against target h5ad obs comes in a later commit).
+	//    against datasetID h5ad obs comes in a later commit).
 	//
 	// Only surface cluster-related lines when the depositor has
 	// opted into per-cluster DE — either by declaring a cluster
@@ -334,7 +334,7 @@ func checkOneDEFile(cache *hashcache.Cache, path string, env *config.Env,
 					"OK for multi-factorial designs")
 		default:
 			out.skip("cluster-validation", fmt.Sprintf(
-				"deferred (will check %q is in target_h5ad.obs[%s])", cluster, clusterCol))
+				"deferred (will check %q is in dataset h5ad obs[%s])", cluster, clusterCol))
 		}
 	}
 
@@ -356,7 +356,7 @@ func checkOneDEFile(cache *hashcache.Cache, path string, env *config.Env,
 	}
 
 	// 10. Stamp the sidecar.
-	if err := stampDESidecar(cache, path, rep, env, chosen, method, target, targetH5ad, message); err != nil {
+	if err := stampDESidecar(cache, path, rep, env, chosen, method, datasetID, datasetH5ad, message); err != nil {
 		out.errf("sidecar", "%v", err)
 		return false, dePassFile{}, unsetSoft
 	}
@@ -366,8 +366,8 @@ func checkOneDEFile(cache *hashcache.Cache, path string, env *config.Env,
 		Path:       path,
 		Format:     chosen,
 		RowCount:   rep.RowCount,
-		TargetID:   target,
-		TargetH5ad: targetH5ad,
+		DatasetID:   datasetID,
+		DatasetH5ad: datasetH5ad,
 		Cluster:    cluster,
 	}, unsetSoft
 }
@@ -427,7 +427,7 @@ func isGzippedFile(path string) bool {
 // cascade. `message` is the mandatory -m / --message value;
 // it lands as `de_description`, overriding any cascade value.
 func stampDESidecar(cache *hashcache.Cache, path string, rep *de.Report,
-	env *config.Env, chosen de.Format, method, target, targetH5ad, message string) error {
+	env *config.Env, chosen de.Format, method, datasetID, datasetH5ad, message string) error {
 
 	scPath := sidecar.SidecarPath(path)
 	doc, err := readMaybe(scPath)
@@ -462,8 +462,8 @@ func stampDESidecar(cache *hashcache.Cache, path string, rep *de.Report,
 		Format:                string(chosen),
 		Method:                method,
 		Cluster:               env.String("de_cluster"),
-		TargetID:              target,
-		TargetH5ad:            targetH5ad,
+		DatasetID:              datasetID,
+		DatasetH5ad:            datasetH5ad,
 		ClusterObsColumn:      env.String("de_cluster_obs_column"),
 		SoftwareVersion:       env.String("de_software_version"),
 		ReferenceType:         env.String("de_reference_type"),
@@ -555,14 +555,14 @@ func isDECandidate(path string) bool {
 	return false
 }
 
-func describeTarget(id, h5ad string) string {
+func describeDataset(id, h5ad string) string {
 	switch {
 	case id != "" && h5ad != "":
-		return fmt.Sprintf("de_target_id=%s (h5ad=%s)", id, h5ad)
+		return fmt.Sprintf("de_dataset_id=%s (h5ad=%s)", id, h5ad)
 	case id != "":
-		return fmt.Sprintf("de_target_id=%s", id)
+		return fmt.Sprintf("de_dataset_id=%s", id)
 	default:
-		return fmt.Sprintf("de_target_h5ad=%s", h5ad)
+		return fmt.Sprintf("de_dataset_h5ad=%s", h5ad)
 	}
 }
 
@@ -571,12 +571,12 @@ func groupPassedByTarget(rows []dePassFile) map[string][]dePassFile {
 	for _, r := range rows {
 		var key string
 		switch {
-		case r.TargetID != "" && r.TargetH5ad != "":
-			key = fmt.Sprintf("%s (%s)", r.TargetID, r.TargetH5ad)
-		case r.TargetID != "":
-			key = r.TargetID
+		case r.DatasetID != "" && r.DatasetH5ad != "":
+			key = fmt.Sprintf("%s (%s)", r.DatasetID, r.DatasetH5ad)
+		case r.DatasetID != "":
+			key = r.DatasetID
 		default:
-			key = r.TargetH5ad
+			key = r.DatasetH5ad
 		}
 		out[key] = append(out[key], r)
 	}
@@ -671,15 +671,15 @@ validate; the catalog (anthive) accepts only files that pass it.
    HARD-required at the deposit gate:
        data_project        e.g. Fiers2025
        de_format           (or inferable from the columns)
-       de_target_id        3-char anthive id of the target h5ad   PREFERRED
-       de_target_h5ad      basename within data_project           (escape hatch
+       de_dataset_id        3-char anthive id of the dataset h5ad   PREFERRED
+       de_dataset_h5ad      basename within data_project           (escape hatch
                                                                    for co-ingest)
    AUTO-FILLED FROM de_format IF UNSET:
        de_method           DESeq2 / edgeR / scanpy.rank_genes_groups / …
    SOFT (passed through to anthive):
        de_term             single value for one-term presets
        de_contrast         single value for one-contrast presets
-       de_cluster_obs_column   obs col in target h5ad to validate de_cluster against
+       de_cluster_obs_column   obs col in dataset h5ad to validate de_cluster against
        de_software_version
        de_reference_type   vsreference | pairwise | vsgrandmean
        de_covariates       e.g. sex,age,batch
@@ -704,7 +704,7 @@ validate; the catalog (anthive) accepts only files that pass it.
 5. CO-INGEST (h5ad + DE in one upload)
    Layout your upload folder as:
        upload/
-       ├── mus.cfg                 # data_project + h5ad biology + de_target_id
+       ├── mus.cfg                 # data_project + h5ad biology + de_dataset_id
        ├── <name>.h5ad
        ├── <name>.h5ad.mus
        └── de/                     # optional; flat alongside h5ad also works
