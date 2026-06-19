@@ -55,6 +55,7 @@ func TestDECheck_HappyPath_DESeq2(t *testing.T) {
 	}
 	for _, want := range []string{
 		"OK", "format", "detected deseq2", "rows", "1 data rows",
+		"data_project", "Fiers2025",
 		"target", "SGF", "method", "DESeq2",
 		"Grouping by target", "SGF (Single.Grafts.h5ad)",
 		"checked 1, passed 1, failed 0",
@@ -62,6 +63,14 @@ func TestDECheck_HappyPath_DESeq2(t *testing.T) {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("stdout missing %q\nfull:\n%s", want, stdout)
 		}
+	}
+	// Cluster check lines must NOT appear when neither de_cluster
+	// nor de_cluster_obs_column is in the cascade — that's noise
+	// for non-per-cluster DE deposits. (The grouping summary still
+	// emits a `cluster=-` column; this asserts the per-check
+	// SKIP line doesn't appear.)
+	if strings.Contains(stdout, "cluster-validation") {
+		t.Errorf("cluster-validation SKIP line appeared even though no de_cluster/de_cluster_obs_column was set:\n%s", stdout)
 	}
 
 	// Sidecar stamped.
@@ -123,8 +132,48 @@ func TestDECheck_LongFormat_StampsDistinctSet(t *testing.T) {
 	}
 }
 
+func TestDECheck_FailsWithoutDataProject(t *testing.T) {
+	dir := t.TempDir()
+	// data_project deliberately missing.
+	writeMusCfg(t, dir,
+		"de_target_id=SGF",
+	)
+	writeDETSV(t, filepath.Join(dir, "de.tsv"),
+		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
+		"G1\t1\t1\t1\t1\t1\t1")
+
+	_, stderr, err := runDECheckForTest(t, dir)
+	if err == nil {
+		t.Fatal("expected failure when data_project unset")
+	}
+	if !strings.Contains(stderr, "data_project not set in cascade") {
+		t.Errorf("expected data_project hint:\n%s", stderr)
+	}
+}
+
+func TestDECheck_ClusterLinesAppearWhenOptedIn(t *testing.T) {
+	dir := t.TempDir()
+	writeMusCfg(t, dir,
+		"data_project=Fiers2025",
+		"de_target_id=SGF",
+		"de_cluster_obs_column=leiden",
+	)
+	writeDETSV(t, filepath.Join(dir, "de.tsv"),
+		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
+		"G1\t1\t1\t1\t1\t1\t1")
+	stdout, _, err := runDECheckForTest(t, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "cluster-validation") {
+		t.Errorf("opting in via de_cluster_obs_column should surface a cluster line:\n%s", stdout)
+	}
+}
+
 func TestDECheck_FailsWithoutTarget(t *testing.T) {
 	dir := t.TempDir()
+	// data_project IS set (otherwise we'd fail on the earlier
+	// data_project gate, not the target one).
 	writeMusCfg(t, dir, "data_project=Fiers2025") // no de_target_*
 	writeDETSV(t, filepath.Join(dir, "de.tsv"),
 		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",

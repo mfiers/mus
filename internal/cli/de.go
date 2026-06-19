@@ -244,7 +244,19 @@ func checkOneDEFile(cache *hashcache.Cache, path string, env *config.Env,
 			strings.Join(rep.ContrastSet, ", ")))
 	}
 
-	// 4. Cascade-derived metadata.
+	// 4a. data_project (HARD) — anthive's grouping key. Without it,
+	//     the upload gate can't compute an S3 destination prefix
+	//     and ant-ingest can't locate the deposit's catalog home.
+	dataProject := env.String("data_project")
+	if dataProject == "" {
+		out.errf("data_project", path,
+			"data_project not set in cascade — "+
+				"`mus config set data_project NameYear` (or `mus eln link <id>`)")
+		return false, dePassFile{}
+	}
+	out.ok("data_project", path, dataProject)
+
+	// 4b. Target dataset (HARD-one-of).
 	target := env.String("de_target_id")
 	targetH5ad := env.String("de_target_h5ad")
 	if target == "" && targetH5ad == "" {
@@ -272,20 +284,29 @@ func checkOneDEFile(cache *hashcache.Cache, path string, env *config.Env,
 
 	// 6. Cluster validation (light: just report; deep validation
 	//    against target h5ad obs comes in a later commit).
+	//
+	// Only surface cluster-related lines when the depositor has
+	// opted into per-cluster DE — either by declaring a cluster
+	// value or by naming an obs column. Most deposits (e.g. a
+	// single wilcoxon across the whole dataset) aren't per-cluster
+	// and don't need this noise.
 	cluster := env.String("de_cluster") // can also be per-file in sidecar (future)
 	clusterCol := env.String("de_cluster_obs_column")
-	switch {
-	case cluster == "":
-		out.skip("cluster", path, "no de_cluster declared")
-	case clusterCol == "":
-		out.skip("cluster-validation", path,
-			"de_cluster=\""+cluster+"\" set but de_cluster_obs_column unset — "+
-				"OK for multi-factorial designs; set the obs column to enable validation")
-	default:
-		// Real validation lands in a follow-up commit (task #91).
-		out.skip("cluster-validation", path, fmt.Sprintf(
-			"deferred (will check %q is in target_h5ad.obs[%s]) — "+
-				"placeholder until task #91 wires the inspector", cluster, clusterCol))
+	if cluster != "" || clusterCol != "" {
+		switch {
+		case cluster == "":
+			out.skip("cluster-validation", path,
+				"de_cluster_obs_column=\""+clusterCol+"\" set but no de_cluster on this file — nothing to validate")
+		case clusterCol == "":
+			out.skip("cluster-validation", path,
+				"de_cluster=\""+cluster+"\" set but de_cluster_obs_column unset — "+
+					"OK for multi-factorial designs; set the obs column to enable validation")
+		default:
+			// Real validation lands in a follow-up commit (task #91).
+			out.skip("cluster-validation", path, fmt.Sprintf(
+				"deferred (will check %q is in target_h5ad.obs[%s]) — "+
+					"placeholder until task #91 wires the inspector", cluster, clusterCol))
+		}
 	}
 
 	// 7. Stamp the sidecar.
