@@ -90,6 +90,17 @@ func runServe(ctx context.Context, opt serveOptions, stdout, stderr interface {
 			bind, opt.Port, opt.Port)
 	}
 
+	// Pin the server root to cwd at boot time. Every path-resolving
+	// handler in serve_handlers.go refuses to escape this root —
+	// the browser can navigate INTO subdirs but not above this
+	// directory. Recorded BEFORE we listen so a listen-failure
+	// path doesn't leave stale state.
+	root, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("getwd: %w", err)
+	}
+	serveRoot = root
+
 	listener, err := net.Listen("tcp", fmt.Sprintf("%s:%d", bind, opt.Port))
 	if err != nil {
 		return fmt.Errorf("listen %s:%d: %w", bind, opt.Port, err)
@@ -278,6 +289,7 @@ func registerServeRoutes(mux *http.ServeMux, _ string) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		fmt.Fprintf(w, "%s", cwd)
 	})
+	registerServeAPI(mux)
 }
 
 // serveSkeletonHTML is the placeholder front-end for the first
