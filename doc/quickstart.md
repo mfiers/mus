@@ -23,7 +23,11 @@ If verification fails, the install aborts and no binary is left on disk.
 
 ### Windows
 
-`install.sh` is POSIX-only. Windows users download `mus-windows-amd64.exe` directly from the [Releases page](https://codeberg.org/mfiers/mus/releases/latest), place it somewhere on `PATH` (e.g. `%USERPROFILE%\bin\mus.exe`), and run `mus version` to confirm. Subsequent upgrades go through `mus upgrade` like any other platform.
+`install.sh` is POSIX-only. Windows users install mus manually — see the dedicated Windows section in [01_install_and_setup.md](01_install_and_setup.md#windows) for the full procedure (download, signature verification, PATH setup, external-tool notes, WSL2 alternative).
+
+In short: download `mus-windows-amd64.exe` from the [Releases page](https://codeberg.org/mfiers/mus/releases/latest), drop it in `%USERPROFILE%\bin\` (or any PATH directory), and run `mus version`. Subsequent upgrades go through `mus upgrade` (uses a `.exe → .exe.old` swap because Windows locks running executables).
+
+`iron` (the iRODS / Mango CLI mus depends on for any `mus irods *` command) may not have a Windows build; if not, run iRODS commands from WSL2 instead. `uv` (required by `mus h5ad check` / `mus de check`) has an official Windows installer.
 
 macOS on Intel (`Darwin/x86_64`) isn't currently published — build from source.
 

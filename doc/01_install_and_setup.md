@@ -26,11 +26,40 @@ Confirm it landed:
 mus version
 ```
 
-**Windows:** download `mus-windows-amd64.exe` from the [Releases page](https://codeberg.org/mfiers/mus/releases/latest) and place it somewhere on `PATH` (e.g. `%USERPROFILE%\bin\mus.exe`).
-
 **macOS on Intel:** not published; build from source with Go 1.24+.
 
 **Upgrades:** re-run the installer any time, or `mus upgrade` from inside mus.
+
+### Windows
+
+`install.sh` is POSIX-only — Windows users install mus manually.
+
+1. Download the binary + signature from the [latest release](https://codeberg.org/mfiers/mus/releases/latest):
+   - `mus-windows-amd64.exe`
+   - `mus-windows-amd64.exe.sig`
+
+2. (Recommended) verify the signature against the ed25519 public key embedded in mus. The simplest path: drop the binary somewhere temporary, run `mus _verify <path-to-binary>` against itself, then move it to its final location only on a clean verify. Mus refuses to self-verify a tampered binary.
+
+3. Place `mus-windows-amd64.exe` somewhere on `PATH`. Conventional locations:
+   - `%USERPROFILE%\bin\mus.exe` (create the directory if needed and add it to your PATH via *System Properties → Advanced → Environment Variables*).
+   - `%LOCALAPPDATA%\Programs\mus\mus.exe`.
+
+4. Open a fresh terminal and run `mus version` to confirm it's on PATH.
+
+**Subsequent upgrades** go through `mus upgrade` like any other platform — mus does a `.exe → .exe.old` swap (Windows locks running executables), and cleans up the `.old` file on the next launch.
+
+**External tools mus depends on:**
+
+| Tool | Needed for | Windows install |
+|---|---|---|
+| [`uv`](https://docs.astral.sh/uv/) | `mus h5ad check`, `mus de check` (anndata reader) | `powershell -c "irm https://astral.sh/uv/install.ps1 \| iex"` |
+| `iron` | `mus irods *` commands (any iRODS / Mango interaction) | Check the [KU Leuven RDM docs](https://rdm-docs.icts.kuleuven.be/mango/clients/iron.html) for current Windows availability. If unavailable, run iRODS commands from WSL2 or a Linux jump host instead. |
+| `pandoc` + TeX | `mus eln upload` of `.ipynb` files (PDF conversion only — optional) | Skip unless you use ELN PDF upload. |
+| `vark` | optional anthive catalog cross-check (see [05](05_de_deposit.md)) | Cross-compiles (Go); check the [vark repo](https://codeberg.org/mfiers/vark) for Windows binaries. |
+
+**Caveat:** Windows binary is cross-compiled and ed25519-signed but full runtime smoke-tests on Windows are pending. Lab depositors who run Windows: please report any issue you hit. Most paths work because mus uses Go's `path/filepath` (portable separator) end to end; the rough edges are likely around external tool integration (iron especially).
+
+**WSL2 alternative.** If you have Windows 11 with WSL2 (Ubuntu / Debian), mus works there exactly like on a native Linux box — same installer, same external-tool story. For mus + iRODS in particular, WSL2 is the lowest-friction path on Windows today.
 
 ---
 
