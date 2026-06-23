@@ -22,9 +22,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"codeberg.org/mfiers/mus/internal/config"
+	"codeberg.org/mfiers/mus/internal/dataproject"
 	"codeberg.org/mfiers/mus/internal/sidecar"
 	"codeberg.org/mfiers/mus/internal/vocab"
 )
@@ -34,13 +36,20 @@ import (
 // this root.
 var serveRoot string
 
-// registerServeAPI wires the read-only API onto mux. Called from
+// registerServeAPI wires the API endpoints onto mux. Called from
 // the same registerServeRoutes() that mounts the index page.
 func registerServeAPI(mux *http.ServeMux) {
+	// Read-only.
 	mux.HandleFunc("/api/cwd", apiCwd)
 	mux.HandleFunc("/api/tree", apiTree)
 	mux.HandleFunc("/api/cascade", apiCascade)
 	mux.HandleFunc("/api/vocab/", apiVocab) // trailing slash → subpath captures field name
+	// Write.
+	mux.HandleFunc("/api/config/set", apiConfigSet)
+	mux.HandleFunc("/api/config/unset", apiConfigUnset)
+	mux.HandleFunc("/api/eln/disable", apiELNDisable)
+	mux.HandleFunc("/api/eln/enable", apiELNEnable)
+	mux.HandleFunc("/api/eln/link", apiELNLink)
 }
 
 // apiCwd returns the directory `mus serve` was invoked from.
@@ -276,6 +285,241 @@ func writeJSON(w http.ResponseWriter, value any) {
 	if err := enc.Encode(value); err != nil {
 		fmt.Fprintf(os.Stderr, "mus serve: encode JSON: %v\n", err)
 	}
+}
+
+// --- write endpoints ---------------------------------------------------------
+
+// apiConfigSet — POST /api/config/set with JSON body
+// {"dir": "<rel>", "key": "<k>", "value": "<v>", "force": false}.
+// Writes the (key, value) to <dir>/mus.cfg after running the same
+// resolveConfigKey + resolveConfigValue normalisation + vocab
+// validation the CLI applies via `mus config set`.
+//
+// Response on success: { "key": "<canonical-k>", "value": "<canonical-v>" }.
+// Note: canonicalisation may rewrite the key (CellType → cell_type)
+// and/or value (HuMaN → human); the response reflects what landed.
+func apiConfigSet(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Dir   string `json:"dir"`
+		Key   string `json:"key"`
+		Value string `json:"value"`
+		Force bool   `json:"force"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("decode body: %v", err), http.StatusBadRequest)
+		return
+	}
+	abs, _, err := resolveDirParam(req.Dir)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// Both layers of CLI validation: key normalisation + value vocab check.
+	var noteSink strings.Builder
+	resolvedKey, err := resolveConfigKey(req.Key, req.Force, &noteSink)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	resolvedValue, err := resolveConfigValue(r.Context(), resolvedKey, req.Value, req.Force, &noteSink)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := config.Save(abs, map[string]string{resolvedKey: resolvedValue}); err != nil {
+		http.Error(w, fmt.Sprintf("save: %v", err), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"key":   resolvedKey,
+		"value": resolvedValue,
+		"notes": noteSink.String(), // stderr-style notes from the resolvers, if any
+	})
+}
+
+// apiConfigUnset — POST /api/config/unset with JSON body
+// {"dir": "<rel>", "key": "<k>"}. Removes the key from that
+// folder's mus.cfg. Returns 200 on success or no-op.
+func apiConfigUnset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Dir string `json:"dir"`
+		Key string `json:"key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("decode body: %v", err), http.StatusBadRequest)
+		return
+	}
+	if req.Key == "" {
+		http.Error(w, "key required", http.StatusBadRequest)
+		return
+	}
+	abs, _, err := resolveDirParam(req.Dir)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := config.Unset(abs, req.Key); err != nil {
+		http.Error(w, fmt.Sprintf("unset: %v", err), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+// apiELNDisable — POST /api/eln/disable with JSON body
+// {"dir": "<rel>"}. Writes eln_disabled=true to the folder's
+// mus.cfg, so subsequent `mus irods upload` / `mus s3 upload`
+// from that folder proceed without an ELN linkage. Same effect
+// as `mus eln disable`.
+func apiELNDisable(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Dir string `json:"dir"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("decode body: %v", err), http.StatusBadRequest)
+		return
+	}
+	abs, _, err := resolveDirParam(req.Dir)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := config.Save(abs, map[string]string{"eln_disabled": "true"}); err != nil {
+		http.Error(w, fmt.Sprintf("save: %v", err), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+// apiELNEnable — POST /api/eln/enable with JSON body
+// {"dir": "<rel>"}. Inverse of disable; removes the
+// eln_disabled key so the folder returns to the "undecided"
+// state (depositor must explicitly link an experiment or
+// re-disable). Idempotent.
+func apiELNEnable(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Dir string `json:"dir"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("decode body: %v", err), http.StatusBadRequest)
+		return
+	}
+	abs, _, err := resolveDirParam(req.Dir)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := config.Unset(abs, "eln_disabled"); err != nil {
+		http.Error(w, fmt.Sprintf("unset: %v", err), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+// apiELNLink — POST /api/eln/link with JSON body
+//
+//	{"dir": "<rel>", "experiment_id": "<id>", "data_project": "<dp>", "force": false}.
+//
+// Fetches the experiment metadata from eLabJournal, validates the
+// supplied data_project, and stamps both into the folder's
+// mus.cfg. Also clears any pre-existing eln_disabled flag — `link`
+// implies `enable`, matching the CLI semantics.
+//
+// `data_project` is REQUIRED in the request (no interactive
+// prompt path through HTTP). The GUI is responsible for surfacing
+// the chosen value back to the user before POSTing. The endpoint
+// will return 400 if it's missing or fails dataproject.ValidateName.
+//
+// If a different experiment is already linked in this folder, the
+// endpoint refuses unless `force` is true. Same idempotency guard
+// as the CLI.
+func apiELNLink(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Dir          string `json:"dir"`
+		ExperimentID string `json:"experiment_id"`
+		DataProject  string `json:"data_project"`
+		Force        bool   `json:"force"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("decode body: %v", err), http.StatusBadRequest)
+		return
+	}
+	abs, _, err := resolveDirParam(req.Dir)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	expID, err := parseELNExperimentID(req.ExperimentID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.DataProject == "" {
+		http.Error(w, "data_project is required (no interactive prompt over HTTP)", http.StatusBadRequest)
+		return
+	}
+	if err := dataproject.ValidateName(req.DataProject); err != nil {
+		http.Error(w, fmt.Sprintf("data_project %q rejected: %v", req.DataProject, err), http.StatusBadRequest)
+		return
+	}
+	expIDStr := strconv.FormatInt(expID, 10)
+	// Idempotency guard mirrors runELNLink.
+	localEnv, _ := config.LoadLocal(abs)
+	if existing := localEnv.String("eln_experiment_id"); existing != "" && !req.Force {
+		if existing == expIDStr {
+			// Re-link to the same ID is a no-op success — saves a refresh round-trip.
+			writeJSON(w, map[string]any{"ok": true, "noop": true,
+				"eln_experiment_id": existing})
+			return
+		}
+		http.Error(w, fmt.Sprintf(
+			"folder is already linked to experiment %s; pass force=true to relink", existing),
+			http.StatusConflict)
+		return
+	}
+	client, err := openELN()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("open ELN: %v", err), http.StatusInternalServerError)
+		return
+	}
+	info, err := client.ExpInfo(expID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("fetch experiment %d: %v", expID, err), http.StatusBadGateway)
+		return
+	}
+	kv := experimentToKV(info)
+	kv["data_project"] = req.DataProject
+	if err := config.Save(abs, kv); err != nil {
+		http.Error(w, fmt.Sprintf("save: %v", err), http.StatusInternalServerError)
+		return
+	}
+	// link implies enable.
+	if localEnv.Has("eln_disabled") {
+		_ = config.Unset(abs, "eln_disabled")
+	}
+	writeJSON(w, map[string]any{
+		"ok":     true,
+		"values": kv,
+	})
 }
 
 // _ context import retained so a future endpoint that wants a
