@@ -33,6 +33,12 @@ for this folder", or specific tasks like depositing a DE file or an h5ad.
   ` + "`eln_disabled=true`" + `). Upload refuses while undecided.
 - **Two destinations:**
   - **iRODS** via ` + "`iron`" + ` shellout — general lab data. ` + "`mus irods upload`" + `.
+    Skips re-uploading when local sha256 matches the remote's already-recorded
+    checksum (avoids the UNIX_FILE_OPEN_ERR you get when a colleague tries to
+    overwrite a file owned by another user). Stamps the configured iRODS group
+    (` + "`irods_group=BADS`" + ` by default; override in mus.cfg) with ` + "`own`" + `
+    permission after every upload, so group members can read AND overwrite
+    each other's files — subject to the overwrite prompt.
   - **S3 catalog** at ` + "`__incoming/<data_project>/...`" + ` — fed into
     anthive (the lab single-cell + DE catalog). ` + "`mus s3 upload`" + `.
 - **Vocabularies.** Controlled vocab for ` + "`organism`" + `, ` + "`tissue`" + `,
@@ -80,6 +86,17 @@ Run ` + "`mus de howto`" + ` for the canonical primer. Key points:
   anthive id of the upstream h5ad — PREFERRED) OR ` + "`de_dataset_h5ad`" + `
   (basename within the same data_project, escape hatch for co-ingest).
 - ` + "`mus de check <folder>`" + ` must PASS; ` + "`mus s3 upload <folder>`" + ` uploads.
+- **Catalog cross-check.** ` + "`mus de check`" + ` fetches anthive's manifest
+  from S3 (cached at ` + "`$XDG_CACHE_HOME/mus/anthive_catalog.json`" + `, 5-min
+  TTL) and validates ` + "`de_dataset_id`" + ` / ` + "`de_dataset_h5ad`" + ` against
+  it. Hard-fails surface specifically:
+    - "S26 is the GROUP_ID of Sun2026, not a file_id. Did you mean AQR / AQB / AQP / AQN / DUN?"
+    - "AQX not found in Sun2026. Did you mean: AQB, AQN, AQP?" (Levenshtein top-3)
+    - "AQR exists in OtherProj, not Sun2026" (cross-project)
+    - "AQR is marked inactive — confirm intended" (soft warn, not block)
+  - Brand-new data_project → soft SKIP "first deposit? (anthive resolves at ingest)" — not a block.
+  - Pass ` + "`--no-catalog-check`" + ` for offline mode or first-time setup
+    before S3 creds exist.
 
 **Interactive flow for "help me mus import this DE file":**
 
@@ -114,10 +131,28 @@ Run ` + "`mus de howto`" + ` for the canonical primer. Key points:
 
 ### iRODS upload (general lab data, NOT catalog)
 
-- ` + "`mus irods upload <folder>`" + ` — recursive, sha256-verified
+- ` + "`mus irods upload <FILE-OR-FOLDER> -m <message>`" + ` — recursive, sha256-verified
 - ` + "`mus irods download <remote>`" + ` — pull back; sidecar verifies
 - ` + "`mus irods find <data_project>`" + ` — list catalog entries
 - ` + "`mus irods scan`" + ` — refresh local snapshot of remote tree
+
+**Upload behaviours worth knowing (mus 0.2.27+):**
+- **Skip-if-same.** Before invoking iron, mus runs ` + "`iron checksum <remote>`" + `.
+  Identical sha256 → silent no-op (sidecar still refreshes with current
+  cascade). Avoids the UNIX_FILE_OPEN_ERR you'd see when overwriting a
+  file owned by a different user on the iRODS server.
+- **Overwrite prompt.** If sha256 differs AND the remote exists, mus prompts:
+  ` + "`⚠ remote object exists with DIFFERENT bytes — overwrite? [y/N]`" + `.
+  Non-TTY callers refuse without ` + "`--force`" + `. Pass ` + "`--force`" + ` to
+  bypass the prompt; required for ` + "`mus serve`" + ` and any scripted batch.
+- **Group ACL.** After every successful upload, ` + "`iron chmod own <group> <remote>`" + `
+  runs automatically. Group from ` + "`irods_group`" + ` cascade key (default
+  ` + "`BADS`" + `). Failure WARNS but doesn't roll back the upload. Set
+  ` + "`irods_group=`" + ` (explicit empty) to opt out.
+- **Better errors.** UNIX_FILE_OPEN_ERR is rewritten to: "iRODS refused
+  to overwrite <path> — the existing replica is owned by another user…
+  Options: ask the original uploader to ` + "`iron chmod write <user> <path>`" + `,
+  or upload under a different remote path."
 
 Triggers: "upload to iRODS", "upload to KU Leuven RDM", generic file
 deposit that isn't an h5ad or DE.
@@ -157,6 +192,21 @@ fallback (` + "`~/.config/mus/secrets.age`" + `) for HPC login nodes.
 - ` + "`mus verify <file-or-folder>`" + ` — sha256 round-trip against the
   remote (iRODS or S3, based on the sidecar)
 - ` + "`mus check <folder>`" + ` — local consistency (sidecar ↔ file)
+
+### Local web GUI
+
+- ` + "`mus serve`" + ` — boots a single-user localhost web GUI on a random
+  port and prints/opens the URL with a session token. Designed for
+  non-CLI lab depositors: folder tree (left), annotation form with
+  vocab autocomplete (middle), pre-flight + upload trigger with
+  streaming log pane (right). Ctrl-C to stop. Single-user, token in
+  URL → HttpOnly cookie, refuses non-loopback by design. To use from
+  a remote machine, port-forward over SSH:
+  ` + "`ssh -L <port>:127.0.0.1:<port> <host>`" + `.
+- Flags: ` + "`--port <N>`" + ` (default: random), ` + "`--no-browser`" + `
+  (print URL only), ` + "`--bind`" + ` (loopback-only — non-loopback refused).
+- Trigger this when the user says "I want a UI", "non-techie
+  colleague needs to deposit", or "the CLI is too much."
 
 ## How to actually help
 

@@ -1095,7 +1095,27 @@ validate; the catalog (anthive) accepts only files that pass it.
    stamps it sorted+comma-joined into the sidecar. Saves anthive a
    re-parse and gives you a visible audit of what's in the file.
 
-5. CO-INGEST (h5ad + DE in one upload)
+5. ANTHIVE CATALOG CROSS-CHECK (mus 0.2.28+)
+   'mus de check' fetches anthive's catalog manifest from S3
+   (s3://<bucket>/_catalog/manifest.json) and cross-checks every
+   deposit's de_dataset_id / de_dataset_h5ad against it. The
+   manifest is cached at $XDG_CACHE_HOME/mus/anthive_catalog.json
+   for 5 minutes; stale-fallback-with-warn on transient fetch
+   failures. Outcomes:
+       OK     - exact id resolves to a real dataset in this data_project
+       ERROR  - id is the GROUP_ID of this data_project, not a file_id
+                ('S26 is the group_id of Sun2026... did you mean AQR/AQB/...?')
+       ERROR  - id not found; surfaces top-3 Levenshtein suggestions
+                ('AQX not found... did you mean: AQB, AQN, AQP?')
+       ERROR  - id exists, but in a DIFFERENT data_project
+       SKIP   - id resolves but flagged inactive (warn, not block)
+       SKIP   - data_project not yet in catalog (first deposit?)
+       SKIP   - co-ingest case (local sibling .h5ad found)
+   Pass '--no-catalog-check' to skip the cross-check (offline mode
+   or pre-S3-setup); mus falls back to a soft 'vark' query if that
+   CLI is on PATH.
+
+6. CO-INGEST (h5ad + DE in one upload)
    Layout your upload folder as:
        upload/
        ├── mus.cfg                 # data_project + h5ad biology + de_dataset_id
@@ -1107,10 +1127,11 @@ validate; the catalog (anthive) accepts only files that pass it.
    Then 'mus s3 upload upload/' runs BOTH gates (mus h5ad check +
    mus de check) and refuses the WHOLE batch on any failure.
 
-6. SHORTCUTS
+7. SHORTCUTS
        mus de check FOLDER         # validate everything in the folder
        mus de check FOLDER --silent   # CI mode: only failures + summary
        mus de check FILE --format long  # force a specific format
+       mus de check FOLDER --no-catalog-check  # skip the anthive manifest cross-check
        mus s3 upload FOLDER        # gate runs again at upload time
 
 Anthive ingests from __incoming/<data_project>/de/<sub>/. Files

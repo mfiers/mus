@@ -132,6 +132,18 @@ func TestMusSkill_BodyMentionsDEFlow(t *testing.T) {
 		"de_dataset_id",
 		"data_project",
 		"DON'T skip",
+		// mus 0.2.27+ behaviours — losing any of these means Claude
+		// won't surface them when the depositor hits the situation.
+		"Skip-if-same",        // iRODS upload skip on matching sha256
+		"irods_group",         // group ACL config key
+		"UNIX_FILE_OPEN_ERR",  // mapped-error message
+		"--force",             // overwrite-prompt bypass
+		// mus 0.2.28+ — anthive catalog cross-check
+		"Catalog cross-check",
+		"--no-catalog-check",
+		"GROUP_ID of Sun2026", // the canonical bug case
+		// mus serve GUI (added skill 0.2.26+)
+		"mus serve",
 	}
 	for _, req := range requirements {
 		if !strings.Contains(musBody, req) {
