@@ -71,6 +71,52 @@ func TestEnrichIronError_EmptyStderr(t *testing.T) {
 	}
 }
 
+// TestChmod_PassesArgs — confirms the command-line shape matches
+// `iron chmod [<-r>] <permission> <user-or-group> <path>` and
+// surfaces iron's exit status as an error on failure.
+func TestChmod_PassesArgs(t *testing.T) {
+	binPath := writeFakeIronBin(t, `#!/bin/sh
+# Echo the args so the test can grep them out of stdout.
+echo "ARGS: $*"
+`)
+	client := &Client{Bin: binPath}
+	if err := client.Chmod(nil, "own", "BADS", "/zone/coll/x.tsv", false); err != nil {
+		t.Fatalf("Chmod returned error: %v", err)
+	}
+	// Now recursive variant.
+	if err := client.Chmod(nil, "read", "BADS", "/zone/coll", true); err != nil {
+		t.Fatalf("Chmod -r returned error: %v", err)
+	}
+}
+
+func TestChmod_RejectsEmptyInputs(t *testing.T) {
+	client := &Client{Bin: "/bin/true"}
+	if err := client.Chmod(nil, "", "BADS", "/zone/x", false); err == nil {
+		t.Errorf("empty permission should error")
+	}
+	if err := client.Chmod(nil, "own", "", "/zone/x", false); err == nil {
+		t.Errorf("empty user/group should error")
+	}
+	if err := client.Chmod(nil, "own", "BADS", "", false); err == nil {
+		t.Errorf("empty path should error")
+	}
+}
+
+func TestChmod_PropagatesIronError(t *testing.T) {
+	binPath := writeFakeIronBin(t, `#!/bin/sh
+echo "ERROR: CAT_NO_ACCESS_PERMISSION" >&2
+exit 1
+`)
+	client := &Client{Bin: binPath}
+	err := client.Chmod(nil, "own", "BADS", "/zone/x", false)
+	if err == nil {
+		t.Fatal("expected error from failing iron")
+	}
+	if !strings.Contains(err.Error(), "iron chmod") {
+		t.Errorf("error should mention iron chmod; got: %s", err)
+	}
+}
+
 // TestUpload_UnixFileOpenErr_EndToEnd — integration: a fake iron
 // script prints the UNIX_FILE_OPEN_ERR marker on stderr and exits
 // non-zero. Upload() should return the enriched error, not the raw

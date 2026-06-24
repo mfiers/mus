@@ -156,6 +156,7 @@ func newIRODSUploadCmd() *cobra.Command {
 	// IRON's upload is idempotent by default: matching size+modtime → skip;
 	// different → overwrite. There is no "force" concept to expose.
 	var exclusive, newer, dryRun, noELNComment, forceH5adUpload, archive bool
+	var forceOverwrite bool
 	var dataProject, remoteName, packRaw, message string
 	verify := true // verify-checksum on by default; opt-out below
 	cmd := &cobra.Command{
@@ -195,7 +196,7 @@ func newIRODSUploadCmd() *cobra.Command {
 				Exclusive:      exclusive,
 				Newer:          newer,
 				DryRun:         dryRun,
-			}, dataProject, remoteName, pack, !noELNComment, forceH5adUpload, msg)
+			}, dataProject, remoteName, pack, !noELNComment, forceH5adUpload, forceOverwrite, msg)
 		},
 	}
 	cmd.Flags().StringVarP(&message, "message", "m", "",
@@ -222,35 +223,127 @@ func newIRODSUploadCmd() *cobra.Command {
 		"don't post an upload summary as a COMMENT section in the linked ELN experiment")
 	cmd.Flags().BoolVar(&forceH5adUpload, "force-h5ad-upload", false,
 		"bypass the .h5ad sanity-check gate (NOT recommended — depositor's responsibility)")
+	cmd.Flags().BoolVar(&forceOverwrite, "force", false,
+		"overwrite existing remote objects without prompting (default: prompt on overwrite, "+
+			"skip on identical bytes, abort on non-TTY)")
 	return cmd
 }
 
-// irodsRemoteMatchesLocal reports whether the iRODS object at
-// `remote` exists AND its catalog-recorded checksum equals
-// `localSum`. Used to short-circuit `iron upload` when there's
-// nothing to transfer — avoids both the wasted bandwidth AND the
-// UNIX_FILE_OPEN_ERR that fires when a colleague tries to
-// overwrite a replica owned by a different user.
-//
-// Best-effort: any error fetching the remote checksum (missing
-// object, iron unreachable, decode failure) returns false so the
-// caller falls through to a real upload. Comparison is
-// case-insensitive — Mango sometimes records the checksum prefixed
-// with `sha2:` or in base64; iron.Checksum normalises but the safe
-// thing here is to never claim a match on borderline output.
-func irodsRemoteMatchesLocal(ctx context.Context, client *iron.Client,
-	remote, localSum string) bool {
+// remoteUploadState classifies the pre-upload relationship between
+// our local file and whatever's currently at the iRODS path. Three
+// states — different downstream actions for each:
+type remoteUploadState int
+
+const (
+	// remoteAbsent — no object at `remote` (or unreachable / decode
+	// failure). Caller proceeds with a normal upload.
+	remoteAbsent remoteUploadState = iota
+	// remoteSameBytes — object exists AND its catalog-recorded
+	// checksum matches our local sha256. Caller skips iron entirely.
+	remoteSameBytes
+	// remoteDiffers — object exists AND its sha256 differs from
+	// ours. Caller would OVERWRITE — must prompt first unless --force.
+	remoteDiffers
+)
+
+// inspectRemoteForUpload classifies the iRODS path's current state
+// relative to our local file. Best-effort: any iron error returns
+// remoteAbsent so the caller falls through to a real upload (we
+// never block a first upload on a stale precheck). Comparison is
+// case-insensitive — Mango sometimes records sha256 prefixed with
+// `sha2:` or in base64; iron.Checksum normalises but we play
+// defensively to never claim a match on borderline output.
+func inspectRemoteForUpload(ctx context.Context, client *iron.Client,
+	remote, localSum string) remoteUploadState {
 	if localSum == "" {
-		return false
+		return remoteAbsent
 	}
 	remoteSum, err := client.Checksum(ctx, remote)
 	if err != nil || remoteSum == "" {
-		return false
+		return remoteAbsent
 	}
-	return strings.EqualFold(localSum, remoteSum)
+	if strings.EqualFold(localSum, remoteSum) {
+		return remoteSameBytes
+	}
+	return remoteDiffers
 }
 
-func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, overrideDataProject, overrideRemoteName string, pack packMode, postELNComment, forceH5adUpload bool, message string) error {
+// promptOverwrite asks the user whether to proceed when an upload
+// would overwrite an existing remote object whose bytes differ from
+// ours. Returns true on explicit y/yes, false otherwise. Always
+// returns false on non-TTY stdin — there's no safe default for an
+// unattended caller. The --force flag bypasses this entirely upstream;
+// non-TTY callers who genuinely want to overwrite pass --force.
+func promptOverwrite(stdin io.Reader, stdout io.Writer, remote string) bool {
+	if !isStdinTerminal(stdin) {
+		return false
+	}
+	fmt.Fprintf(stdout,
+		"   ⚠ remote object exists at %s with DIFFERENT bytes — overwrite? [y/N] ",
+		remote)
+	var answer string
+	if _, err := fmt.Fscanln(stdin, &answer); err != nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(answer)) {
+	case "y", "yes":
+		return true
+	}
+	return false
+}
+
+// isStdinTerminal reports whether stdin is a TTY (interactive). We
+// only prompt in interactive sessions; non-TTY callers (CI, mus
+// serve, scripted batches) must pass --force to overwrite.
+func isStdinTerminal(stdin io.Reader) bool {
+	f, ok := stdin.(*os.File)
+	if !ok {
+		return false
+	}
+	st, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	// A TTY is a character device, not a regular file or pipe.
+	return (st.Mode() & os.ModeCharDevice) != 0
+}
+
+// applyIRODSGroupACL grants `own` to the configured iRODS group on
+// the uploaded object. Best-effort — if chmod fails (e.g. group
+// doesn't exist, or current user doesn't have own), we WARN on
+// stderr but don't fail the upload. The bytes are already on iRODS;
+// a missing ACL stamp is recoverable, a rolled-back upload isn't.
+//
+// Source order for the group name:
+//
+//  1. mus.cfg `irods_group=<name>` (any cascade level)
+//  2. defaults.IRODSGroup (baked-in fallback, "BADS")
+//
+// Set `irods_group=` (empty) in mus.cfg to opt out — applyIRODSGroupACL
+// silently no-ops.
+func applyIRODSGroupACL(ctx context.Context, client *iron.Client,
+	env *config.Env, remote string, stderr io.Writer) {
+	group := env.String("irods_group")
+	if group == "" {
+		// Distinguish "explicit empty (opt-out)" from "unset (use default)"
+		// by checking Has(): explicit empty stays empty.
+		if !env.Has("irods_group") {
+			group = defaults.IRODSGroup
+		}
+	}
+	if group == "" {
+		return // opted out
+	}
+	if err := client.Chmod(ctx, "own", group, remote, false); err != nil {
+		fmt.Fprintf(stderr,
+			"  ⚠ iron chmod own %s %s failed: %v\n"+
+				"     (upload succeeded but group ACL not stamped — "+
+				"fix manually with `iron chmod own %s %s`)\n",
+			group, remote, err, group, remote)
+	}
+}
+
+func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, overrideDataProject, overrideRemoteName string, pack packMode, postELNComment, forceH5adUpload, forceOverwrite bool, message string) error {
 	dir, err := workingDir(cmd)
 	if err != nil {
 		return err
@@ -365,25 +458,32 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 			return err
 		}
 
-		// Skip-if-same: if the remote already exists and its
-		// catalog-recorded checksum matches our local sha256, there's
-		// nothing to upload. Two reasons this matters:
-		//   1) iron's default change-detection uses size+modtime, so
-		//      a touched-but-unchanged file gets re-uploaded for no
-		//      reason.
-		//   2) when a colleague is updating a file originally
-		//      uploaded by a different user, iron's overwrite path
-		//      fails with UNIX_FILE_OPEN_ERR because the iRODS
-		//      server's local replica is owned by the original user.
-		//      If the bytes match, there's no need to overwrite.
-		// Any error from `iron checksum` (missing object, unreachable
-		// server, decode failure) falls through to a real upload —
-		// we never make the user wait on a stale check.
-		if irodsRemoteMatchesLocal(ctx, client, remote, sum) {
+		// Pre-upload state inspection. Three branches:
+		//   - remoteSameBytes → skip iron entirely; sidecar still refreshes
+		//   - remoteDiffers   → real overwrite; prompt user (unless --force)
+		//   - remoteAbsent    → first upload; proceed normally
+		// Skipping when the bytes match avoids both wasted bandwidth AND
+		// the UNIX_FILE_OPEN_ERR that fires when a colleague tries to
+		// overwrite a replica owned by a different user.
+		state := inspectRemoteForUpload(ctx, client, remote, sum)
+		switch state {
+		case remoteSameBytes:
 			fmt.Fprintf(cmd.OutOrStdout(),
 				"   ✓ sha256 matches remote — skipping upload (sidecar will be refreshed)\n")
-		} else if err := client.Upload(ctx, abs, remote, opts); err != nil {
-			return err
+		case remoteDiffers:
+			if !forceOverwrite && !promptOverwrite(os.Stdin, cmd.OutOrStdout(), remote) {
+				return fmt.Errorf(
+					"remote object %s exists with different bytes — overwrite refused.\n"+
+						"  Pass --force to overwrite without prompt, or use a different remote name.",
+					remote)
+			}
+			if err := client.Upload(ctx, abs, remote, opts); err != nil {
+				return err
+			}
+		default: // remoteAbsent
+			if err := client.Upload(ctx, abs, remote, opts); err != nil {
+				return err
+			}
 		}
 
 		// write/update sidecar
@@ -486,6 +586,12 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 			if !noMeta {
 				applyMetadataToIRODS(ctx, client, remote, doc, cmd.ErrOrStderr())
 			}
+			// Stamp the iRODS group ACL — group members get `own` so
+			// they can read AND overwrite (mus prompts before any
+			// overwrite, so even with self-service write there's a
+			// human gate). Best-effort: failure warns but doesn't
+			// roll back the upload.
+			applyIRODSGroupACL(ctx, client, env, remote, cmd.ErrOrStderr())
 		}
 
 		// Companion files (sidecar, *.h5ad.md, folder mus.cfg,

@@ -45,6 +45,10 @@ var knownConfigKeys = []string{
 
 	// iRODS site config (usually inherited from baked-in defaults).
 	"irods_home", "irods_web", "irods_pid_base",
+	// iRODS access-control group — applied to every uploaded object.
+	// Default lives in defaults.IRODSGroup (baked in as "BADS"); override
+	// with `mus config set irods_group <name>` in mus.cfg.
+	"irods_group",
 
 	// Cross-experiment tagging.
 	"tag", "collaborator", "note",

@@ -38,4 +38,12 @@ var (
 	// /PID/<zone>/<id>/ route in mango-portal. Survives object renames and
 	// moves because the catalog ID is stable.
 	IRODSPIDBase = "https://mango.kuleuven.be/PID"
+
+	// IRODSGroup is the default iRODS user-group granted `own` permission
+	// on every object mus uploads — so group members can read AND
+	// overwrite each other's deposits. Override in mus.cfg with
+	// `irods_group=<name>`. BADS default. Set to the empty string to
+	// disable group-ACL stamping entirely (uploads then carry whatever
+	// default ACL iRODS gives them — usually owner-only).
+	IRODSGroup = "BADS"
 )

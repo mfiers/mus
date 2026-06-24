@@ -271,6 +271,41 @@ func (s *StatInfo) MetadataMap() map[string][]string {
 	return out
 }
 
+// Chmod runs `iron chmod <permission> <user-or-group> <path>`.
+// `permission` is one of: "null" (remove), "read", "write", "own".
+// `userOrGroup` is the iRODS user or user-group name (groups are
+// distinguished only by what the admin defined them as — there's no
+// syntactic marker). `recursive=true` adds the -r flag so a folder's
+// children inherit the same ACL in one call.
+//
+// Returns nil on success; the underlying iron error otherwise. Callers
+// uploading a single object usually treat chmod failure as non-fatal
+// (the bytes are already on iRODS, only the ACL is wrong) — log and
+// continue rather than back out the upload.
+func (c *Client) Chmod(ctx context.Context, permission, userOrGroup, path string, recursive bool) error {
+	if permission == "" {
+		return errors.New("Chmod: empty permission (use 'null' to revoke)")
+	}
+	if userOrGroup == "" {
+		return errors.New("Chmod: empty user/group")
+	}
+	if path == "" {
+		return errors.New("Chmod: empty path")
+	}
+	if c.DefaultTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.DefaultTimeout)
+		defer cancel()
+	}
+	args := []string{"chmod"}
+	if recursive {
+		args = append(args, "-r")
+	}
+	args = append(args, permission, userOrGroup, path)
+	_, err := c.Run(ctx, args...)
+	return err
+}
+
 // MetaSet runs `iron meta set <remote> <key> <value>`. Replaces any
 // existing AVU with the same key. Empty value is rejected (use MetaUnset).
 func (c *Client) MetaSet(ctx context.Context, remote, key, value string) error {
