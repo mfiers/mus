@@ -154,10 +154,49 @@ func escapeForYAML(s string) string {
 // (and `mus upgrade`) writes out. Add to this list when introducing
 // a new skill.
 //
-// Body for h5ad-deposit is the same primer text `mus h5ad howto`
-// prints — single source of truth, kept inline so we don't have to
-// thread file IO into the skill installer.
+// We ship three skills:
+//
+//   mus                  — umbrella primer. Broad triggers ("help me
+//                          mus", "configure mus", "import this for the
+//                          lab catalog"). Body teaches Claude the
+//                          mental model + pre-flight checklist + the
+//                          interactive deposit workflow end-to-end.
+//   mus-h5ad-deposit     — h5ad-specific. Triggers narrowly on .h5ad
+//                          / anthive / obs column questions. Body is
+//                          the same primer `mus h5ad howto` prints.
+//   mus-de-deposit       — DE-specific. Triggers on differential-
+//                          expression deposit questions. Body is the
+//                          same primer `mus de howto` prints.
+//
+// The umbrella + the two specific skills overlap intentionally —
+// Claude's skill loader picks the most relevant match, and the user
+// asking "help me deposit this DE file" loads BOTH the umbrella
+// (mental model) AND the DE-specific primer (format detection
+// detail). The bodies don't duplicate; the umbrella points at
+// `mus de howto` / `mus h5ad howto` for detail.
+//
+// Bodies for the specific skills reuse the howto text inline so we
+// don't thread file IO into the installer. The umbrella body lives
+// in mus_skill_body.go.
 var bundledSkills = []bundledSkill{
+	{
+		Name: "mus",
+		Description: "Use this skill when the user asks for help with `mus` — the " +
+			"KU Leuven BADS-lab research data management CLI — to organize, " +
+			"annotate, validate, deposit, or upload research data. Triggers on " +
+			"requests like 'help me mus import this', 'help me deposit this DE / " +
+			"h5ad file', 'set up mus for this folder', 'configure mus.cfg', " +
+			"'upload to iRODS', 'upload to KU Leuven RDM', 'link an ELN " +
+			"experiment', 'why is mus refusing my upload', or any ingest / " +
+			"annotation / deposit workflow involving mus.cfg, *.mus sidecars, " +
+			"iRODS via iron, eLabJournal (ELN), or the lab S3 catalog (anthive). " +
+			"Covers h5ad single-cell deposits, differential-expression (DE) " +
+			"deposits, co-ingest (h5ad+DE in one upload), vocab validation, " +
+			"keyring / secrets setup, the cascading config model, and verify-" +
+			"after-upload. Run this skill's pre-flight checklist BEFORE any " +
+			"deposit guidance.",
+		Body: musSkillBody,
+	},
 	{
 		Name: "mus-h5ad-deposit",
 		Description: "Use this skill when the user asks how to annotate, prepare, " +
@@ -173,6 +212,23 @@ var bundledSkills = []bundledSkill{
 			"frontmatter — title, sha256, obsnum_include, top_cat, group, " +
 			"group_id, default_dataset, etc.).",
 		Body: h5adHowtoText,
+	},
+	{
+		Name: "mus-de-deposit",
+		Description: "Use this skill when the user asks how to deposit, annotate, " +
+			"or validate a differential-expression (DE) result table for the lab " +
+			"catalog (anthive) — typical phrasing: 'help me mus import this DE " +
+			"file', 'deposit this DESeq2 / edgeR / scanpy / seurat / glmmseq / " +
+			"glmmtmb / long-format DE table', 'why is mus de check failing', or " +
+			"'co-ingest this h5ad + DE pair'. Covers format auto-detection from " +
+			"column signatures, the required de_* mus.cfg keys (data_project, " +
+			"de_format, de_dataset_id / de_dataset_h5ad), optional fields " +
+			"(de_term, de_contrast, de_covariates, de_reference_type, " +
+			"de_cluster_obs_column, de_description, de_software_version), the " +
+			"long-format auto-stamp (de_term=auto, de_contrast=auto), the " +
+			"`mus de check` + `mus s3 upload` gate, and the co-ingest folder " +
+			"layout (h5ad + de/ subdir in one upload).",
+		Body: deHowtoText,
 	},
 }
 
