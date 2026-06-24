@@ -1,0 +1,269 @@
+package cli
+
+// Action handlers for `mus serve` — the ones that DO things rather
+// than read/write metadata. Split out from serve_handlers.go to
+// keep concerns separated:
+//
+//   serve_handlers.go  — config / cascade / vocab reads + writes
+//   serve_actions.go   — pre-flight checklist + upload trigger
+//
+// Both files share the same package-level state (serveRoot,
+// resolveDirParam helpers).
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"strings"
+
+	"codeberg.org/mfiers/mus/internal/config"
+	"codeberg.org/mfiers/mus/internal/secret"
+)
+
+// registerServeActions wires the action endpoints onto mux. Called
+// from registerServeRoutes() alongside registerServeAPI().
+func registerServeActions(mux *http.ServeMux) {
+	mux.HandleFunc("/api/preflight", apiPreflight)
+	mux.HandleFunc("/api/upload", apiUpload)
+}
+
+// preflightCheck is one row of the pre-flight checklist. The UI
+// renders these as green/red chips on the right panel.
+type preflightCheck struct {
+	Key     string `json:"key"`         // machine name (e.g. "data_project")
+	Label   string `json:"label"`       // human label ("data_project set")
+	OK      bool   `json:"ok"`          // green ✓ vs red ✗
+	Detail  string `json:"detail"`      // present-tense one-liner (the value, or what's missing)
+	BlockUp bool   `json:"block_upload"` // if false, upload still proceeds (warning only)
+}
+
+// apiPreflight returns the checklist for the folder ?dir=<rel>:
+//
+//   - data_project set in the cascade
+//   - ELN state declared (linked OR disabled)
+//   - iRODS secret stored in the keyring
+//   - at least one file present besides mus.cfg / sidecars
+//
+// The UI uses this to gate the upload button. Server-side, the
+// underlying `mus * upload` command does its OWN gating — preflight
+// is purely for early UX feedback.
+func apiPreflight(w http.ResponseWriter, r *http.Request) {
+	abs, rel, err := resolveDirParam(r.URL.Query().Get("dir"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	checks := []preflightCheck{}
+
+	env, _ := config.Load(abs)
+
+	// data_project
+	dp := ""
+	if env != nil {
+		dp = env.String("data_project")
+	}
+	checks = append(checks, preflightCheck{
+		Key:     "data_project",
+		Label:   "data_project set",
+		OK:      dp != "",
+		Detail:  ifEmpty(dp, "missing — set with `mus config set data_project <name>`"),
+		BlockUp: true,
+	})
+
+	// ELN state (linked OR disabled)
+	elnLinked := env != nil && env.String("eln_experiment_id") != ""
+	elnDisabled := env != nil && env.String("eln_disabled") == "true"
+	switch {
+	case elnLinked:
+		checks = append(checks, preflightCheck{
+			Key: "eln", Label: "ELN linked", OK: true,
+			Detail: "experiment " + env.String("eln_experiment_id"), BlockUp: true,
+		})
+	case elnDisabled:
+		checks = append(checks, preflightCheck{
+			Key: "eln", Label: "ELN disabled for this folder", OK: true,
+			Detail: "eln_disabled=true (no experiment linked)", BlockUp: true,
+		})
+	default:
+		checks = append(checks, preflightCheck{
+			Key: "eln", Label: "ELN state declared", OK: false,
+			Detail:  "undecided — link with `mus eln link <id>` or disable",
+			BlockUp: true,
+		})
+	}
+
+	// iRODS secret in keyring
+	irodsSecretOK := false
+	irodsSecretDetail := "not stored — `mus secret store irods`"
+	if store, serr := secret.Open(); serr == nil {
+		if _, err := store.Get("irods"); err == nil {
+			irodsSecretOK = true
+			irodsSecretDetail = "stored (" + store.Backend() + ")"
+		}
+	}
+	checks = append(checks, preflightCheck{
+		Key:    "irods_secret",
+		Label:  "iRODS secret stored",
+		OK:     irodsSecretOK,
+		Detail: irodsSecretDetail,
+		// Don't block — user might be uploading to S3 only. The
+		// underlying command will fail loudly if irods is needed
+		// and the secret's missing.
+		BlockUp: false,
+	})
+
+	// At least one data file present (ignore mus.cfg + sidecars + dotfiles)
+	dataFileCount := 0
+	if entries, err := os.ReadDir(abs); err == nil {
+		for _, e := range entries {
+			n := e.Name()
+			if e.IsDir() || strings.HasPrefix(n, ".") || n == "mus.cfg" ||
+				strings.HasSuffix(n, ".mus") {
+				continue
+			}
+			dataFileCount++
+		}
+	}
+	checks = append(checks, preflightCheck{
+		Key:     "files",
+		Label:   "data files present",
+		OK:      dataFileCount > 0,
+		Detail:  fmt.Sprintf("%d non-config file(s) in this folder", dataFileCount),
+		BlockUp: true,
+	})
+
+	writeJSON(w, map[string]any{
+		"dir":    rel,
+		"checks": checks,
+	})
+}
+
+// apiUpload shells out to `mus irods upload` or `mus s3 upload`,
+// streaming the combined stdout+stderr back as the response body.
+//
+// Method: POST. Body: {"dir": "<rel>", "destination": "irods"|"s3"}.
+// The browser opens the response as a stream and shows lines in a
+// log pane. Synchronous — the request stays open for the duration
+// of the upload. For v1 this is fine; multi-GB uploads block the
+// browser tab, but lab depositors are uploading folders measured
+// in hundreds of MB.
+//
+// We invoke OURSELVES (os.Executable) rather than re-implementing
+// the upload logic. This way the underlying gates (ELN, vocab,
+// sidecar check) run identically to the CLI path — no second
+// implementation to drift.
+func apiUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Dir         string `json:"dir"`
+		Destination string `json:"destination"` // "irods" or "s3"
+		Message     string `json:"message"`     // -m / --message (required)
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("decode body: %v", err), http.StatusBadRequest)
+		return
+	}
+	abs, _, err := resolveDirParam(req.Dir)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Message) == "" {
+		http.Error(w,
+			"upload message is required — describe what/why this upload is happening",
+			http.StatusBadRequest)
+		return
+	}
+	if strings.ContainsAny(req.Message, "\r\n") {
+		http.Error(w, "upload message must be a single line (no newlines)",
+			http.StatusBadRequest)
+		return
+	}
+	var subcommand []string
+	switch req.Destination {
+	case "irods":
+		subcommand = []string{"irods", "upload", "-m", req.Message, abs}
+	case "s3":
+		subcommand = []string{"s3", "upload", "-m", req.Message, abs}
+	default:
+		http.Error(w,
+			`destination must be "irods" or "s3"`,
+			http.StatusBadRequest)
+		return
+	}
+	self, err := os.Executable()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("locate mus binary: %v", err), http.StatusInternalServerError)
+		return
+	}
+	// Drive output as a stream — the browser polls with `fetch()`
+	// and reads response.body chunks. Content-Type: text/plain with
+	// X-Content-Type-Options nosniff keeps it from being treated as
+	// HTML.
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "no-store")
+	flusher, _ := w.(http.Flusher)
+	flushLine := func(line string) {
+		fmt.Fprintln(w, line)
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+	flushLine(fmt.Sprintf("$ mus %s", strings.Join(subcommand, " ")))
+	cmd := exec.CommandContext(r.Context(), self, subcommand...)
+	cmd.Dir = abs
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		flushLine(fmt.Sprintf("ERROR: stdout pipe: %v", err))
+		return
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		flushLine(fmt.Sprintf("ERROR: stderr pipe: %v", err))
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		flushLine(fmt.Sprintf("ERROR: start: %v", err))
+		return
+	}
+	// Fan-in stdout+stderr into the response. Two scanners so we
+	// preserve any interleaving the child produced; line buffering
+	// keeps the browser responsive without an explicit poll.
+	done := make(chan struct{}, 2)
+	go streamLines(stdout, flushLine, done)
+	go streamLines(stderr, flushLine, done)
+	<-done
+	<-done
+	if err := cmd.Wait(); err != nil {
+		flushLine(fmt.Sprintf("EXIT: %v", err))
+		return
+	}
+	flushLine("EXIT: 0 (upload completed)")
+}
+
+// streamLines copies lines from r into flushLine until r is
+// exhausted. Signals done when finished. bufio.Scanner has a
+// default 64KB line cap — mus output lines are short, well under.
+func streamLines(r io.Reader, flush func(string), done chan<- struct{}) {
+	defer func() { done <- struct{}{} }()
+	sc := bufio.NewScanner(r)
+	for sc.Scan() {
+		flush(sc.Text())
+	}
+}
+
+// ifEmpty returns fallback when s is empty, else s.
+func ifEmpty(s, fallback string) string {
+	if s == "" {
+		return fallback
+	}
+	return s
+}

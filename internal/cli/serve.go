@@ -1,5 +1,7 @@
 package cli
 
+//go:generate echo "ui/index.html embedded via go:embed below"
+
 // `mus serve` — a localhost web GUI for the non-CLI lab depositors.
 //
 // Boots an HTTP server on 127.0.0.1:<random-port>, generates a
@@ -19,6 +21,7 @@ package cli
 import (
 	"context"
 	"crypto/rand"
+	_ "embed"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -28,12 +31,14 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 )
+
+//go:embed ui/index.html
+var serveIndexHTML []byte
 
 // serveOptions holds the flag values for `mus serve`. Pulled out
 // so the handler tests can construct one without going through
@@ -279,48 +284,17 @@ func registerServeRoutes(mux *http.ServeMux, _ string) {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write([]byte(serveSkeletonHTML))
+		w.Write(serveIndexHTML)
 	})
 	mux.HandleFunc("/api/ping", func(w http.ResponseWriter, r *http.Request) {
 		// Tiny smoke endpoint — proves the auth + localhost guard
-		// path works. Echoes the server's cwd so the UI placeholder
-		// has something to display.
+		// path works. Echoes the server's cwd so the UI can show
+		// the user where they are.
 		cwd, _ := os.Getwd()
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		fmt.Fprintf(w, "%s", cwd)
 	})
 	registerServeAPI(mux)
+	registerServeActions(mux)
 }
 
-// serveSkeletonHTML is the placeholder front-end for the first
-// commit — enough to confirm auth + the browser open path work
-// end to end. The next commit replaces it with the real UI.
-const serveSkeletonHTML = `<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>mus serve</title>
-<style>
-  body { font: 14px system-ui, sans-serif; max-width: 60ch; margin: 4em auto; color: #222; }
-  code { background: #f4f4f4; padding: 1px 4px; border-radius: 3px; }
-  .ok { color: #2a7a2a; }
-</style>
-</head>
-<body>
-  <h1>mus serve <span class="ok">✓</span></h1>
-  <p>The server is up and authenticated. The annotation UI lands in the next commit.</p>
-  <p>You're running from: <code id="cwd">…</code></p>
-  <p>API stub: <code>/api/ping</code> returns <code>pong</code> when auth works.</p>
-  <p>Stop the server with Ctrl-C in the terminal where you started it.</p>
-  <script>
-    fetch('/api/ping').then(r => r.text()).then(t => {
-      document.getElementById('cwd').textContent = t;
-    }).catch(() => {});
-  </script>
-</body>
-</html>`
-
-// _ = strings to keep the import alive if a future commit drops
-// every use; one StringPrefix-style helper is on the way in the
-// next commit so let's not churn imports.
-var _ = strings.TrimSpace
