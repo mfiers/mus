@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -119,7 +120,61 @@ func (c *Client) Upload(ctx context.Context, local, remote string, opts UploadOp
 		args = append(args, "--ignore="+strings.Join(opts.Ignore, ","))
 	}
 	args = append(args, local, remote)
-	return c.Stream(ctx, args...)
+	return c.streamWithErrCapture(ctx, remote, args...)
+}
+
+// streamWithErrCapture runs `iron <args...>` like Stream — stdout/
+// stderr connect to the parent process for live progress — but ALSO
+// tees stderr into a buffer so on error we can post-mortem the
+// captured text and rewrite well-known iRODS error codes into
+// actionable messages.
+//
+// The `target` argument is the remote object/collection involved;
+// it's used to enrich error messages with the specific path the
+// failure refers to.
+func (c *Client) streamWithErrCapture(ctx context.Context, target string, args ...string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	full := append(append([]string{}, c.ExtraArgs...), args...)
+	cmd := exec.CommandContext(ctx, c.binary(), full...)
+	var stderrCap bytes.Buffer
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrCap)
+	cmd.Stdin = os.Stdin
+	err := cmd.Run()
+	if err == nil {
+		return nil
+	}
+	if enriched := enrichIronError(stderrCap.String(), target); enriched != "" {
+		return fmt.Errorf("iron %s: %s", strings.Join(full, " "), enriched)
+	}
+	return fmt.Errorf("iron %s: %w", strings.Join(full, " "), err)
+}
+
+// enrichIronError scans `stderr` (captured output of an iron run)
+// for known iRODS error markers and returns a friendlier
+// explanation. Returns "" when no marker matched — caller falls
+// back to the raw error.
+//
+// Only one marker is rewritten today: UNIX_FILE_OPEN_ERR, which
+// fires when the iRODS server's local replica is owned by a
+// different unix uid than the user attempting to overwrite — a
+// real-world failure mode for shared lab data. Extend this map
+// as other actionable error codes surface in the wild.
+func enrichIronError(stderr, target string) string {
+	if strings.Contains(stderr, "UNIX_FILE_OPEN_ERR") {
+		return fmt.Sprintf(
+			"iRODS refused to overwrite %s — the existing replica is owned by "+
+				"another user, so the iRODS server's local filesystem won't let "+
+				"you write to it. Options: ask the original uploader to grant "+
+				"you write access via `iron chmod write <user> %s`, "+
+				"or upload under a different remote path. "+
+				"(If your bytes already match, mus would have skipped — check "+
+				"`iron checksum %s` against your local sha256.)",
+			target, target, target)
+	}
+	return ""
 }
 
 // UploadOpts toggles flags for Upload. See `iron upload --help` for full
