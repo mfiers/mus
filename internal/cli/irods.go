@@ -225,6 +225,31 @@ func newIRODSUploadCmd() *cobra.Command {
 	return cmd
 }
 
+// irodsRemoteMatchesLocal reports whether the iRODS object at
+// `remote` exists AND its catalog-recorded checksum equals
+// `localSum`. Used to short-circuit `iron upload` when there's
+// nothing to transfer — avoids both the wasted bandwidth AND the
+// UNIX_FILE_OPEN_ERR that fires when a colleague tries to
+// overwrite a replica owned by a different user.
+//
+// Best-effort: any error fetching the remote checksum (missing
+// object, iron unreachable, decode failure) returns false so the
+// caller falls through to a real upload. Comparison is
+// case-insensitive — Mango sometimes records the checksum prefixed
+// with `sha2:` or in base64; iron.Checksum normalises but the safe
+// thing here is to never claim a match on borderline output.
+func irodsRemoteMatchesLocal(ctx context.Context, client *iron.Client,
+	remote, localSum string) bool {
+	if localSum == "" {
+		return false
+	}
+	remoteSum, err := client.Checksum(ctx, remote)
+	if err != nil || remoteSum == "" {
+		return false
+	}
+	return strings.EqualFold(localSum, remoteSum)
+}
+
 func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, overrideDataProject, overrideRemoteName string, pack packMode, postELNComment, forceH5adUpload bool, message string) error {
 	dir, err := workingDir(cmd)
 	if err != nil {
@@ -331,16 +356,34 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 		// File arg: existing flat code path below.
 		remote := remoteCollection + "/" + filepath.Base(abs)
 		fmt.Printf("→ %s\n", remote)
-		if err := client.Upload(ctx, abs, remote, opts); err != nil {
+
+		// Compute the local sha256 BEFORE invoking iron so we can
+		// short-circuit when the remote already holds identical bytes.
+		// hashcache makes this stat-fast on the warm path.
+		sum, err := cache.Sum(abs)
+		if err != nil {
 			return err
 		}
 
-		var sum string
-		if !st.IsDir() {
-			sum, err = cache.Sum(abs)
-			if err != nil {
-				return err
-			}
+		// Skip-if-same: if the remote already exists and its
+		// catalog-recorded checksum matches our local sha256, there's
+		// nothing to upload. Two reasons this matters:
+		//   1) iron's default change-detection uses size+modtime, so
+		//      a touched-but-unchanged file gets re-uploaded for no
+		//      reason.
+		//   2) when a colleague is updating a file originally
+		//      uploaded by a different user, iron's overwrite path
+		//      fails with UNIX_FILE_OPEN_ERR because the iRODS
+		//      server's local replica is owned by the original user.
+		//      If the bytes match, there's no need to overwrite.
+		// Any error from `iron checksum` (missing object, unreachable
+		// server, decode failure) falls through to a real upload —
+		// we never make the user wait on a stale check.
+		if irodsRemoteMatchesLocal(ctx, client, remote, sum) {
+			fmt.Fprintf(cmd.OutOrStdout(),
+				"   ✓ sha256 matches remote — skipping upload (sidecar will be refreshed)\n")
+		} else if err := client.Upload(ctx, abs, remote, opts); err != nil {
+			return err
 		}
 
 		// write/update sidecar
