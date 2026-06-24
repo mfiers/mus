@@ -119,30 +119,37 @@ func TestMusSkill_BodyMentionsDEFlow(t *testing.T) {
 	if musBody == "" {
 		t.Fatal("`mus` umbrella skill not found")
 	}
-	// Each bullet here represents a step Claude must perform when
-	// helping a depositor — losing any is a regression.
+	// Each phrase here is load-bearing: Claude needs the verbatim
+	// command name when helping a depositor. Losing any is a
+	// regression — DO NOT add a phrase that doesn't correspond to
+	// a real mus command (`mus secret status`, `mus eln status`,
+	// `mus eln upload`, `mus verify` — all fake; have been removed).
 	requirements := []string{
 		"Pre-flight checklist",
-		"mus eln status",
-		"mus secret status",
-		"mus config show",
+		"mus config show",   // shows cascade by default (no --cascade flag)
+		"mus secret list",   // real, NOT `mus secret status`
+		"mus eln login",     // real, replaces the wrong `mus secret store eln`
+		"mus s3 login",      // real, replaces the wrong `mus secret store s3`
+		"iron auth",         // iRODS auth lives in iron's store
 		"mus de check",
 		"mus h5ad check",
 		"mus s3 upload",
+		"mus irods get",     // real, NOT `mus irods download`
+		"mus irods check",   // real, NOT `mus verify`
 		"de_dataset_id",
 		"data_project",
 		"DON'T skip",
 		// mus 0.2.27+ behaviours — losing any of these means Claude
 		// won't surface them when the depositor hits the situation.
-		"Skip-if-same",        // iRODS upload skip on matching sha256
-		"irods_group",         // group ACL config key
-		"UNIX_FILE_OPEN_ERR",  // mapped-error message
-		"--force",             // overwrite-prompt bypass
+		"Skip-if-same",       // iRODS upload skip on matching sha256
+		"irods_group",        // group ACL config key
+		"UNIX_FILE_OPEN_ERR", // mapped-error message
+		"--force",            // overwrite-prompt bypass
 		// mus 0.2.28+ — anthive catalog cross-check
 		"Catalog cross-check",
 		"--no-catalog-check",
 		"GROUP_ID of Sun2026", // the canonical bug case
-		// mus serve GUI (added skill 0.2.26+)
+		// mus serve GUI (added in 0.2.26+)
 		"mus serve",
 	}
 	for _, req := range requirements {

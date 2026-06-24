@@ -21,7 +21,6 @@ import (
 	"strings"
 
 	"codeberg.org/mfiers/mus/internal/config"
-	"codeberg.org/mfiers/mus/internal/secret"
 )
 
 // registerServeActions wires the action endpoints onto mux. Called
@@ -96,23 +95,28 @@ func apiPreflight(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// iRODS secret in keyring
-	irodsSecretOK := false
-	irodsSecretDetail := "not stored — `mus secret store irods`"
-	if store, serr := secret.Open(); serr == nil {
-		if _, err := store.Get("irods"); err == nil {
-			irodsSecretOK = true
-			irodsSecretDetail = "stored (" + store.Backend() + ")"
-		}
+	// iron CLI present on PATH. iRODS auth itself lives in iron's
+	// own credentials file (NOT mus's keyring) — we can't probe that
+	// without shelling out. The binary's presence is the cheapest
+	// proxy: if iron isn't installed, the upload definitely fails.
+	// If it IS installed, auth state is its own thing and `mus irods
+	// upload` will surface the right error on misconfiguration.
+	ironOK := false
+	ironDetail := "not on PATH — install from " +
+		"https://rdm-docs.icts.kuleuven.be/mango/clients/iron.html, " +
+		"then run `iron auth` (or `mus irods login` for the canonical command)"
+	if _, err := exec.LookPath("iron"); err == nil {
+		ironOK = true
+		ironDetail = "on PATH (run `iron auth status` to verify the session)"
 	}
 	checks = append(checks, preflightCheck{
-		Key:    "irods_secret",
-		Label:  "iRODS secret stored",
-		OK:     irodsSecretOK,
-		Detail: irodsSecretDetail,
+		Key:    "iron_cli",
+		Label:  "iron CLI available",
+		OK:     ironOK,
+		Detail: ironDetail,
 		// Don't block — user might be uploading to S3 only. The
-		// underlying command will fail loudly if irods is needed
-		// and the secret's missing.
+		// underlying `mus irods upload` will fail loudly if iron
+		// is needed and missing.
 		BlockUp: false,
 	})
 

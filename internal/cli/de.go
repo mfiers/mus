@@ -362,7 +362,7 @@ func checkOneDEFile(cache *hashcache.Cache, path string, env *config.Env,
 	default:
 		out.skip("catalog-check",
 			"anthive manifest unavailable AND `vark` not on PATH — "+
-				"`mus secret store s3` to enable manifest, or `--no-catalog-check` to silence")
+				"`mus s3 login` to enable manifest, or `--no-catalog-check` to silence")
 	}
 
 	// 5. Method (auto-fill from format).
@@ -599,7 +599,7 @@ func isGzippedFile(path string) bool {
 // loadCatalogForDECheck loads the anthive catalog manifest for the
 // run, or returns nil when:
 //   - --no-catalog-check was passed (explicit opt-out)
-//   - S3 creds aren't configured (`mus secret store s3` not run)
+//   - S3 creds aren't configured (`mus s3 login` not run)
 //   - manifest fetch + cache both fail
 //
 // All non-fatal — the caller decides what to do without a manifest
@@ -621,7 +621,7 @@ func loadCatalogForDECheck(ctx context.Context, noCatalogCheck bool,
 	if err != nil {
 		fmt.Fprintln(stderr,
 			"note: S3 credentials not set up — catalog cross-check skipped. "+
-				"Run `mus secret store s3` to enable, or pass --no-catalog-check to silence.")
+				"Run `mus s3 login` to enable, or pass --no-catalog-check to silence.")
 		return nil
 	}
 	client, err := s3client.New(ctx, cfg)

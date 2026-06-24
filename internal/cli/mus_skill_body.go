@@ -53,15 +53,24 @@ for this folder", or specific tasks like depositing a DE file or an h5ad.
 Before discussing what the user wants to upload, understand current state:
 
   1. ` + "`mus version`" + ` — confirm mus is installed
-  2. ` + "`mus config show --cascade`" + ` — show the resolved cascade for cwd
-     and which files contributed each key
-  3. ` + "`mus secret status`" + ` — confirm iRODS + ELN tokens are stored
-  4. ` + "`mus eln status`" + ` — folder's ELN state (linked / disabled / undecided)
-  5. List the folder ` + "(`ls -la`)" + ` — inventory of files to ingest
+  2. ` + "`mus config show`" + ` — effective cascade for cwd (default mode;
+     pass ` + "`--local`" + ` for just-this-folder, ` + "`-j`" + ` for JSON).
+     ` + "`mus config files`" + ` lists the cfg files that contributed.
+  3. ` + "`mus secret list`" + ` — names of stored secrets (e.g. ` + "`eln`" + `,
+     ` + "`s3_*`" + `). iRODS auth lives in iron's own store, not mus's —
+     check it via ` + "`iron auth status`" + ` (or just try ` + "`iron ls`" + `).
+  4. Look at the ` + "`mus config show`" + ` output for ELN state:
+     ` + "`eln_experiment_id=...`" + ` → linked; ` + "`eln_disabled=true`" + ` →
+     disabled; neither → undecided (upload will refuse).
+  5. List the folder ` + "(`ls -la`)" + ` — inventory of files to ingest.
 
 If any of these surface a problem, FIX it before depositing:
-  - missing ` + "`data_project`" + ` → ask user; ` + "`mus config set data_project <name>`" + `
-  - missing iRODS secret → ` + "`mus secret store irods`" + `
+  - missing ` + "`data_project`" + ` → ` + "`mus config set data_project <name>`" + `
+  - iRODS auth not set up → ` + "`iron auth`" + ` (with the gbiomed zone +
+    host pre-filled; ` + "`mus irods login`" + ` prints the canonical
+    command for you)
+  - missing ELN token → ` + "`mus eln login`" + ` (interactive wizard)
+  - missing S3 config → ` + "`mus s3 login`" + ` (interactive wizard)
   - ELN undecided → ` + "`mus eln link <id>`" + ` OR ` + "`mus eln disable`" + `
 
 ## Sub-workflows
@@ -112,8 +121,9 @@ Run ` + "`mus de howto`" + ` for the canonical primer. Key points:
      cascade down).
   4. **Find the upstream h5ad.** Required: ` + "`de_dataset_id`" + ` (preferred)
      OR ` + "`de_dataset_h5ad`" + `. Ask the user which h5ad this DE was
-     computed from. If they don't know, ` + "`mus s3 ls <data_project>`" + `
-     lists what's in their catalog area.
+     computed from. If they don't know, ` + "`mus irods find <data_project>`" + `
+     lists iRODS catalog entries; the anthive web catalog and the
+     ` + "`vark`" + ` CLI (if installed) browse the live datasets.
   5. **Optional but valuable:** ` + "`de_term`" + `, ` + "`de_contrast`" + `,
      ` + "`de_covariates`" + `, ` + "`de_description`" + `, ` + "`de_software_version`" + `,
      ` + "`de_reference_type`" + ` (vsreference | pairwise | vsgrandmean),
@@ -132,9 +142,15 @@ Run ` + "`mus de howto`" + ` for the canonical primer. Key points:
 ### iRODS upload (general lab data, NOT catalog)
 
 - ` + "`mus irods upload <FILE-OR-FOLDER> -m <message>`" + ` — recursive, sha256-verified
-- ` + "`mus irods download <remote>`" + ` — pull back; sidecar verifies
-- ` + "`mus irods find <data_project>`" + ` — list catalog entries
+- ` + "`mus irods get <SIDECAR>`" + ` — download what each ` + "`*.mus`" + `
+  sidecar refers to (sidecar holds the remote path + sha256). Pass
+  ` + "`-f`" + ` to overwrite local; ` + "`--verify-checksum`" + ` is on by default.
+- ` + "`mus irods check <SIDECAR-OR-FOLDER>`" + ` — verify local sha256
+  against iron's reported remote checksum (round-trip sanity).
+- ` + "`mus irods find <data_project>`" + ` — list catalog entries by AVU
 - ` + "`mus irods scan`" + ` — refresh local snapshot of remote tree
+- ` + "`mus irods projects`" + ` / ` + "`mus irods project <name>`" + ` —
+  list data_projects on iRODS / most recent uploads in one
 
 **Upload behaviours worth knowing (mus 0.2.27+):**
 - **Skip-if-same.** Before invoking iron, mus runs ` + "`iron checksum <remote>`" + `.
@@ -159,39 +175,71 @@ deposit that isn't an h5ad or DE.
 
 ### ELN linkage (eLabJournal)
 
+- ` + "`mus eln login`" + ` — interactive: obtain + verify + store an
+  ELN API token (run once per user).
 - ` + "`mus eln link <experiment_id> [--data-project <dp>]`" + ` — link folder
   to an eLabJournal experiment. Resolves data_project interactively
   unless ` + "`--data-project`" + ` is passed.
 - ` + "`mus eln disable [--global]`" + ` — opt out of ELN for this folder
   (or globally for users without ELN access).
-- ` + "`mus eln update`" + ` — refresh experiment metadata in mus.cfg
-- ` + "`mus eln upload <file>`" + ` — post file or ipynb (rendered to PDF
-  via pandoc) as an experiment attachment
+- ` + "`mus eln enable [--global]`" + ` — undo a previous disable.
+- ` + "`mus eln update`" + ` — refresh experiment metadata in mus.cfg from
+  the server.
+- ` + "`mus eln whoami`" + ` — print the user the stored token authenticates as.
+
+(Post-upload ELN commenting is automatic on a successful
+` + "`mus irods upload`" + ` to a linked folder; there's no standalone
+` + "`mus eln upload`" + ` command — attachments and comments piggyback
+on the upload + tag flows.)
 
 ### Vocab / config
 
-- ` + "`mus vocab show <field>`" + ` — list allowed values
+- ` + "`mus vocab show [<field>]`" + ` — list allowed values for one
+  or all controlled-vocab fields. ` + "`mus vocab refresh`" + ` forces
+  a fresh fetch from Codeberg (bypasses the 24h cache).
 - ` + "`mus config set <key> <value>`" + ` — write to local mus.cfg, with
   vocab validation; ` + "`--force`" + ` to bypass (off-vocab terms then carry
   a stderr warning)
-- ` + "`mus config show [--cascade]`" + ` — effective values + sources
+- ` + "`mus config unset <key>`" + ` — remove a key from local mus.cfg
+- ` + "`mus config show`" + ` — effective cascade (default).
+  ` + "`--local`" + ` shows only this folder; ` + "`-j`" + ` for JSON.
+- ` + "`mus config files`" + ` — list every cfg file that contributes
+  to the cascade for cwd (root-most first).
 - ` + "`mus config migrate`" + ` — move legacy ` + "`.env`" + ` keys → ` + "`mus.cfg`" + `
   (auto-runs on every mus command; manual invocation rare)
 
-### Secrets
+### Credentials / auth
 
-- ` + "`mus secret store irods`" + ` — interactive (paste iRODS token)
-- ` + "`mus secret store eln`" + ` — interactive (eLabJournal API key)
-- ` + "`mus secret status`" + ` — which secrets are present
+Each subsystem owns its own auth path — there's no single
+` + "`mus secret store …`" + ` command. Use the per-system wizard:
+
+- ` + "`mus eln login`" + ` — interactive: ELN API token (stored in
+  mus's keyring).
+- ` + "`mus s3 login`" + ` — interactive: endpoint + region + bucket +
+  access key + secret key (5 fields, all stored in mus's keyring).
+- ` + "`iron auth`" + ` — iRODS auth (NOT a mus command; iron has its
+  own credentials file). ` + "`mus irods login`" + ` just prints the
+  canonical ` + "`iron auth`" + ` command with the gbiomed zone + host
+  pre-filled.
+
+To inspect what's in mus's keyring:
+
+- ` + "`mus secret list`" + ` — names of stored secrets
+- ` + "`mus secret get <name>`" + ` — print one (used in scripts)
+- ` + "`mus secret backend`" + ` — print active backend (keyring or age)
 
 Storage: zalando/go-keyring on desktop OSes; age-encrypted file
 fallback (` + "`~/.config/mus/secrets.age`" + `) for HPC login nodes.
 
 ### Verify (after upload)
 
-- ` + "`mus verify <file-or-folder>`" + ` — sha256 round-trip against the
-  remote (iRODS or S3, based on the sidecar)
-- ` + "`mus check <folder>`" + ` — local consistency (sidecar ↔ file)
+- ` + "`mus check <FILE-OR-FOLDER>`" + ` — local consistency
+  (sidecar ↔ file sha256). ` + "`-r/--recursive`" + ` walks dirs.
+- ` + "`mus irods check <SIDECAR-OR-FOLDER>`" + ` — sha256 round-trip
+  against the remote via ` + "`iron checksum`" + `. The post-upload
+  truth-check.
+- ` + "`mus s3 check`" + ` — verify S3 credentials + bucket
+  reachability (config-level check, not per-file).
 
 ### Local web GUI
 
@@ -232,19 +280,21 @@ When a user says "help me mus import this DE file" (or similar):
 
 ## Things to avoid
 
-- Don't run uploads (` + "`mus s3 upload`" + `, ` + "`mus irods upload`" + `,
-  ` + "`mus eln upload`" + `) without explicit user confirmation — external
-  side effects.
+- Don't run uploads (` + "`mus s3 upload`" + `, ` + "`mus irods upload`" + `)
+  without explicit user confirmation — external side effects.
 - Don't write secrets to ` + "`mus.cfg`" + ` — they go in the keyring via
-  ` + "`mus secret store`" + `.
+  ` + "`mus eln login`" + ` / ` + "`mus s3 login`" + ` (iRODS auth lives in
+  iron's own store; use ` + "`iron auth`" + `).
 - Don't silently ` + "`--force`" + ` past a vocab error — surface the value
   to the user; offer EITHER to broaden the vocab upstream (file an
   issue at codeberg.org/mfiers/mus) OR to ` + "`--force`" + ` locally with
   a clear note about the consequences.
 - Don't suggest editing ` + "`*.mus`" + ` sidecars by hand — they're
-  regenerated by ` + "`mus h5ad check`" + ` / ` + "`mus de check`" + `.
+  regenerated by ` + "`mus h5ad check`" + ` / ` + "`mus de check`" + ` /
+  ` + "`mus tag`" + ` / ` + "`mus irods upload`" + `.
 - Don't claim "upload succeeded" based on the command's exit code
-  alone — run ` + "`mus verify`" + ` to confirm sha256 round-trip.
+  alone — run ` + "`mus irods check`" + ` (or ` + "`mus check`" + ` for
+  local-only) to confirm sha256 round-trip.
 - Don't downgrade or skip the pre-flight on a "small task" —
   catching a missing ELN linkage in step 4 saves a much more
   frustrating failure at upload time.
