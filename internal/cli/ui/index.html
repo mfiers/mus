@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>mus serve</title>
+<style>
+  /* Vanilla single-file UI. No framework. ~6 lab depositors, not a SaaS
+     product — readability beats slickness. */
+  * { box-sizing: border-box; }
+  body {
+    font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          system-ui, sans-serif;
+    margin: 0; color: #222; background: #fafafa;
+  }
+  header {
+    background: #fff; border-bottom: 1px solid #e0e0e0;
+    padding: 0.6em 1em; display: flex; align-items: center; gap: 0.6em;
+  }
+  header h1 { font-size: 1.1em; margin: 0; flex: 1; }
+  header .root { color: #666; font-family: ui-monospace, Menlo, monospace; }
+  main {
+    display: grid; grid-template-columns: 280px 1fr 360px;
+    gap: 0; height: calc(100vh - 50px);
+  }
+  .panel { padding: 0.8em; overflow-y: auto; background: #fff; }
+  .panel + .panel { border-left: 1px solid #e0e0e0; }
+  .panel h2 {
+    font-size: 0.95em; margin: 0 0 0.6em 0;
+    color: #444; text-transform: uppercase; letter-spacing: 0.05em;
+    border-bottom: 1px solid #eee; padding-bottom: 0.3em;
+  }
+
+  /* Folder tree */
+  .crumbs { font-family: ui-monospace, Menlo, monospace; font-size: 0.85em;
+            color: #888; margin-bottom: 0.6em; word-break: break-all; }
+  .crumbs a { color: #2563eb; text-decoration: none; cursor: pointer; }
+  .crumbs a:hover { text-decoration: underline; }
+  .tree-row {
+    display: flex; align-items: center; padding: 0.25em 0.4em;
+    border-radius: 4px; cursor: pointer; gap: 0.4em;
+  }
+  .tree-row:hover { background: #f0f4ff; }
+  .tree-row .icon { width: 1.1em; text-align: center; color: #888; }
+  .tree-row.dir .icon { color: #d97706; }
+  .tree-row .name { flex: 1; font-family: ui-monospace, Menlo, monospace;
+                    font-size: 0.9em; word-break: break-all; }
+  .tree-row .badge {
+    font-size: 0.7em; color: #16a34a; background: #ecfdf5;
+    padding: 0.05em 0.4em; border-radius: 3px;
+  }
+  .tree-row.sidecar { opacity: 0.55; }
+
+  /* Cascade chips */
+  .chips { display: flex; flex-wrap: wrap; gap: 0.3em; margin-bottom: 0.8em; }
+  .chip {
+    background: #f3f4f6; border-radius: 4px; padding: 0.2em 0.5em;
+    font-size: 0.82em; font-family: ui-monospace, Menlo, monospace;
+  }
+  .chip b { color: #444; }
+
+  /* Form */
+  form.kv { display: flex; flex-direction: column; gap: 0.6em; }
+  form.kv label { font-size: 0.85em; color: #555; }
+  form.kv input, form.kv select {
+    width: 100%; padding: 0.4em 0.5em;
+    border: 1px solid #d0d0d0; border-radius: 4px; font-size: 0.92em;
+    font-family: ui-monospace, Menlo, monospace;
+  }
+  form.kv .row { display: flex; gap: 0.4em; }
+  form.kv .row > * { flex: 1; }
+  button {
+    padding: 0.4em 0.8em; font-size: 0.9em;
+    background: #2563eb; color: #fff; border: 0; border-radius: 4px;
+    cursor: pointer;
+  }
+  button:hover { background: #1d4ed8; }
+  button.ghost { background: #fff; color: #2563eb; border: 1px solid #2563eb; }
+  button.ghost:hover { background: #eff6ff; }
+  button.danger { background: #b91c1c; }
+  button.danger:hover { background: #991b1b; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* Preflight + upload */
+  .checks { list-style: none; padding: 0; margin: 0 0 0.8em 0; }
+  .checks li {
+    display: flex; align-items: center; gap: 0.5em;
+    padding: 0.3em 0; border-bottom: 1px solid #f0f0f0;
+  }
+  .checks .mark { font-weight: bold; width: 1em; text-align: center; }
+  .checks .ok  .mark { color: #16a34a; }
+  .checks .bad .mark { color: #dc2626; }
+  .checks .label { flex: 1; }
+  .checks .detail { color: #888; font-size: 0.85em; }
+
+  pre.log {
+    background: #0f172a; color: #e2e8f0; padding: 0.6em; border-radius: 4px;
+    font-family: ui-monospace, Menlo, monospace; font-size: 0.82em;
+    max-height: 40vh; overflow-y: auto; white-space: pre-wrap;
+    margin: 0.6em 0 0 0;
+  }
+
+  .notice { color: #92400e; background: #fef3c7; padding: 0.4em 0.6em;
+            border-radius: 4px; font-size: 0.85em; margin-bottom: 0.6em; }
+  .error  { color: #991b1b; background: #fee2e2; padding: 0.4em 0.6em;
+            border-radius: 4px; font-size: 0.85em; margin-bottom: 0.6em;
+            white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<header>
+  <h1>mus serve</h1>
+  <span class="root" id="server-root">…</span>
+</header>
+<main>
+  <!-- LEFT: folder tree -->
+  <section class="panel" id="panel-tree">
+    <h2>Folders</h2>
+    <div class="crumbs" id="crumbs"></div>
+    <div id="tree"></div>
+  </section>
+
+  <!-- MIDDLE: annotation form -->
+  <section class="panel" id="panel-form">
+    <h2>Annotation</h2>
+    <div id="form-status"></div>
+    <div id="cascade-chips" class="chips"></div>
+    <form class="kv" id="cfg-form" autocomplete="off">
+      <div id="cfg-fields"></div>
+      <div class="row">
+        <input id="cfg-newkey" placeholder="new key (e.g. organism)"
+               list="vocab-keys">
+        <input id="cfg-newval" placeholder="value">
+        <button type="button" id="cfg-add">Add</button>
+      </div>
+      <datalist id="vocab-keys">
+        <option value="data_project">
+        <option value="organism">
+        <option value="tissue">
+        <option value="cell_type">
+        <option value="technology">
+        <option value="suspension_type">
+        <option value="sex">
+        <option value="access">
+        <option value="source">
+        <option value="license">
+        <option value="disease">
+        <option value="de_dataset_id">
+        <option value="de_dataset_h5ad">
+        <option value="de_format">
+        <option value="de_description">
+      </datalist>
+    </form>
+    <h2 style="margin-top: 1.2em;">ELN</h2>
+    <div id="eln-status"></div>
+    <div class="row">
+      <input id="eln-expid" placeholder="experiment_id (e.g. 12345)">
+      <input id="eln-dp" placeholder="data_project (required)">
+      <button type="button" id="eln-link">Link</button>
+    </div>
+    <div style="margin-top: 0.5em;">
+      <button type="button" class="ghost" id="eln-disable">Disable ELN here</button>
+      <button type="button" class="ghost" id="eln-enable">Re-enable</button>
+    </div>
+  </section>
+
+  <!-- RIGHT: upload action -->
+  <section class="panel" id="panel-upload">
+    <h2>Pre-flight</h2>
+    <ul class="checks" id="checks"></ul>
+    <h2>Upload</h2>
+    <label for="upload-msg" style="font-size: 0.85em; color: #555;">
+      Message (required — what / why):
+    </label>
+    <input id="upload-msg" placeholder="e.g. initial deposit of Fiers2025 DE tables">
+    <div class="row" style="margin-top: 0.5em;">
+      <button type="button" id="upload-irods" class="ghost">iRODS</button>
+      <button type="button" id="upload-s3" class="ghost">S3 (catalog)</button>
+    </div>
+    <pre class="log" id="upload-log" hidden></pre>
+  </section>
+</main>
+
+<script>
+'use strict';
+
+// ── state ──────────────────────────────────────────────────────────────
+let currentDir = '';   // relative to serveRoot; "" = root
+let serverRoot = '';
+
+// ── helpers ────────────────────────────────────────────────────────────
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const text = await r.text();
+  if (!r.ok) throw new Error(text.trim() || ('HTTP ' + r.status));
+  return text ? JSON.parse(text) : null;
+}
+async function apiPost(path, body) {
+  return api(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+function el(tag, attrs, ...children) {
+  const e = document.createElement(tag);
+  if (attrs) for (const k in attrs) {
+    if (k === 'class')      e.className = attrs[k];
+    else if (k === 'on')    for (const ev in attrs.on) e.addEventListener(ev, attrs.on[ev]);
+    else if (k.startsWith('data-')) e.setAttribute(k, attrs[k]);
+    else                    e[k] = attrs[k];
+  }
+  for (const c of children) {
+    if (c == null) continue;
+    e.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+  }
+  return e;
+}
+function showError(div, msg) {
+  div.innerHTML = '';
+  div.appendChild(el('div', { class: 'error' }, msg));
+}
+function showNotice(div, msg) {
+  div.innerHTML = '';
+  div.appendChild(el('div', { class: 'notice' }, msg));
+}
+function clearStatus(div) { div.innerHTML = ''; }
+
+// ── boot ───────────────────────────────────────────────────────────────
+async function boot() {
+  try {
+    const r = await api('/api/cwd');
+    serverRoot = r.root;
+    document.getElementById('server-root').textContent = serverRoot;
+  } catch (e) { /* leave header blank */ }
+  await refreshAll();
+}
+
+async function refreshAll() {
+  renderCrumbs();
+  await Promise.all([refreshTree(), refreshCascade(), refreshPreflight()]);
+}
+
+// ── crumbs ─────────────────────────────────────────────────────────────
+function renderCrumbs() {
+  const c = document.getElementById('crumbs');
+  c.innerHTML = '';
+  c.appendChild(el('a', { on: { click: () => navigate('') } }, '<root>'));
+  if (!currentDir) return;
+  const parts = currentDir.split('/');
+  let acc = '';
+  for (const p of parts) {
+    c.appendChild(document.createTextNode(' / '));
+    acc = acc ? acc + '/' + p : p;
+    const target = acc;
+    c.appendChild(el('a', { on: { click: () => navigate(target) } }, p));
+  }
+}
+function navigate(dir) {
+  currentDir = dir;
+  refreshAll();
+}
+
+// ── folder tree ────────────────────────────────────────────────────────
+async function refreshTree() {
+  const root = document.getElementById('tree');
+  root.innerHTML = '';
+  try {
+    const r = await api('/api/tree?dir=' + encodeURIComponent(currentDir));
+    for (const e of r.entries) {
+      const isDir = e.kind === 'dir';
+      const row = el('div', { class: 'tree-row ' + e.kind,
+                              on: { click: () => isDir && navigate(e.path) } });
+      row.appendChild(el('span', { class: 'icon' }, isDir ? '▸' : (e.kind === 'sidecar' ? '·' : '◦')));
+      row.appendChild(el('span', { class: 'name' }, e.name));
+      if (e.has_mus_cfg) row.appendChild(el('span', { class: 'badge' }, 'cfg'));
+      root.appendChild(row);
+    }
+    if (r.entries.length === 0) {
+      root.appendChild(el('div', { class: 'notice' }, 'empty folder'));
+    }
+  } catch (e) {
+    showError(root, 'tree error: ' + e.message);
+  }
+}
+
+// ── cascade + form ─────────────────────────────────────────────────────
+async function refreshCascade() {
+  const chips = document.getElementById('cascade-chips');
+  const fields = document.getElementById('cfg-fields');
+  const status = document.getElementById('form-status');
+  chips.innerHTML = ''; fields.innerHTML = ''; clearStatus(status);
+  try {
+    const r = await api('/api/cascade?dir=' + encodeURIComponent(currentDir));
+    for (const v of r.values) {
+      chips.appendChild(el('div', { class: 'chip' },
+        el('b', null, v.key + '='), v.value + (v.is_list ? ' (list)' : '')));
+    }
+    // Editable rows for the local-folder cfg only — we don't know
+    // which file a cascade value came from at the chip-rendering
+    // layer, so the rule is: chips show effective cascade,
+    // explicit "edit" goes through the new-key form.
+    refreshELNState(r.values);
+  } catch (e) {
+    showError(status, 'cascade error: ' + e.message);
+  }
+}
+
+function refreshELNState(values) {
+  const elnDiv = document.getElementById('eln-status');
+  elnDiv.innerHTML = '';
+  const mp = {};
+  for (const v of values) mp[v.key] = v.value;
+  if (mp.eln_experiment_id) {
+    elnDiv.appendChild(el('div', { class: 'chip' },
+      el('b', null, 'linked: '),
+      'experiment ' + mp.eln_experiment_id + ' (' + (mp.eln_experiment_name || '?') + ')'));
+  } else if (mp.eln_disabled === 'true') {
+    elnDiv.appendChild(el('div', { class: 'chip' },
+      el('b', null, 'disabled '), 'for this folder'));
+  } else {
+    elnDiv.appendChild(el('div', { class: 'notice' },
+      'ELN state undecided — link an experiment or disable below'));
+  }
+}
+
+// ── add a key ──────────────────────────────────────────────────────────
+document.getElementById('cfg-add').addEventListener('click', async () => {
+  const key = document.getElementById('cfg-newkey').value.trim();
+  const value = document.getElementById('cfg-newval').value.trim();
+  const status = document.getElementById('form-status');
+  if (!key || !value) {
+    showError(status, 'both key and value are required');
+    return;
+  }
+  try {
+    const r = await apiPost('/api/config/set',
+      { dir: currentDir, key, value, force: false });
+    if (r.key !== key || r.value !== value) {
+      showNotice(status,
+        'normalised → ' + r.key + '=' + r.value + (r.notes ? '\n' + r.notes : ''));
+    } else {
+      showNotice(status, 'saved ' + r.key + '=' + r.value);
+    }
+    document.getElementById('cfg-newkey').value = '';
+    document.getElementById('cfg-newval').value = '';
+    refreshAll();
+  } catch (e) {
+    showError(status, e.message);
+  }
+});
+
+// Wire vocab autocomplete on the new-value field reactively as the
+// user picks a key.
+document.getElementById('cfg-newkey').addEventListener('change', async () => {
+  const key = document.getElementById('cfg-newkey').value.trim();
+  const val = document.getElementById('cfg-newval');
+  let dl = document.getElementById('vocab-values');
+  if (dl) dl.remove();
+  if (!key) { val.removeAttribute('list'); return; }
+  try {
+    const r = await api('/api/vocab/' + encodeURIComponent(key));
+    if (r.vocab && r.values && r.values.length) {
+      dl = el('datalist', { id: 'vocab-values' });
+      for (const v of r.values) dl.appendChild(el('option', { value: v }));
+      document.body.appendChild(dl);
+      val.setAttribute('list', 'vocab-values');
+    } else {
+      val.removeAttribute('list');
+    }
+  } catch (e) { val.removeAttribute('list'); }
+});
+
+// ── ELN actions ────────────────────────────────────────────────────────
+document.getElementById('eln-link').addEventListener('click', async () => {
+  const expid = document.getElementById('eln-expid').value.trim();
+  const dp = document.getElementById('eln-dp').value.trim();
+  const status = document.getElementById('form-status');
+  if (!expid || !dp) {
+    showError(status, 'experiment_id AND data_project are required');
+    return;
+  }
+  try {
+    await apiPost('/api/eln/link',
+      { dir: currentDir, experiment_id: expid, data_project: dp });
+    showNotice(status, 'linked to experiment ' + expid + ' (data_project=' + dp + ')');
+    refreshAll();
+  } catch (e) { showError(status, e.message); }
+});
+document.getElementById('eln-disable').addEventListener('click', async () => {
+  const status = document.getElementById('form-status');
+  try {
+    await apiPost('/api/eln/disable', { dir: currentDir });
+    showNotice(status, 'ELN disabled for this folder');
+    refreshAll();
+  } catch (e) { showError(status, e.message); }
+});
+document.getElementById('eln-enable').addEventListener('click', async () => {
+  const status = document.getElementById('form-status');
+  try {
+    await apiPost('/api/eln/enable', { dir: currentDir });
+    showNotice(status, 'ELN re-enabled (now undecided — link an experiment)');
+    refreshAll();
+  } catch (e) { showError(status, e.message); }
+});
+
+// ── pre-flight ─────────────────────────────────────────────────────────
+async function refreshPreflight() {
+  const ul = document.getElementById('checks');
+  ul.innerHTML = '';
+  try {
+    const r = await api('/api/preflight?dir=' + encodeURIComponent(currentDir));
+    let canUpload = true;
+    for (const c of r.checks) {
+      const li = el('li', { class: c.ok ? 'ok' : 'bad' });
+      li.appendChild(el('span', { class: 'mark' }, c.ok ? '✓' : '✗'));
+      li.appendChild(el('span', { class: 'label' }, c.label));
+      li.appendChild(el('span', { class: 'detail' }, c.detail));
+      ul.appendChild(li);
+      if (!c.ok && c.block_upload) canUpload = false;
+    }
+    document.getElementById('upload-irods').disabled = !canUpload;
+    document.getElementById('upload-s3').disabled = !canUpload;
+  } catch (e) {
+    showError(ul, 'preflight error: ' + e.message);
+  }
+}
+
+// ── upload ─────────────────────────────────────────────────────────────
+async function triggerUpload(destination) {
+  const message = document.getElementById('upload-msg').value.trim();
+  const log = document.getElementById('upload-log');
+  if (!message) {
+    log.hidden = false;
+    log.textContent = 'ERROR: upload message is required — describe what / why.';
+    return;
+  }
+  if (!confirm('Run `mus ' + destination + ' upload -m "' + message +
+               '"` on ' + (currentDir || '<root>') +
+               '? This has external side effects.')) {
+    return;
+  }
+  log.hidden = false;
+  log.textContent = '';
+  const btns = [document.getElementById('upload-irods'),
+                document.getElementById('upload-s3')];
+  btns.forEach(b => b.disabled = true);
+  try {
+    const r = await fetch('/api/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dir: currentDir, destination, message }),
+    });
+    if (!r.ok) {
+      const t = await r.text();
+      log.textContent = 'ERROR: ' + t;
+      return;
+    }
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      log.textContent += decoder.decode(value, { stream: true });
+      log.scrollTop = log.scrollHeight;
+    }
+  } catch (e) {
+    log.textContent += '\n\nERROR: ' + e.message;
+  } finally {
+    refreshPreflight();
+  }
+}
+document.getElementById('upload-irods').addEventListener('click',
+  () => triggerUpload('irods'));
+document.getElementById('upload-s3').addEventListener('click',
+  () => triggerUpload('s3'));
+
+// ── go ─────────────────────────────────────────────────────────────────
+boot();
+</script>
+</body>
+</html>

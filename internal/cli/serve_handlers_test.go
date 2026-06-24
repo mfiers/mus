@@ -1,0 +1,444 @@
+package cli
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// withServeRoot temporarily points the package-level serveRoot at
+// `root` and returns a cleanup. Tests that touch the api/* handlers
+// need this because serve_handlers.go gates every path-resolving
+// call against the captured root.
+func withServeRoot(t *testing.T, root string) func() {
+	t.Helper()
+	prev := serveRoot
+	serveRoot = root
+	return func() { serveRoot = prev }
+}
+
+func TestResolveDirParam_AcceptsRoot(t *testing.T) {
+	root := t.TempDir()
+	defer withServeRoot(t, root)()
+	for _, in := range []string{"", "."} {
+		abs, rel, err := resolveDirParam(in)
+		if err != nil {
+			t.Errorf("resolveDirParam(%q): %v", in, err)
+			continue
+		}
+		if abs != root {
+			t.Errorf("resolveDirParam(%q) abs: %q, want %q", in, abs, root)
+		}
+		if rel != "" {
+			t.Errorf("resolveDirParam(%q) rel: %q, want empty", in, rel)
+		}
+	}
+}
+
+func TestResolveDirParam_RefusesAbsolutePath(t *testing.T) {
+	root := t.TempDir()
+	defer withServeRoot(t, root)()
+	for _, in := range []string{"/", "/etc", "/etc/passwd"} {
+		_, _, err := resolveDirParam(in)
+		if err == nil {
+			t.Errorf("resolveDirParam(%q): expected absolute-path rejection", in)
+		}
+	}
+}
+
+func TestResolveDirParam_RefusesEscape(t *testing.T) {
+	root := t.TempDir()
+	defer withServeRoot(t, root)()
+	for _, in := range []string{"..", "../..", "../etc"} {
+		_, _, err := resolveDirParam(in)
+		if err == nil {
+			t.Errorf("resolveDirParam(%q): expected escape error", in)
+		}
+	}
+}
+
+func TestResolveDirParam_AcceptsSubdir(t *testing.T) {
+	root := t.TempDir()
+	subdir := filepath.Join(root, "data", "raw")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	defer withServeRoot(t, root)()
+	abs, rel, err := resolveDirParam("data/raw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if abs != subdir {
+		t.Errorf("abs: got %q, want %q", abs, subdir)
+	}
+	if rel != "data/raw" {
+		t.Errorf("rel: got %q, want %q", rel, "data/raw")
+	}
+}
+
+func TestAPITree_HappyPath(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "data.h5ad"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "data.h5ad.mus"), []byte("sha=x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "scripts", "mus.cfg"),
+		[]byte("data_project=Fiers2025\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer withServeRoot(t, root)()
+
+	r := httptest.NewRequest(http.MethodGet, "/api/tree?dir=", nil)
+	w := httptest.NewRecorder()
+	apiTree(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200; body: %s", w.Code, w.Body)
+	}
+	var resp struct {
+		Dir     string      `json:"dir"`
+		Entries []treeEntry `json:"entries"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	// scripts/ is a dir with mus.cfg → HasMusCfg true.
+	// dirs come first by sort policy.
+	if len(resp.Entries) != 3 {
+		t.Fatalf("expected 3 entries; got %d: %+v", len(resp.Entries), resp.Entries)
+	}
+	if resp.Entries[0].Name != "scripts" || resp.Entries[0].Kind != "dir" {
+		t.Errorf("dir-first ordering broken: %+v", resp.Entries)
+	}
+	if !resp.Entries[0].HasMusCfg {
+		t.Errorf("scripts/ should be flagged has_mus_cfg=true")
+	}
+	// sidecar classified separately.
+	var sawSidecar bool
+	for _, e := range resp.Entries {
+		if e.Kind == "sidecar" && e.Name == "data.h5ad.mus" {
+			sawSidecar = true
+		}
+	}
+	if !sawSidecar {
+		t.Errorf(".mus sidecar should be kind=sidecar in the listing")
+	}
+}
+
+func TestAPITree_RefusesEscape(t *testing.T) {
+	root := t.TempDir()
+	defer withServeRoot(t, root)()
+	r := httptest.NewRequest(http.MethodGet, "/api/tree?dir=../etc", nil)
+	w := httptest.NewRecorder()
+	apiTree(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("escape attempt: status %d, want 400", w.Code)
+	}
+}
+
+func TestAPICascade_FlatRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "mus.cfg"),
+		[]byte("data_project=Fiers2025\norganism=human\ntissue=cortex,hippocampus\n"),
+		0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer withServeRoot(t, root)()
+
+	r := httptest.NewRequest(http.MethodGet, "/api/cascade?dir=", nil)
+	w := httptest.NewRecorder()
+	apiCascade(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200; body: %s", w.Code, w.Body)
+	}
+	var resp struct {
+		Values []cascadeKey `json:"values"`
+		Files  []string     `json:"files"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	keys := map[string]cascadeKey{}
+	for _, v := range resp.Values {
+		keys[v.Key] = v
+	}
+	if keys["data_project"].Value != "Fiers2025" {
+		t.Errorf("data_project: %+v", keys["data_project"])
+	}
+	if keys["organism"].Value != "human" {
+		t.Errorf("organism: %+v", keys["organism"])
+	}
+	tv := keys["tissue"]
+	if !tv.IsList {
+		t.Errorf("tissue should be is_list=true: %+v", tv)
+	}
+	if tv.Value != "cortex,hippocampus" {
+		t.Errorf("tissue value: got %q, want comma-joined", tv.Value)
+	}
+	if len(resp.Files) == 0 {
+		t.Error("expected at least one contributing cfg file")
+	}
+}
+
+func TestShouldHideInTree(t *testing.T) {
+	hide := []string{".git", ".DS_Store", ".vscode"}
+	show := []string{"data.tsv", "mus.cfg", ".env" /* legacy mus config */, "data.h5ad.mus"}
+	for _, n := range hide {
+		if !shouldHideInTree(n) {
+			t.Errorf("expected %q to be hidden", n)
+		}
+	}
+	for _, n := range show {
+		if shouldHideInTree(n) {
+			t.Errorf("expected %q to be visible", n)
+		}
+	}
+}
+
+func TestAPIVocab_KnownField(t *testing.T) {
+	// Use the embedded vocab — works even when offline.
+	r := httptest.NewRequest(http.MethodGet, "/api/vocab/organism", nil)
+	w := httptest.NewRecorder()
+	apiVocab(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d", w.Code)
+	}
+	var resp struct {
+		Field  string   `json:"field"`
+		Vocab  bool     `json:"vocab"`
+		Values []string `json:"values"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if !resp.Vocab {
+		t.Errorf("organism should be a vocab-controlled field")
+	}
+	if len(resp.Values) == 0 {
+		t.Errorf("expected non-empty values for organism")
+	}
+}
+
+func TestAPIVocab_UncontrolledFieldEmptyOK(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/api/vocab/note", nil)
+	w := httptest.NewRecorder()
+	apiVocab(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), `"vocab": false`) {
+		t.Errorf("expected vocab:false for uncontrolled field; got %s", w.Body.String())
+	}
+}
+
+func TestAPIVocab_RefusesSlashesInField(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/api/vocab/foo/bar", nil)
+	w := httptest.NewRecorder()
+	apiVocab(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for slash in field; got %d", w.Code)
+	}
+}
+
+// --- write endpoints ---------------------------------------------------------
+
+// postJSON is a tiny helper for invoking the write handlers from tests.
+func postJSON(handler http.HandlerFunc, body any) *httptest.ResponseRecorder {
+	buf, _ := json.Marshal(body)
+	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(string(buf)))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler(w, r)
+	return w
+}
+
+func TestAPIConfigSet_WritesUncontrolledKey(t *testing.T) {
+	root := t.TempDir()
+	defer withServeRoot(t, root)()
+	w := postJSON(apiConfigSet, map[string]any{
+		"dir": "", "key": "data_project", "value": "Fiers2025",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d; body: %s", w.Code, w.Body)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "mus.cfg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "data_project=Fiers2025") {
+		t.Errorf("mus.cfg missing expected key=value; got: %s", data)
+	}
+}
+
+func TestAPIConfigSet_NormalisesVocab(t *testing.T) {
+	root := t.TempDir()
+	defer withServeRoot(t, root)()
+	// "HuMaN" should round-trip to "human" via the vocab resolver.
+	w := postJSON(apiConfigSet, map[string]any{
+		"dir": "", "key": "organism", "value": "HuMaN",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d; body: %s", w.Code, w.Body)
+	}
+	var resp struct {
+		Key, Value string
+	}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.Value != "human" {
+		t.Errorf("value normalisation: got %q, want %q", resp.Value, "human")
+	}
+}
+
+func TestAPIConfigSet_RejectsOffVocabWithoutForce(t *testing.T) {
+	root := t.TempDir()
+	defer withServeRoot(t, root)()
+	w := postJSON(apiConfigSet, map[string]any{
+		"dir": "", "key": "organism", "value": "klingon",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for off-vocab; got %d; body: %s", w.Code, w.Body)
+	}
+	if _, err := os.Stat(filepath.Join(root, "mus.cfg")); err == nil {
+		t.Errorf("mus.cfg should NOT have been written on vocab rejection")
+	}
+}
+
+func TestAPIConfigSet_RejectsGetMethod(t *testing.T) {
+	root := t.TempDir()
+	defer withServeRoot(t, root)()
+	r := httptest.NewRequest(http.MethodGet, "/api/config/set", nil)
+	w := httptest.NewRecorder()
+	apiConfigSet(w, r)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET should be rejected; got %d", w.Code)
+	}
+}
+
+func TestAPIConfigSet_RefusesEscape(t *testing.T) {
+	root := t.TempDir()
+	defer withServeRoot(t, root)()
+	w := postJSON(apiConfigSet, map[string]any{
+		"dir": "../etc", "key": "data_project", "value": "Fiers2025",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("escape attempt: status %d, want 400", w.Code)
+	}
+}
+
+func TestAPIConfigUnset_RemovesKey(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "mus.cfg"),
+		[]byte("data_project=Fiers2025\norganism=human\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer withServeRoot(t, root)()
+	w := postJSON(apiConfigUnset, map[string]any{"dir": "", "key": "organism"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d; body: %s", w.Code, w.Body)
+	}
+	data, _ := os.ReadFile(filepath.Join(root, "mus.cfg"))
+	if strings.Contains(string(data), "organism=") {
+		t.Errorf("organism should have been removed; got: %s", data)
+	}
+	if !strings.Contains(string(data), "data_project=Fiers2025") {
+		t.Errorf("data_project should remain; got: %s", data)
+	}
+}
+
+func TestAPIConfigUnset_RejectsEmptyKey(t *testing.T) {
+	root := t.TempDir()
+	defer withServeRoot(t, root)()
+	w := postJSON(apiConfigUnset, map[string]any{"dir": "", "key": ""})
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("empty key: status %d, want 400", w.Code)
+	}
+}
+
+func TestAPIELNDisable_WritesFlag(t *testing.T) {
+	root := t.TempDir()
+	defer withServeRoot(t, root)()
+	w := postJSON(apiELNDisable, map[string]any{"dir": ""})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d; body: %s", w.Code, w.Body)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "mus.cfg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "eln_disabled=true") {
+		t.Errorf("eln_disabled flag missing; got: %s", data)
+	}
+}
+
+func TestAPIELNLink_RequiresDataProject(t *testing.T) {
+	root := t.TempDir()
+	defer withServeRoot(t, root)()
+	w := postJSON(apiELNLink, map[string]any{
+		"dir":           "",
+		"experiment_id": "12345",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 (data_project missing); got %d; body: %s", w.Code, w.Body)
+	}
+	if !strings.Contains(w.Body.String(), "data_project") {
+		t.Errorf("error should name the missing field; got: %s", w.Body)
+	}
+}
+
+func TestAPIELNLink_RejectsBadDataProject(t *testing.T) {
+	root := t.TempDir()
+	defer withServeRoot(t, root)()
+	w := postJSON(apiELNLink, map[string]any{
+		"dir":           "",
+		"experiment_id": "12345",
+		"data_project":  "../etc/passwd",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 (bad data_project); got %d; body: %s", w.Code, w.Body)
+	}
+}
+
+func TestAPIELNLink_RejectsGetMethod(t *testing.T) {
+	root := t.TempDir()
+	defer withServeRoot(t, root)()
+	r := httptest.NewRequest(http.MethodGet, "/api/eln/link", nil)
+	w := httptest.NewRecorder()
+	apiELNLink(w, r)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET should be rejected; got %d", w.Code)
+	}
+}
+
+func TestAPIELNLink_RejectsBadExperimentID(t *testing.T) {
+	root := t.TempDir()
+	defer withServeRoot(t, root)()
+	w := postJSON(apiELNLink, map[string]any{
+		"dir":           "",
+		"experiment_id": "not-a-number",
+		"data_project":  "Fiers2025",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 (bad experiment id); got %d; body: %s", w.Code, w.Body)
+	}
+}
+
+func TestAPIELNEnable_RemovesFlag(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "mus.cfg"),
+		[]byte("eln_disabled=true\ndata_project=Fiers2025\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer withServeRoot(t, root)()
+	w := postJSON(apiELNEnable, map[string]any{"dir": ""})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d; body: %s", w.Code, w.Body)
+	}
+	data, _ := os.ReadFile(filepath.Join(root, "mus.cfg"))
+	if strings.Contains(string(data), "eln_disabled") {
+		t.Errorf("eln_disabled should have been removed; got: %s", data)
+	}
+}
