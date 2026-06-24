@@ -241,6 +241,29 @@ func (c *Client) Upload(ctx context.Context, bucket, key, localPath string,
 	return res, nil
 }
 
+// GetObject reads an entire object into memory and returns the bytes.
+// Suitable for small objects only — manifest JSONs (~50-200 KB),
+// config blobs, vocab files. Multi-GB downloads should stream via a
+// dedicated Download method (not yet needed).
+//
+// Returns the SDK error verbatim on failure so callers can match
+// against typed `types.NoSuchKey`, `types.NoSuchBucket`, etc.
+func (c *Client) GetObject(ctx context.Context, bucket, key string) ([]byte, error) {
+	out, err := c.s3.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer out.Body.Close()
+	body, err := io.ReadAll(out.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read %s/%s body: %w", bucket, key, err)
+	}
+	return body, nil
+}
+
 // HeadObject returns the object's content length + ETag, used by
 // post-upload verification. Returns the SDK error verbatim on
 // failure (caller decides if it's fatal).

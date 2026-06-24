@@ -23,10 +23,13 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"codeberg.org/mfiers/mus/internal/anthivecatalog"
 	"codeberg.org/mfiers/mus/internal/config"
 	"codeberg.org/mfiers/mus/internal/de"
 	"codeberg.org/mfiers/mus/internal/h5ad"
 	"codeberg.org/mfiers/mus/internal/hashcache"
+	"codeberg.org/mfiers/mus/internal/s3client"
+	"codeberg.org/mfiers/mus/internal/secret"
 	"codeberg.org/mfiers/mus/internal/sidecar"
 	"codeberg.org/mfiers/mus/internal/vark"
 )
@@ -44,7 +47,7 @@ func newDECmd() *cobra.Command {
 
 func newDECheckCmd() *cobra.Command {
 	var formatOverride, message string
-	var silent bool
+	var silent, noCatalogCheck bool
 	cmd := &cobra.Command{
 		Use:   "check -m MESSAGE [FOLDER|FILE...]",
 		Short: "validate DE result files; stamp <basename>.mus on PASS",
@@ -81,7 +84,7 @@ func newDECheckCmd() *cobra.Command {
 			if msg == "" {
 				return fmt.Errorf("`mus de check` requires a -m / --message describing the analysis")
 			}
-			return runDECheck(cmd, args, formatOverride, msg, silent)
+			return runDECheck(cmd, args, formatOverride, msg, silent, noCatalogCheck)
 		},
 	}
 	cmd.Flags().StringVarP(&message, "message", "m", "",
@@ -92,6 +95,9 @@ func newDECheckCmd() *cobra.Command {
 		"override format detection (one of: "+strings.Join(de.FormatNames(), ", ")+")")
 	cmd.Flags().BoolVar(&silent, "silent", false,
 		"suppress OK / SKIP lines; only print failures + final summary")
+	cmd.Flags().BoolVar(&noCatalogCheck, "no-catalog-check", false,
+		"skip the anthive catalog manifest cross-check (use offline, "+
+			"or when S3 creds aren't set up yet)")
 	return cmd
 }
 
@@ -122,7 +128,7 @@ type dePassFile struct {
 	Cluster    string
 }
 
-func runDECheck(cmd *cobra.Command, args []string, formatOverride, message string, silent bool) error {
+func runDECheck(cmd *cobra.Command, args []string, formatOverride, message string, silent, noCatalogCheck bool) error {
 	if len(args) == 0 {
 		args = []string{"."}
 	}
@@ -166,6 +172,12 @@ func runDECheck(cmd *cobra.Command, args []string, formatOverride, message strin
 		return e, nil
 	}
 
+	// Load the anthive catalog manifest once for the whole run. nil
+	// when --no-catalog-check, when S3 creds aren't configured, or
+	// when the fetch fails irrecoverably (no cache + no network);
+	// downstream falls back to the vark check in that case.
+	manifest := loadCatalogForDECheck(cmd.Context(), noCatalogCheck, stderr)
+
 	var passed []dePassFile
 	checked, failed := 0, 0
 	anyUnsetSoft := false
@@ -177,7 +189,7 @@ func runDECheck(cmd *cobra.Command, args []string, formatOverride, message strin
 			failed++
 			continue
 		}
-		ok, info, unsetSoft := checkOneDEFile(cache, f, envForFile, override, message, out)
+		ok, info, unsetSoft := checkOneDEFile(cache, f, envForFile, override, message, manifest, out)
 		checked++
 		if unsetSoft {
 			anyUnsetSoft = true
@@ -245,7 +257,8 @@ func runDECheck(cmd *cobra.Command, args []string, formatOverride, message strin
 // file path is in the per-file header above the lines, never
 // repeated per row.
 func checkOneDEFile(cache *hashcache.Cache, path string, env *config.Env,
-	formatOverride de.Format, message string, out *deReporter) (bool, dePassFile, bool) {
+	formatOverride de.Format, message string, manifest *anthivecatalog.Manifest,
+	out *deReporter) (bool, dePassFile, bool) {
 
 	out.fileHeader(path)
 
@@ -321,22 +334,35 @@ func checkOneDEFile(cache *hashcache.Cache, path string, env *config.Env,
 		}
 	}
 
-	// 4d. Optional vark cross-check. Catalog query happens only
-	//     when there's a meaningful question to answer:
-	//     - de_dataset_id set → check if the 3-char code resolves
-	//     - de_dataset_h5ad set AND NOT co-ingest → check by title
-	//     - co-ingest case → SKIP with "expected for new h5ad"
-	//       (the catalog won't have it yet by construction)
+	// 4d. Anthive catalog cross-check. Authoritative — the manifest
+	//     is anthive's source of truth, so a HARD-fail here matches
+	//     what ant-ingest will do at deposit time.
+	//
+	//     Skips:
+	//       - co-ingest case (anthive resolves at ingest)
+	//       - manifest unavailable (--no-catalog-check, no creds,
+	//         transient fetch failure with no cache)
+	//
+	//     Falls back to the vark CLI as an informational check when
+	//     the catalog itself is unavailable AND vark is installed —
+	//     covers the offline / first-time-setup case.
 	switch {
-	case !vark.Available():
-		out.skip("vark-check",
-			"`vark` not on PATH — install vark to enable pre-deposit "+
-				"catalog cross-check (https://codeberg.org/mfiers/vark)")
 	case coIngest != "":
-		out.skip("vark-check",
+		out.skip("catalog-check",
 			"co-ingest deposit — anthive assigns the dataset id at ingest, no pre-check needed")
-	default:
+	case manifest != nil:
+		if !reportCatalogCheck(manifest, dataProject, datasetID, datasetH5ad, out) {
+			return false, dePassFile{}, false
+		}
+	case vark.Available():
+		// Manifest unavailable but vark is on PATH — soft fallback.
+		out.skip("catalog-check",
+			"anthive manifest unavailable — falling back to local `vark` query")
 		reportVarkCheck(env, dataProject, datasetID, datasetH5ad, out)
+	default:
+		out.skip("catalog-check",
+			"anthive manifest unavailable AND `vark` not on PATH — "+
+				"`mus secret store s3` to enable manifest, or `--no-catalog-check` to silence")
 	}
 
 	// 5. Method (auto-fill from format).
@@ -568,6 +594,175 @@ func findCoIngestH5ad(dePath, basename string) string {
 // other.
 func isGzippedFile(path string) bool {
 	return strings.EqualFold(filepath.Ext(path), ".gz")
+}
+
+// loadCatalogForDECheck loads the anthive catalog manifest for the
+// run, or returns nil when:
+//   - --no-catalog-check was passed (explicit opt-out)
+//   - S3 creds aren't configured (`mus secret store s3` not run)
+//   - manifest fetch + cache both fail
+//
+// All non-fatal — the caller decides what to do without a manifest
+// (typically: fall back to vark, or skip the check entirely).
+// Always prints an informational line to stderr so the depositor
+// knows what happened.
+func loadCatalogForDECheck(ctx context.Context, noCatalogCheck bool,
+	stderr io.Writer) *anthivecatalog.Manifest {
+	if noCatalogCheck {
+		fmt.Fprintln(stderr, "note: --no-catalog-check — anthive catalog cross-check skipped")
+		return nil
+	}
+	store, err := secret.Open()
+	if err != nil {
+		fmt.Fprintf(stderr, "note: secret store unavailable (%v) — catalog cross-check skipped\n", err)
+		return nil
+	}
+	cfg, err := loadS3Config(store)
+	if err != nil {
+		fmt.Fprintln(stderr,
+			"note: S3 credentials not set up — catalog cross-check skipped. "+
+				"Run `mus secret store s3` to enable, or pass --no-catalog-check to silence.")
+		return nil
+	}
+	client, err := s3client.New(ctx, cfg)
+	if err != nil {
+		fmt.Fprintf(stderr, "note: S3 client init failed (%v) — catalog cross-check skipped\n", err)
+		return nil
+	}
+	mf, err := anthivecatalog.Load(ctx, anthivecatalog.LoadOptions{
+		Fetcher: client, Bucket: cfg.Bucket,
+	}, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "note: anthive catalog manifest unavailable (%v) — cross-check skipped\n", err)
+		return nil
+	}
+	return mf
+}
+
+// reportCatalogCheck runs the manifest-based validation. Returns
+// true when the file should be allowed through, false when it must
+// HARD-fail. The classification covers:
+//
+//   - ResolveOK              → OK line, return true
+//   - ResolveInactive        → warn line, return true (depositor decides)
+//   - ResolveDataProjectNew  → soft warn, return true (first deposit case)
+//   - ResolveIsGroupID       → HARD-fail with the S26/file_id hint
+//   - ResolveCrossProject    → HARD-fail (id in other data_project)
+//   - ResolveUnknown         → HARD-fail with Levenshtein suggestions
+//
+// When de_dataset_id is set, that's the primary key. When only
+// de_dataset_h5ad is set, falls back to basename lookup.
+func reportCatalogCheck(manifest *anthivecatalog.Manifest,
+	dataProject, datasetID, datasetH5ad string, out *deReporter) bool {
+
+	if datasetID != "" {
+		return reportCatalogByID(manifest, dataProject, datasetID, out)
+	}
+	if datasetH5ad != "" {
+		return reportCatalogByBasename(manifest, dataProject, datasetH5ad, out)
+	}
+	// Should be unreachable — the earlier "either id OR h5ad must
+	// be set" gate (4b) refuses files where both are empty.
+	out.skip("catalog-check", "neither de_dataset_id nor de_dataset_h5ad set")
+	return true
+}
+
+func reportCatalogByID(manifest *anthivecatalog.Manifest,
+	dataProject, datasetID string, out *deReporter) bool {
+
+	r := manifest.ResolveDatasetID(dataProject, datasetID)
+	switch r.Status {
+	case anthivecatalog.ResolveOK:
+		out.ok("catalog-check", fmt.Sprintf(
+			"de_dataset_id=%s resolves to %q in data_project=%s",
+			datasetID, r.Match.Title, dataProject))
+		return true
+
+	case anthivecatalog.ResolveInactive:
+		out.skip("catalog-check", fmt.Sprintf(
+			"de_dataset_id=%s exists in %s but is marked inactive (%q) — confirm intended",
+			datasetID, dataProject, r.Match.Title))
+		return true
+
+	case anthivecatalog.ResolveDataProjectNew:
+		out.skip("catalog-check", fmt.Sprintf(
+			"data_project=%s not yet in anthive catalog — first deposit? (anthive resolves at ingest)",
+			dataProject))
+		return true
+
+	case anthivecatalog.ResolveIsGroupID:
+		out.errf("catalog-check",
+			"de_dataset_id=%s is the GROUP_ID of data_project=%s, not a file_id. "+
+				"Did you mean one of: %s? "+
+				"(`mus config set de_dataset_id <FILE_ID>` to fix)",
+			datasetID, dataProject,
+			strings.Join(r.Hint.AvailableInProj, ", "))
+		return false
+
+	case anthivecatalog.ResolveCrossProject:
+		out.errf("catalog-check",
+			"de_dataset_id=%s exists in data_project=%s, not %s. "+
+				"The DE file's upload location determines data_project — "+
+				"move the file or pick a different file_id.",
+			datasetID, r.Hint.ForeignProject, dataProject)
+		return false
+
+	case anthivecatalog.ResolveUnknown:
+		hint := ""
+		if len(r.Hint.Suggestions) > 0 {
+			hint = fmt.Sprintf(" Did you mean: %s?", strings.Join(r.Hint.Suggestions, ", "))
+		}
+		out.errf("catalog-check",
+			"de_dataset_id=%s not found in data_project=%s.%s "+
+				"All file_ids in %s: %s",
+			datasetID, dataProject, hint, dataProject,
+			strings.Join(r.Hint.AvailableInProj, ", "))
+		return false
+	}
+	// Unreachable — every ResolveStatus is covered above. Fail
+	// closed if a new status is added without updating this switch.
+	out.errf("catalog-check",
+		"unexpected resolver status %d for de_dataset_id=%s — please file an issue",
+		r.Status, datasetID)
+	return false
+}
+
+func reportCatalogByBasename(manifest *anthivecatalog.Manifest,
+	dataProject, basename string, out *deReporter) bool {
+
+	r := manifest.ResolveBasename(dataProject, basename)
+	switch r.Status {
+	case anthivecatalog.ResolveOK:
+		out.ok("catalog-check", fmt.Sprintf(
+			"de_dataset_h5ad=%s resolves to %q in data_project=%s",
+			basename, r.Match.Title, dataProject))
+		return true
+	case anthivecatalog.ResolveInactive:
+		out.skip("catalog-check", fmt.Sprintf(
+			"de_dataset_h5ad=%s exists in %s but is marked inactive — confirm intended",
+			basename, dataProject))
+		return true
+	case anthivecatalog.ResolveDataProjectNew:
+		out.skip("catalog-check", fmt.Sprintf(
+			"data_project=%s not yet in anthive catalog — first deposit? (anthive resolves at ingest)",
+			dataProject))
+		return true
+	case anthivecatalog.ResolveUnknown:
+		hint := ""
+		if len(r.Hint.Suggestions) > 0 {
+			hint = fmt.Sprintf(" Did you mean: %s?", strings.Join(r.Hint.Suggestions, ", "))
+		}
+		out.errf("catalog-check",
+			"de_dataset_h5ad=%s not in data_project=%s.%s "+
+				"(no local sibling .h5ad found either — set `de_dataset_id` to an "+
+				"existing file_id, or co-ingest the h5ad alongside this DE)",
+			basename, dataProject, hint)
+		return false
+	}
+	out.errf("catalog-check",
+		"unexpected resolver status %d for de_dataset_h5ad=%s — please file an issue",
+		r.Status, basename)
+	return false
 }
 
 // reportVarkCheck runs the optional vark pre-flight against the

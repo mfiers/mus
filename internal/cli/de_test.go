@@ -189,11 +189,12 @@ func TestDECheck_NoCoIngest_FallsBackToVarkOrSkip(t *testing.T) {
 	if strings.Contains(stdout, "co-ingest") {
 		t.Errorf("co-ingest line should NOT appear when h5ad isn't local:\n%s", stdout)
 	}
-	// vark-check should still fire (with whatever outcome vark gives —
-	// either "not on PATH" or "not in catalog"). Just assert the line
-	// is present.
-	if !strings.Contains(stdout, "vark-check") {
-		t.Errorf("vark-check line missing:\n%s", stdout)
+	// catalog-check should still fire — the manifest IS the
+	// authoritative cross-check. In CI with no S3 creds AND no vark
+	// on PATH it skips with a setup hint; either way the line
+	// appears.
+	if !strings.Contains(stdout, "catalog-check") {
+		t.Errorf("catalog-check line missing:\n%s", stdout)
 	}
 }
 
