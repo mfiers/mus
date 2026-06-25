@@ -62,10 +62,18 @@ func apiCwd(w http.ResponseWriter, r *http.Request) {
 // treeEntry is one row of the folder/file listing.
 type treeEntry struct {
 	Name      string `json:"name"`
-	Path      string `json:"path"`       // relative to serveRoot, "/" separated
-	Kind      string `json:"kind"`       // "dir" | "file" | "sidecar"
+	Path      string `json:"path"` // relative to serveRoot, "/" separated
+	Kind      string `json:"kind"` // "dir" | "file" | "sidecar"
 	Size      int64  `json:"size,omitempty"`
 	HasMusCfg bool   `json:"has_mus_cfg,omitempty"` // dirs only — green-flag the annotated folders
+	// UploadedAt is set when this is a `file` AND its
+	// <basename>.mus sidecar carries an irods_uploaded_at
+	// timestamp. UI renders a ✓ badge so depositors see at a
+	// glance which files are already on iRODS.
+	UploadedAt string `json:"uploaded_at,omitempty"` // RFC3339 UTC; empty when no upload recorded
+	// IRODSPath surfaces the remote path the sidecar records, so
+	// the UI tooltip can show where the file landed.
+	IRODSPath string `json:"irods_path,omitempty"`
 }
 
 // apiTree lists the immediate children of ?dir=<rel> (relative to
@@ -102,6 +110,16 @@ func apiTree(w http.ResponseWriter, r *http.Request) {
 				entry.Kind = "sidecar"
 			} else {
 				entry.Kind = "file"
+				// Peek the matching sidecar (if any) for an
+				// already-uploaded marker. Best-effort: any read
+				// failure leaves the badge off rather than
+				// pretending to know the upload state.
+				scPath := sidecar.SidecarPath(filepath.Join(abs, name))
+				if doc, err := readMaybe(scPath); err == nil && doc != nil &&
+					doc.IRODS != nil && !doc.IRODS.UploadedAt.IsZero() {
+					entry.UploadedAt = doc.IRODS.UploadedAt.UTC().Format("2006-01-02T15:04:05Z")
+					entry.IRODSPath = doc.IRODS.Path
+				}
 			}
 			if info, err := e.Info(); err == nil {
 				entry.Size = info.Size()

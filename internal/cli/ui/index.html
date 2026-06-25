@@ -50,6 +50,10 @@
     font-size: 0.7em; color: #16a34a; background: #ecfdf5;
     padding: 0.05em 0.4em; border-radius: 3px;
   }
+  .tree-row .badge.uploaded {
+    color: #2563eb; background: #eff6ff; font-weight: 600;
+    cursor: help;
+  }
   .tree-row.sidecar { opacity: 0.55; }
   .tree-row.whole-folder {
     background: #fff7ed; border: 1px solid #fed7aa; margin-bottom: 0.3em;
@@ -329,6 +333,16 @@ async function refreshTree() {
       drill.appendChild(el('span', { class: 'name' }, e.name));
       row.appendChild(drill);
       if (e.has_mus_cfg) row.appendChild(el('span', { class: 'badge' }, 'cfg'));
+      // Upload-status badge: ✓ when the sidecar records an
+      // iRODS upload. Tooltip shows when + where.
+      if (e.uploaded_at) {
+        const badge = el('span', {
+          class: 'badge uploaded',
+          title: 'uploaded ' + e.uploaded_at +
+            (e.irods_path ? ' → ' + e.irods_path : ''),
+        }, '✓');
+        row.appendChild(badge);
+      }
       root.appendChild(row);
     }
     if (r.entries.length === 0) {
@@ -731,7 +745,12 @@ async function triggerUpload() {
   } catch (e) {
     log.textContent += '\n\nERROR: ' + e.message;
   } finally {
-    refreshPreflight();
+    // Re-resolve everything after an upload: the tree picks up
+    // the new ✓ badges on freshly-uploaded files, the cascade
+    // re-loads in case mus rewrote anything (it sometimes stamps
+    // eln_experiment_name etc into sidecars on first upload),
+    // and the preflight chips reflect the new state.
+    refreshAll();
   }
 }
 document.getElementById('upload-go').addEventListener('click', triggerUpload);

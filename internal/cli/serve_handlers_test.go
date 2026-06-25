@@ -133,6 +133,57 @@ func TestAPITree_HappyPath(t *testing.T) {
 	}
 }
 
+// TestAPITree_UploadedBadge — a file whose sidecar has
+// irods.uploaded_at set should surface that on the tree entry,
+// driving the UI's ✓ badge. Plain files (no sidecar) and files
+// with an empty IRODS block must NOT carry the badge.
+func TestAPITree_UploadedBadge(t *testing.T) {
+	root := t.TempDir()
+	defer withServeRoot(t, root)()
+	// File 1: data.tsv + a sidecar recording an upload.
+	if err := os.WriteFile(filepath.Join(root, "data.tsv"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sidecarContent := "" +
+		"sha256=abc\n" +
+		"size=1\n" +
+		"irods_uploaded_at=2026-06-20T10:30:00Z\n" +
+		"irods_path=/zone/coll/data.tsv\n" +
+		"irods_status=uploaded\n"
+	if err := os.WriteFile(filepath.Join(root, "data.tsv.mus"),
+		[]byte(sidecarContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// File 2: plain.tsv, no sidecar → no badge.
+	if err := os.WriteFile(filepath.Join(root, "plain.tsv"), []byte("y"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := httptest.NewRequest(http.MethodGet, "/api/tree?dir=", nil)
+	w := httptest.NewRecorder()
+	apiTree(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d; body: %s", w.Code, w.Body)
+	}
+	var resp struct {
+		Entries []treeEntry `json:"entries"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	got := map[string]treeEntry{}
+	for _, e := range resp.Entries {
+		got[e.Name] = e
+	}
+	if got["data.tsv"].UploadedAt == "" {
+		t.Errorf("data.tsv should surface uploaded_at; got %+v", got["data.tsv"])
+	}
+	if got["data.tsv"].IRODSPath != "/zone/coll/data.tsv" {
+		t.Errorf("data.tsv irods_path: got %q", got["data.tsv"].IRODSPath)
+	}
+	if got["plain.tsv"].UploadedAt != "" {
+		t.Errorf("plain.tsv has no sidecar — must not have uploaded_at; got %+v", got["plain.tsv"])
+	}
+}
+
 func TestAPITree_RefusesEscape(t *testing.T) {
 	root := t.TempDir()
 	defer withServeRoot(t, root)()
