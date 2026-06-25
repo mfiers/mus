@@ -120,6 +120,26 @@ func runIRODSUploadFolder(
 		return fmt.Errorf("%s is not a directory", srcAbs)
 	}
 
+	// Path stickiness: if this folder's sidecar already records an
+	// irods_path (a previous upload location), reuse its PARENT
+	// collection so the folder lands at the same address it did
+	// before. Without this, the v0.2.33 layout change would
+	// silently fork the namespace — re-uploading any folder that
+	// went out before the upgrade would create a second copy at
+	// the new /projects/<YEAR>/<dp>/ path.
+	if existing := existingIRODSPathFromSidecar(srcAbs); existing != "" {
+		base := filepath.Base(existing)
+		if base != "" && strings.HasSuffix(existing, "/"+base) {
+			parent := strings.TrimSuffix(existing, "/"+base)
+			if parent != "" && parent != remoteCollection {
+				fmt.Fprintf(stdout,
+					"   ↺ reusing recorded parent collection %s (sidecar's irods_path; would otherwise compute %s)\n",
+					parent, remoteCollection)
+				remoteCollection = parent
+			}
+		}
+	}
+
 	prof, err := folder.ProfileFolder(srcAbs)
 	if err != nil {
 		return fmt.Errorf("profile %s: %w", srcAbs, err)

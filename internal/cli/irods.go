@@ -242,6 +242,25 @@ func newIRODSUploadCmd() *cobra.Command {
 	return cmd
 }
 
+// existingIRODSPathFromSidecar returns the irods_path field from
+// the sidecar matching `abs`, or "" when no sidecar exists / no
+// irods_path is recorded / read fails. Used by the upload loop to
+// honour a file's previously-recorded location instead of imposing
+// a freshly-computed path on every re-upload.
+//
+// Failure modes are silent: caller falls back to the computed path
+// rather than aborting on a sidecar read error. The skip-if-same
+// gate immediately downstream will tell the depositor whether the
+// chosen path actually holds the bytes they expect.
+func existingIRODSPathFromSidecar(abs string) string {
+	scPath := sidecar.SidecarPath(abs)
+	doc, err := readMaybe(scPath)
+	if err != nil || doc == nil || doc.IRODS == nil {
+		return ""
+	}
+	return strings.TrimSpace(doc.IRODS.Path)
+}
+
 // remoteUploadState classifies the pre-upload relationship between
 // our local file and whatever's currently at the iRODS path. Three
 // states — different downstream actions for each:
@@ -460,7 +479,26 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 			continue
 		}
 		// File arg: existing flat code path below.
-		remote := remoteCollection + "/" + filepath.Base(abs)
+		//
+		// Path resolution: if this file already has a sidecar with
+		// irods_path recorded (a prior upload location), we REUSE
+		// that path rather than the freshly-computed one. Sticky
+		// per-file location — option B from the layout-migration
+		// discussion. Without this, the v0.2.33 path change would
+		// fork the namespace: every file previously uploaded under
+		// the legacy /project/<dp>/ tree would silently get
+		// re-uploaded to /projects/<YEAR>/<dp>/, leaving two iRODS
+		// copies. The sidecar's recorded path is authoritative —
+		// it's where this file actually lives, even if the cascade
+		// would now prefer a different location.
+		computedRemote := remoteCollection + "/" + filepath.Base(abs)
+		remote := computedRemote
+		if existing := existingIRODSPathFromSidecar(abs); existing != "" && existing != computedRemote {
+			remote = existing
+			fmt.Fprintf(cmd.OutOrStdout(),
+				"   ↺ reusing recorded location %s (sidecar's irods_path; would otherwise compute %s)\n",
+				existing, computedRemote)
+		}
 		fmt.Printf("→ %s\n", remote)
 
 		// Compute the local sha256 BEFORE invoking iron so we can

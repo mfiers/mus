@@ -188,6 +188,17 @@ falls back to the legacy ` + "`<irods_home>/project/<NAME>/`" + ` for
 data uploaded before this change. ` + "`mus irods projects`" + ` walks
 BOTH layouts and merges (deduplicates by name).
 
+**Per-file path stickiness.** When a file's sidecar already
+records ` + "`irods_path`" + ` (from a previous upload), mus REUSES
+that path on every subsequent upload — even if the cascade now
+computes a different one. So files uploaded under the legacy
+` + "`/project/<NAME>/`" + ` layout stay where they are; only fresh
+files (no sidecar) get the new layout. Folder uploads use the
+same rule via the folder's sibling sidecar
+(` + "`<folder>.mus`" + `). The "I'd reuse this path" decision is
+surfaced in the upload log as
+` + "`↺ reusing recorded location ...`" + `.
+
 ### iRODS upload (general lab data, NOT catalog)
 
 - ` + "`mus irods upload <FILE-OR-FOLDER> -m <message>`" + ` — recursive, sha256-verified

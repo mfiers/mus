@@ -174,6 +174,9 @@ func TestMusSkill_BodyMentionsDEFlow(t *testing.T) {
 		// mus 0.2.33+ — iRODS path layout with year segment
 		"/projects/<YEAR>/<data_project>/<exp_name>",
 		"falls back to the legacy",
+		// mus 0.2.33+ — per-file path stickiness
+		"Per-file path stickiness",
+		"reusing recorded location",
 	}
 	for _, req := range requirements {
 		if !strings.Contains(musBody, req) {
