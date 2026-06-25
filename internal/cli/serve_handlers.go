@@ -125,8 +125,13 @@ func apiTree(w http.ResponseWriter, r *http.Request) {
 // cascadeKey is one effective key in the resolved cascade.
 type cascadeKey struct {
 	Key    string `json:"key"`
-	Value  string `json:"value"`  // scalar serialisation; lists comma-joined
+	Value  string `json:"value"` // scalar serialisation; lists comma-joined
 	IsList bool   `json:"is_list"`
+	// Local is true when the key has a value set in THIS folder's
+	// mus.cfg (as opposed to inherited from an ancestor). UI shows
+	// an unset button only on local chips — unsetting an inherited
+	// key would have no effect at this level.
+	Local bool `json:"local"`
 }
 
 // apiCascade returns the resolved cascade for ?dir=<rel>, plus
@@ -145,6 +150,16 @@ func apiCascade(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("load cascade for %s: %v", rel, err), http.StatusInternalServerError)
 		return
 	}
+	// Local env (just THIS folder's mus.cfg, no ancestors) — used
+	// to tag each cascade value as local vs inherited so the UI
+	// can render an unset button only on the editable ones.
+	localEnv, _ := config.LoadLocal(abs) // best-effort; nil → none local
+	isLocal := func(key string) bool {
+		if localEnv == nil {
+			return false
+		}
+		return localEnv.Has(key)
+	}
 	all := env.All()
 	keys := make([]string, 0, len(all))
 	for k := range all {
@@ -156,9 +171,9 @@ func apiCascade(w http.ResponseWriter, r *http.Request) {
 		v := all[k]
 		switch t := v.(type) {
 		case string:
-			out = append(out, cascadeKey{Key: k, Value: t})
+			out = append(out, cascadeKey{Key: k, Value: t, Local: isLocal(k)})
 		case []string:
-			out = append(out, cascadeKey{Key: k, Value: strings.Join(t, ","), IsList: true})
+			out = append(out, cascadeKey{Key: k, Value: strings.Join(t, ","), IsList: true, Local: isLocal(k)})
 		}
 	}
 	writeJSON(w, map[string]any{

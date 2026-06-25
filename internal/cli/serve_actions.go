@@ -179,6 +179,7 @@ func apiUpload(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Paths   []string `json:"paths"`
 		Message string   `json:"message"`
+		DryRun  bool     `json:"dry_run"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, fmt.Sprintf("decode body: %v", err), http.StatusBadRequest)
@@ -210,7 +211,14 @@ func apiUpload(w http.ResponseWriter, r *http.Request) {
 		}
 		absPaths = append(absPaths, abs)
 	}
-	subcommand := append([]string{"irods", "upload", "-m", req.Message}, absPaths...)
+	subcommand := []string{"irods", "upload", "-m", req.Message}
+	if req.DryRun {
+		// iron prints what it WOULD upload without transferring
+		// bytes. Useful as a "what does mus think I'm about to do"
+		// preview before the real run.
+		subcommand = append(subcommand, "--dry-run")
+	}
+	subcommand = append(subcommand, absPaths...)
 	self, err := os.Executable()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("locate mus binary: %v", err), http.StatusInternalServerError)

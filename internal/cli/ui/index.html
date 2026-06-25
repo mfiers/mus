@@ -58,12 +58,27 @@
   .tree-row .select-spacer { width: 1em; display: inline-block; }
 
   /* Cascade chips */
-  .chips { display: flex; flex-wrap: wrap; gap: 0.3em; margin-bottom: 0.8em; }
+  .chips { display: flex; flex-direction: column; gap: 0.4em; margin-bottom: 0.8em; }
+  .chip-group { display: flex; flex-wrap: wrap; gap: 0.3em; }
+  .chip-group-label {
+    font-size: 0.75em; color: #555; text-transform: uppercase;
+    letter-spacing: 0.05em; margin-top: 0.2em;
+  }
+  .chip-group-label.inherited { color: #888; }
   .chip {
     background: #f3f4f6; border-radius: 4px; padding: 0.2em 0.5em;
     font-size: 0.82em; font-family: ui-monospace, Menlo, monospace;
+    display: inline-flex; align-items: center; gap: 0.3em;
   }
+  .chip.local { background: #ecfdf5; border: 1px solid #a7f3d0; }
+  .chip.inherited { opacity: 0.85; }
   .chip b { color: #444; }
+  .chip-x {
+    background: transparent; border: 0; color: #888;
+    cursor: pointer; padding: 0 0.2em; font-size: 1em;
+    line-height: 1; border-radius: 2px;
+  }
+  .chip-x:hover { background: #fee2e2; color: #b91c1c; }
 
   /* Form */
   form.kv { display: flex; flex-direction: column; gap: 0.6em; }
@@ -174,6 +189,11 @@
       Message (required — what / why):
     </label>
     <input id="upload-msg" placeholder="e.g. raw data for project Fiers2025">
+    <label style="display: flex; align-items: center; gap: 0.4em;
+                  margin-top: 0.5em; font-size: 0.85em; color: #555;">
+      <input type="checkbox" id="upload-dryrun">
+      <span>Dry-run (show what would happen, don't actually upload)</span>
+    </label>
     <div class="row" style="margin-top: 0.5em;">
       <button type="button" id="upload-go">Upload selected</button>
     </div>
@@ -359,22 +379,66 @@ function refreshSelectionSummary() {
 // ── cascade + form ─────────────────────────────────────────────────────
 async function refreshCascade() {
   const chips = document.getElementById('cascade-chips');
-  const fields = document.getElementById('cfg-fields');
   const status = document.getElementById('form-status');
-  chips.innerHTML = ''; fields.innerHTML = ''; clearStatus(status);
+  chips.innerHTML = ''; clearStatus(status);
   try {
     const r = await api('/api/cascade?dir=' + encodeURIComponent(currentDir));
-    for (const v of r.values) {
-      chips.appendChild(el('div', { class: 'chip' },
-        el('b', null, v.key + '='), v.value + (v.is_list ? ' (list)' : '')));
+    const local = r.values.filter(v => v.local);
+    const inherited = r.values.filter(v => !v.local);
+    if (local.length > 0) {
+      chips.appendChild(el('div', { class: 'chip-group-label' }, 'set in this folder:'));
+      const group = el('div', { class: 'chip-group' });
+      for (const v of local) group.appendChild(renderChip(v, true));
+      chips.appendChild(group);
     }
-    // Editable rows for the local-folder cfg only — we don't know
-    // which file a cascade value came from at the chip-rendering
-    // layer, so the rule is: chips show effective cascade,
-    // explicit "edit" goes through the new-key form.
+    if (inherited.length > 0) {
+      chips.appendChild(el('div', { class: 'chip-group-label inherited' },
+        'inherited from cascade:'));
+      const group = el('div', { class: 'chip-group' });
+      for (const v of inherited) group.appendChild(renderChip(v, false));
+      chips.appendChild(group);
+    }
+    if (local.length + inherited.length === 0) {
+      chips.appendChild(el('div', { class: 'notice' },
+        'no cascade values — start by setting `data_project`'));
+    }
     refreshELNState(r.values);
   } catch (e) {
     showError(status, 'cascade error: ' + e.message);
+  }
+}
+
+// renderChip builds one chip. Local chips get an × that calls
+// /api/config/unset on the LOCAL mus.cfg. Inherited chips are
+// read-only (the × wouldn't apply at this level anyway).
+function renderChip(v, isLocal) {
+  const chip = el('div', { class: 'chip' + (isLocal ? ' local' : ' inherited') });
+  chip.appendChild(el('b', null, v.key + '='));
+  chip.appendChild(document.createTextNode(v.value + (v.is_list ? ' (list)' : '')));
+  if (isLocal) {
+    const x = el('button', {
+      type: 'button',
+      class: 'chip-x',
+      title: 'unset ' + v.key + ' from this folder\'s mus.cfg',
+      on: { click: () => unsetKey(v.key) },
+    }, '×');
+    chip.appendChild(x);
+  }
+  return chip;
+}
+
+async function unsetKey(key) {
+  const status = document.getElementById('form-status');
+  if (!confirm('Remove `' + key + '` from this folder\'s mus.cfg?\n'+
+               '(Inherited values from parent folders are unaffected.)')) {
+    return;
+  }
+  try {
+    await apiPost('/api/config/unset', { dir: currentDir, key });
+    showNotice(status, 'unset ' + key + ' from local mus.cfg');
+    refreshAll();
+  } catch (e) {
+    showError(status, e.message);
   }
 }
 
@@ -618,6 +682,7 @@ async function refreshPreflight() {
 // ── upload (iRODS only; whatever is in selectedPaths) ───────────────
 async function triggerUpload() {
   const message = document.getElementById('upload-msg').value.trim();
+  const dryRun = document.getElementById('upload-dryrun').checked;
   const log = document.getElementById('upload-log');
   if (!message) {
     log.hidden = false;
@@ -633,19 +698,22 @@ async function triggerUpload() {
   const summary = paths.includes('')
     ? '<this folder>' + (currentDir ? ' (' + currentDir + ')' : '')
     : paths.length + ' item(s)';
-  if (!confirm('Upload ' + summary + ' to iRODS with message "' + message +
+  // Skip the confirm() prompt on dry-run — no side effects to
+  // confirm. The depositor probably wants to flip the checkbox
+  // on/off rapidly to compare.
+  if (!dryRun && !confirm('Upload ' + summary + ' to iRODS with message "' + message +
                '"? This has external side effects.')) {
     return;
   }
   log.hidden = false;
-  log.textContent = '';
+  log.textContent = dryRun ? '(dry-run — no bytes will transfer)\n' : '';
   const goBtn = document.getElementById('upload-go');
   goBtn.disabled = true;
   try {
     const r = await fetch('/api/upload', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paths, message }),
+      body: JSON.stringify({ paths, message, dry_run: dryRun }),
     });
     if (!r.ok) {
       const t = await r.text();

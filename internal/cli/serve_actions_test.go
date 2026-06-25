@@ -137,6 +137,27 @@ func TestAPIUpload_RejectsAbsolutePath(t *testing.T) {
 	}
 }
 
+// TestAPIUpload_AcceptsDryRun — schema check only: the new dry_run
+// field is accepted by the decoder + reaches the validation block
+// without 400. We can't end-to-end-test the actual `--dry-run`
+// shellout without iron, but the live smoke (curl against a real
+// `mus serve`) covers that.
+func TestAPIUpload_AcceptsDryRun(t *testing.T) {
+	root := t.TempDir()
+	defer withServeRoot(t, root)()
+	// Empty message still fails — confirms the body decoded and the
+	// existing validation chain still runs, just with dry_run=true.
+	w := postJSON(apiUpload, map[string]any{
+		"paths": []string{""}, "dry_run": true,
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected message-required error even with dry_run; got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "message is required") {
+		t.Errorf("body should still require message; got: %s", w.Body)
+	}
+}
+
 // TestAPIUpload_RejectsGetMethod — POST only.
 func TestAPIUpload_RejectsGetMethod(t *testing.T) {
 	root := t.TempDir()
@@ -174,8 +195,11 @@ func TestServeIndex_EmbeddedHTMLIsPresent(t *testing.T) {
 	// Spot-check load-bearing IDs the JS reaches for.
 	for _, id := range []string{"id=\"tree\"", "id=\"cfg-form\"",
 		"id=\"cfg-key\"", "id=\"cfg-value-host\"", "id=\"upload-go\"",
+		"id=\"upload-dryrun\"",
 		"id=\"checks\"", "id=\"upload-log\"",
-		"/api/preflight", "/api/upload", "/api/known-keys"} {
+		"/api/preflight", "/api/upload", "/api/known-keys",
+		"/api/config/unset", "chip-x",
+	} {
 		if !strings.Contains(s, id) {
 			t.Errorf("embedded UI missing required element / endpoint: %q", id)
 		}

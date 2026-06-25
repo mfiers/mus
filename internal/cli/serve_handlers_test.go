@@ -184,6 +184,59 @@ func TestAPICascade_FlatRoot(t *testing.T) {
 	if len(resp.Files) == 0 {
 		t.Error("expected at least one contributing cfg file")
 	}
+	// Single-file cascade → every key is local.
+	for _, v := range resp.Values {
+		if !v.Local {
+			t.Errorf("flat-root cfg: %q should be local=true; got false", v.Key)
+		}
+	}
+}
+
+// TestAPICascade_LocalVsInherited — two-level cascade with the same
+// keys defined at both levels in different combinations. The local
+// chip is the deepest file; ancestor-only keys are inherited.
+func TestAPICascade_LocalVsInherited(t *testing.T) {
+	root := t.TempDir()
+	sub := filepath.Join(root, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Parent sets data_project + organism; sub overrides organism +
+	// adds tissue. Effective cascade at sub: data_project (inherited),
+	// organism (local — overridden), tissue (local — new).
+	if err := os.WriteFile(filepath.Join(root, "mus.cfg"),
+		[]byte("data_project=Fiers2025\norganism=mouse\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "mus.cfg"),
+		[]byte("organism=human\ntissue=cortex\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer withServeRoot(t, root)()
+
+	r := httptest.NewRequest(http.MethodGet, "/api/cascade?dir=sub", nil)
+	w := httptest.NewRecorder()
+	apiCascade(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d; body: %s", w.Code, w.Body)
+	}
+	var resp struct {
+		Values []cascadeKey `json:"values"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	got := map[string]bool{}
+	for _, v := range resp.Values {
+		got[v.Key] = v.Local
+	}
+	if got["data_project"] {
+		t.Errorf("data_project should be inherited (local=false); got local=true")
+	}
+	if !got["organism"] {
+		t.Errorf("organism should be local (overridden in sub/mus.cfg); got local=false")
+	}
+	if !got["tissue"] {
+		t.Errorf("tissue should be local (only in sub/mus.cfg); got local=false")
+	}
 }
 
 func TestShouldHideInTree(t *testing.T) {
