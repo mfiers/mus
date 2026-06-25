@@ -83,13 +83,16 @@ func TestAPIPreflight_RefusesEscape(t *testing.T) {
 	}
 }
 
-// TestAPIUpload_RejectsBadDestination — only "irods" / "s3" allowed.
-func TestAPIUpload_RejectsBadDestination(t *testing.T) {
+// TestAPIUpload_RequiresAtLeastOnePath — empty paths array must
+// 400, not silently upload nothing.
+func TestAPIUpload_RequiresAtLeastOnePath(t *testing.T) {
 	root := t.TempDir()
 	defer withServeRoot(t, root)()
-	w := postJSON(apiUpload, map[string]any{"dir": "", "destination": "ftp", "message": "x"})
+	w := postJSON(apiUpload, map[string]any{
+		"paths": []string{}, "message": "x",
+	})
 	if w.Code != http.StatusBadRequest {
-		t.Errorf("bad destination: status %d, want 400", w.Code)
+		t.Errorf("empty paths: status %d, want 400", w.Code)
 	}
 }
 
@@ -97,7 +100,9 @@ func TestAPIUpload_RejectsBadDestination(t *testing.T) {
 func TestAPIUpload_RequiresMessage(t *testing.T) {
 	root := t.TempDir()
 	defer withServeRoot(t, root)()
-	w := postJSON(apiUpload, map[string]any{"dir": "", "destination": "irods"})
+	w := postJSON(apiUpload, map[string]any{
+		"paths": []string{""},
+	})
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("missing message: status %d, want 400; body: %s", w.Code, w.Body)
 	}
@@ -112,10 +117,23 @@ func TestAPIUpload_RejectsMultilineMessage(t *testing.T) {
 	root := t.TempDir()
 	defer withServeRoot(t, root)()
 	w := postJSON(apiUpload, map[string]any{
-		"dir": "", "destination": "irods", "message": "line1\nline2",
+		"paths": []string{""}, "message": "line1\nline2",
 	})
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("multiline message: status %d, want 400", w.Code)
+	}
+}
+
+// TestAPIUpload_RejectsAbsolutePath — any path with leading slash
+// must be refused, even if other paths in the batch are valid.
+func TestAPIUpload_RejectsAbsolutePath(t *testing.T) {
+	root := t.TempDir()
+	defer withServeRoot(t, root)()
+	w := postJSON(apiUpload, map[string]any{
+		"paths": []string{"", "/etc/passwd"}, "message": "x",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("absolute path: status %d, want 400", w.Code)
 	}
 }
 
@@ -131,11 +149,14 @@ func TestAPIUpload_RejectsGetMethod(t *testing.T) {
 	}
 }
 
-// TestAPIUpload_RefusesEscape — same escape guard as the rest.
+// TestAPIUpload_RefusesEscape — escape attempt via `..` in any
+// path of the batch must refuse the whole batch.
 func TestAPIUpload_RefusesEscape(t *testing.T) {
 	root := t.TempDir()
 	defer withServeRoot(t, root)()
-	w := postJSON(apiUpload, map[string]any{"dir": "../etc", "destination": "irods"})
+	w := postJSON(apiUpload, map[string]any{
+		"paths": []string{"../etc"}, "message": "x",
+	})
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("escape attempt: status %d, want 400", w.Code)
 	}
@@ -152,9 +173,18 @@ func TestServeIndex_EmbeddedHTMLIsPresent(t *testing.T) {
 	s := string(serveIndexHTML)
 	// Spot-check load-bearing IDs the JS reaches for.
 	for _, id := range []string{"id=\"tree\"", "id=\"cfg-form\"",
-		"id=\"checks\"", "id=\"upload-log\"", "/api/preflight", "/api/upload"} {
+		"id=\"cfg-key\"", "id=\"cfg-value-host\"", "id=\"upload-go\"",
+		"id=\"checks\"", "id=\"upload-log\"",
+		"/api/preflight", "/api/upload", "/api/known-keys"} {
 		if !strings.Contains(s, id) {
 			t.Errorf("embedded UI missing required element / endpoint: %q", id)
+		}
+	}
+	// Should NOT mention S3 upload — that path is intentionally
+	// excluded from the GUI per the 0.2.31 scope.
+	for _, banned := range []string{"upload-s3", "destination", `"s3"`} {
+		if strings.Contains(s, banned) {
+			t.Errorf("embedded UI should NOT mention %q — S3 upload was removed", banned)
 		}
 	}
 }

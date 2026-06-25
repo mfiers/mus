@@ -235,6 +235,38 @@ func TestAPIVocab_UncontrolledFieldEmptyOK(t *testing.T) {
 	}
 }
 
+func TestAPIKnownKeys_ListsKnownCfgKeys(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/api/known-keys", nil)
+	w := httptest.NewRecorder()
+	apiKnownKeys(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d; body: %s", w.Code, w.Body)
+	}
+	var resp struct {
+		Keys []struct {
+			Key   string `json:"key"`
+			Vocab bool   `json:"vocab"`
+		} `json:"keys"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if len(resp.Keys) < 10 {
+		t.Errorf("expected many known keys; got %d", len(resp.Keys))
+	}
+	// Spot-check a few load-bearing ones.
+	want := map[string]bool{"data_project": false, "organism": true, "de_dataset_id": false}
+	for _, k := range resp.Keys {
+		if expectedVocab, ok := want[k.Key]; ok {
+			if k.Vocab != expectedVocab {
+				t.Errorf("%s.vocab = %v, want %v", k.Key, k.Vocab, expectedVocab)
+			}
+			delete(want, k.Key)
+		}
+	}
+	for k := range want {
+		t.Errorf("expected known-key %q in response", k)
+	}
+}
+
 func TestAPIVocab_RefusesSlashesInField(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/api/vocab/foo/bar", nil)
 	w := httptest.NewRecorder()

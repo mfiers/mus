@@ -37,18 +37,25 @@
   .crumbs a:hover { text-decoration: underline; }
   .tree-row {
     display: flex; align-items: center; padding: 0.25em 0.4em;
-    border-radius: 4px; cursor: pointer; gap: 0.4em;
+    border-radius: 4px; gap: 0.4em;
   }
   .tree-row:hover { background: #f0f4ff; }
   .tree-row .icon { width: 1.1em; text-align: center; color: #888; }
   .tree-row.dir .icon { color: #d97706; }
-  .tree-row .name { flex: 1; font-family: ui-monospace, Menlo, monospace;
+  .tree-row .name { font-family: ui-monospace, Menlo, monospace;
                     font-size: 0.9em; word-break: break-all; }
+  .tree-row .drill { flex: 1; display: flex; align-items: center; gap: 0.4em;
+                     cursor: pointer; }
   .tree-row .badge {
     font-size: 0.7em; color: #16a34a; background: #ecfdf5;
     padding: 0.05em 0.4em; border-radius: 3px;
   }
   .tree-row.sidecar { opacity: 0.55; }
+  .tree-row.whole-folder {
+    background: #fff7ed; border: 1px solid #fed7aa; margin-bottom: 0.3em;
+  }
+  .tree-row input.select { margin: 0; cursor: pointer; }
+  .tree-row .select-spacer { width: 1em; display: inline-block; }
 
   /* Cascade chips */
   .chips { display: flex; flex-wrap: wrap; gap: 0.3em; margin-bottom: 0.8em; }
@@ -61,11 +68,14 @@
   /* Form */
   form.kv { display: flex; flex-direction: column; gap: 0.6em; }
   form.kv label { font-size: 0.85em; color: #555; }
-  form.kv input, form.kv select {
+  form.kv input, form.kv select,
+  form.kv #cfg-value-host input, form.kv #cfg-value-host select {
     width: 100%; padding: 0.4em 0.5em;
     border: 1px solid #d0d0d0; border-radius: 4px; font-size: 0.92em;
     font-family: ui-monospace, Menlo, monospace;
+    box-sizing: border-box;
   }
+  form.kv #cfg-value-host > .row input { width: auto; flex: 1; }
   form.kv .row { display: flex; gap: 0.4em; }
   form.kv .row > * { flex: 1; }
   button {
@@ -119,36 +129,23 @@
     <div id="tree"></div>
   </section>
 
-  <!-- MIDDLE: annotation form -->
+  <!-- MIDDLE: annotation form (folder-level mus.cfg) -->
   <section class="panel" id="panel-form">
-    <h2>Annotation</h2>
+    <h2>Folder annotation (mus.cfg)</h2>
     <div id="form-status"></div>
     <div id="cascade-chips" class="chips"></div>
     <form class="kv" id="cfg-form" autocomplete="off">
-      <div id="cfg-fields"></div>
-      <div class="row">
-        <input id="cfg-newkey" placeholder="new key (e.g. organism)"
-               list="vocab-keys">
-        <input id="cfg-newval" placeholder="value">
-        <button type="button" id="cfg-add">Add</button>
+      <label for="cfg-key" style="font-size: 0.85em; color: #555;">Key:</label>
+      <select id="cfg-key">
+        <option value="">— pick a key —</option>
+        <!-- populated from /api/known-keys + a "Custom key…" at the bottom -->
+      </select>
+      <label for="cfg-value-host" style="font-size: 0.85em; color: #555;">Value:</label>
+      <div id="cfg-value-host"></div>
+      <div class="row" style="margin-top: 0.5em;">
+        <button type="button" id="cfg-add">Save</button>
+        <button type="button" class="ghost" id="cfg-reset">Reset</button>
       </div>
-      <datalist id="vocab-keys">
-        <option value="data_project">
-        <option value="organism">
-        <option value="tissue">
-        <option value="cell_type">
-        <option value="technology">
-        <option value="suspension_type">
-        <option value="sex">
-        <option value="access">
-        <option value="source">
-        <option value="license">
-        <option value="disease">
-        <option value="de_dataset_id">
-        <option value="de_dataset_h5ad">
-        <option value="de_format">
-        <option value="de_description">
-      </datalist>
     </form>
     <h2 style="margin-top: 1.2em;">ELN</h2>
     <div id="eln-status"></div>
@@ -163,19 +160,25 @@
     </div>
   </section>
 
-  <!-- RIGHT: upload action -->
+  <!-- RIGHT: upload action (iRODS-only; ELN comment is automatic) -->
   <section class="panel" id="panel-upload">
     <h2>Pre-flight</h2>
     <ul class="checks" id="checks"></ul>
-    <h2>Upload</h2>
+    <h2>Upload to iRODS</h2>
+    <div style="font-size: 0.82em; color: #666; margin-bottom: 0.4em;">
+      Select files/folders on the left; check the
+      <code>&lt;this folder&gt;</code> row at the top to upload everything.
+      ELN comment is logged automatically if the folder is linked.
+    </div>
     <label for="upload-msg" style="font-size: 0.85em; color: #555;">
       Message (required — what / why):
     </label>
-    <input id="upload-msg" placeholder="e.g. initial deposit of Fiers2025 DE tables">
+    <input id="upload-msg" placeholder="e.g. raw data for project Fiers2025">
     <div class="row" style="margin-top: 0.5em;">
-      <button type="button" id="upload-irods" class="ghost">iRODS</button>
-      <button type="button" id="upload-s3" class="ghost">S3 (catalog)</button>
+      <button type="button" id="upload-go">Upload selected</button>
     </div>
+    <div id="upload-selected-summary"
+         style="font-size: 0.82em; color: #555; margin-top: 0.4em;"></div>
     <pre class="log" id="upload-log" hidden></pre>
   </section>
 </main>
@@ -260,18 +263,51 @@ function navigate(dir) {
   refreshAll();
 }
 
-// ── folder tree ────────────────────────────────────────────────────────
+// ── folder tree with selectable rows ──────────────────────────────────
+// Selection is BY ABSOLUTE-IN-SERVE-ROOT PATH (the e.path the API
+// returns). Sidecars are not selectable — mus s.. err mus irods upload
+// skips them automatically AND the depositor shouldn't be picking them
+// individually. A synthetic "<this folder>" row at the top lets the
+// user upload the current cwd as one unit.
+const selectedPaths = new Set();   // keys: tree entry .path (or "" for cwd)
+
 async function refreshTree() {
   const root = document.getElementById('tree');
   root.innerHTML = '';
+  // Synthetic "this folder" row.
+  const wholeRow = el('div', { class: 'tree-row dir whole-folder' });
+  const wholeChk = el('input', { type: 'checkbox', class: 'select',
+    checked: selectedPaths.has(''),
+    on: { change: e => toggleSelect('', e.target.checked, true) } });
+  wholeRow.appendChild(wholeChk);
+  wholeRow.appendChild(el('span', { class: 'icon' }, '⌂'));
+  wholeRow.appendChild(el('span', { class: 'name', style: 'font-weight: 600;' },
+    '<this folder>' + (currentDir ? ' (' + currentDir + ')' : '')));
+  root.appendChild(wholeRow);
   try {
     const r = await api('/api/tree?dir=' + encodeURIComponent(currentDir));
     for (const e of r.entries) {
       const isDir = e.kind === 'dir';
-      const row = el('div', { class: 'tree-row ' + e.kind,
-                              on: { click: () => isDir && navigate(e.path) } });
-      row.appendChild(el('span', { class: 'icon' }, isDir ? '▸' : (e.kind === 'sidecar' ? '·' : '◦')));
-      row.appendChild(el('span', { class: 'name' }, e.name));
+      const isSidecar = e.kind === 'sidecar';
+      const row = el('div', { class: 'tree-row ' + e.kind });
+      // Checkbox for files + directories. Sidecars stay non-
+      // selectable (greyed) — they ride along with their data file.
+      if (!isSidecar) {
+        const chk = el('input', { type: 'checkbox', class: 'select',
+          checked: selectedPaths.has(e.path),
+          on: { change: ev => toggleSelect(e.path, ev.target.checked, false) } });
+        row.appendChild(chk);
+      } else {
+        row.appendChild(el('span', { class: 'select-spacer' }));
+      }
+      // Click-to-drill on the icon+name area only — checkbox events
+      // shouldn't trigger navigation.
+      const drill = el('span', { class: 'drill',
+        on: { click: () => isDir && navigate(e.path) } });
+      drill.appendChild(el('span', { class: 'icon' },
+        isDir ? '▸' : (isSidecar ? '·' : '◦')));
+      drill.appendChild(el('span', { class: 'name' }, e.name));
+      row.appendChild(drill);
       if (e.has_mus_cfg) row.appendChild(el('span', { class: 'badge' }, 'cfg'));
       root.appendChild(row);
     }
@@ -281,6 +317,43 @@ async function refreshTree() {
   } catch (e) {
     showError(root, 'tree error: ' + e.message);
   }
+  refreshSelectionSummary();
+}
+
+// toggleSelect mutates selectedPaths. The "<this folder>" entry is
+// mutually exclusive with individual rows — picking it clears the
+// rest, and picking any individual row clears it.
+function toggleSelect(path, on, isWholeFolder) {
+  if (on) {
+    if (isWholeFolder) {
+      selectedPaths.clear();
+      selectedPaths.add('');
+    } else {
+      selectedPaths.delete('');
+      selectedPaths.add(path);
+    }
+  } else {
+    selectedPaths.delete(path);
+  }
+  refreshTree();              // re-render to sync the other checkboxes
+}
+
+function refreshSelectionSummary() {
+  const summary = document.getElementById('upload-selected-summary');
+  if (selectedPaths.size === 0) {
+    summary.textContent = 'nothing selected';
+    document.getElementById('upload-go').disabled = true;
+    return;
+  }
+  if (selectedPaths.has('')) {
+    summary.textContent = 'selected: <this folder>' +
+      (currentDir ? ' (' + currentDir + ')' : '');
+  } else {
+    const items = [...selectedPaths];
+    summary.textContent = 'selected: ' + items.length + ' item(s) — ' +
+      items.slice(0, 3).join(', ') + (items.length > 3 ? ', …' : '');
+  }
+  document.getElementById('upload-go').disabled = false;
 }
 
 // ── cascade + form ─────────────────────────────────────────────────────
@@ -323,51 +396,164 @@ function refreshELNState(values) {
   }
 }
 
-// ── add a key ──────────────────────────────────────────────────────────
+// ── vocab-driven annotation form ──────────────────────────────────────
+//
+// Key dropdown: populated from /api/known-keys (which lists every
+// recognised mus.cfg key + whether it's vocab-controlled). Picking
+// "Custom key…" exposes a free-text input for anything outside the
+// known set — depositor still needs to be sane, but mus's vocab
+// validation will catch obvious mistakes server-side.
+//
+// Value rendering: changes based on key type.
+//   - Vocab-controlled key (organism, tissue, …): <select> from
+//     /api/vocab/<key> with a "Custom value (force-set)…" option
+//     at the bottom for off-vocab cases.
+//   - Anything else: free <input>.
+
+let knownKeys = [];   // [{key, vocab}] from /api/known-keys
+
+async function loadKnownKeys() {
+  try {
+    const r = await api('/api/known-keys');
+    knownKeys = r.keys || [];
+    const sel = document.getElementById('cfg-key');
+    sel.innerHTML = '<option value="">— pick a key —</option>';
+    for (const k of knownKeys) {
+      const label = k.key + (k.vocab ? '  (vocab)' : '');
+      sel.appendChild(el('option', { value: k.key }, label));
+    }
+    sel.appendChild(el('option', { value: '__CUSTOM__' }, 'Custom key…'));
+  } catch (e) {
+    // Non-fatal — depositor can still use Custom key input
+    knownKeys = [];
+  }
+}
+
+// Render the value input based on the currently-selected key.
+let pendingCustomKey = '';  // when Custom key… is chosen
+let pendingValueIsCustom = false;
+
+document.getElementById('cfg-key').addEventListener('change', async () => {
+  const sel = document.getElementById('cfg-key');
+  if (sel.value === '__CUSTOM__') {
+    // Show a custom-key text input + free value input.
+    pendingCustomKey = '';
+    pendingValueIsCustom = true;
+    renderCustomKeyField();
+    return;
+  }
+  pendingValueIsCustom = false;
+  renderValueField(sel.value);
+});
+
+function renderCustomKeyField() {
+  const host = document.getElementById('cfg-value-host');
+  host.innerHTML = '';
+  const wrap = el('div', { class: 'row' });
+  const keyInp = el('input', { id: 'cfg-custom-key', placeholder: 'custom key (e.g. comment)' });
+  const valInp = el('input', { id: 'cfg-custom-val', placeholder: 'value (free text)' });
+  wrap.appendChild(keyInp);
+  wrap.appendChild(valInp);
+  host.appendChild(wrap);
+  host.appendChild(el('div', { class: 'notice' },
+    'Custom key — must follow the cascading mus.cfg convention. ' +
+    'Off-vocab values are saved with --force and a stderr warning.'));
+}
+
+async function renderValueField(key) {
+  const host = document.getElementById('cfg-value-host');
+  host.innerHTML = '';
+  if (!key) { return; }
+  const info = knownKeys.find(k => k.key === key);
+  const isVocab = info && info.vocab;
+  if (!isVocab) {
+    // Free-text input. Some keys have known shape — could nudge
+    // here later (e.g. eln_experiment_id digits-only) but keep
+    // simple for v1.
+    const inp = el('input', { id: 'cfg-val', placeholder: 'value' });
+    host.appendChild(inp);
+    return;
+  }
+  // Vocab-controlled — fetch the list and render a <select> with
+  // a "Custom value (force-set)…" escape hatch.
+  try {
+    const r = await api('/api/vocab/' + encodeURIComponent(key));
+    const sel = el('select', { id: 'cfg-val' });
+    sel.appendChild(el('option', { value: '' }, '— pick a value —'));
+    for (const v of (r.values || [])) {
+      sel.appendChild(el('option', { value: v }, v));
+    }
+    sel.appendChild(el('option', { value: '__CUSTOMVAL__' }, 'Custom value (force-set)…'));
+    sel.addEventListener('change', () => {
+      if (sel.value === '__CUSTOMVAL__') {
+        // Replace with a free input that force-sets server-side.
+        const free = el('input', { id: 'cfg-val', placeholder: 'off-vocab value' });
+        host.replaceChild(free, sel);
+        host.appendChild(el('div', { class: 'notice' },
+          'Off-vocab value will be saved with --force. ' +
+          'If this term should be added to the controlled vocabulary, ' +
+          'open an issue at codeberg.org/mfiers/mus.'));
+        free.focus();
+      }
+    });
+    host.appendChild(sel);
+  } catch (e) {
+    // Vocab fetch failed — degrade to free text rather than block.
+    host.appendChild(el('input', { id: 'cfg-val', placeholder: 'value (vocab unavailable)' }));
+  }
+}
+
+// Save handler — reads whichever input combination is currently rendered.
 document.getElementById('cfg-add').addEventListener('click', async () => {
-  const key = document.getElementById('cfg-newkey').value.trim();
-  const value = document.getElementById('cfg-newval').value.trim();
   const status = document.getElementById('form-status');
+  let key, value, isCustomKey = false, isCustomVal = false;
+  if (pendingValueIsCustom) {
+    key = (document.getElementById('cfg-custom-key') || {}).value || '';
+    value = (document.getElementById('cfg-custom-val') || {}).value || '';
+    isCustomKey = true;
+  } else {
+    key = document.getElementById('cfg-key').value;
+    const valEl = document.getElementById('cfg-val');
+    value = valEl ? valEl.value : '';
+    // If the value input came from the "Custom value (force-set)…"
+    // path, the element was replaced from <select> to <input>; flag it.
+    isCustomVal = valEl && valEl.tagName === 'INPUT';
+  }
+  key = (key || '').trim();
+  value = (value || '').trim();
   if (!key || !value) {
     showError(status, 'both key and value are required');
     return;
   }
+  // Force only when the depositor explicitly picked the off-vocab
+  // escape hatch (either custom key OR custom value on a vocab-
+  // controlled field). The server's normalisation message is the
+  // real source of truth — we just don't refuse on a deliberate
+  // off-vocab pick.
+  const force = isCustomKey || isCustomVal;
   try {
     const r = await apiPost('/api/config/set',
-      { dir: currentDir, key, value, force: false });
+      { dir: currentDir, key, value, force });
     if (r.key !== key || r.value !== value) {
       showNotice(status,
         'normalised → ' + r.key + '=' + r.value + (r.notes ? '\n' + r.notes : ''));
     } else {
       showNotice(status, 'saved ' + r.key + '=' + r.value);
     }
-    document.getElementById('cfg-newkey').value = '';
-    document.getElementById('cfg-newval').value = '';
+    document.getElementById('cfg-key').value = '';
+    document.getElementById('cfg-value-host').innerHTML = '';
+    pendingValueIsCustom = false;
     refreshAll();
   } catch (e) {
     showError(status, e.message);
   }
 });
 
-// Wire vocab autocomplete on the new-value field reactively as the
-// user picks a key.
-document.getElementById('cfg-newkey').addEventListener('change', async () => {
-  const key = document.getElementById('cfg-newkey').value.trim();
-  const val = document.getElementById('cfg-newval');
-  let dl = document.getElementById('vocab-values');
-  if (dl) dl.remove();
-  if (!key) { val.removeAttribute('list'); return; }
-  try {
-    const r = await api('/api/vocab/' + encodeURIComponent(key));
-    if (r.vocab && r.values && r.values.length) {
-      dl = el('datalist', { id: 'vocab-values' });
-      for (const v of r.values) dl.appendChild(el('option', { value: v }));
-      document.body.appendChild(dl);
-      val.setAttribute('list', 'vocab-values');
-    } else {
-      val.removeAttribute('list');
-    }
-  } catch (e) { val.removeAttribute('list'); }
+document.getElementById('cfg-reset').addEventListener('click', () => {
+  document.getElementById('cfg-key').value = '';
+  document.getElementById('cfg-value-host').innerHTML = '';
+  clearStatus(document.getElementById('form-status'));
+  pendingValueIsCustom = false;
 });
 
 // ── ELN actions ────────────────────────────────────────────────────────
@@ -418,15 +604,19 @@ async function refreshPreflight() {
       ul.appendChild(li);
       if (!c.ok && c.block_upload) canUpload = false;
     }
-    document.getElementById('upload-irods').disabled = !canUpload;
-    document.getElementById('upload-s3').disabled = !canUpload;
+    // Re-evaluate selection summary (which also flips the button
+    // when nothing is selected).
+    refreshSelectionSummary();
+    if (!canUpload) {
+      document.getElementById('upload-go').disabled = true;
+    }
   } catch (e) {
     showError(ul, 'preflight error: ' + e.message);
   }
 }
 
-// ── upload ─────────────────────────────────────────────────────────────
-async function triggerUpload(destination) {
+// ── upload (iRODS only; whatever is in selectedPaths) ───────────────
+async function triggerUpload() {
   const message = document.getElementById('upload-msg').value.trim();
   const log = document.getElementById('upload-log');
   if (!message) {
@@ -434,21 +624,28 @@ async function triggerUpload(destination) {
     log.textContent = 'ERROR: upload message is required — describe what / why.';
     return;
   }
-  if (!confirm('Run `mus ' + destination + ' upload -m "' + message +
-               '"` on ' + (currentDir || '<root>') +
-               '? This has external side effects.')) {
+  if (selectedPaths.size === 0) {
+    log.hidden = false;
+    log.textContent = 'ERROR: select at least one file/folder (or the <this folder> row).';
+    return;
+  }
+  const paths = [...selectedPaths]; // "" stays "" → whole folder
+  const summary = paths.includes('')
+    ? '<this folder>' + (currentDir ? ' (' + currentDir + ')' : '')
+    : paths.length + ' item(s)';
+  if (!confirm('Upload ' + summary + ' to iRODS with message "' + message +
+               '"? This has external side effects.')) {
     return;
   }
   log.hidden = false;
   log.textContent = '';
-  const btns = [document.getElementById('upload-irods'),
-                document.getElementById('upload-s3')];
-  btns.forEach(b => b.disabled = true);
+  const goBtn = document.getElementById('upload-go');
+  goBtn.disabled = true;
   try {
     const r = await fetch('/api/upload', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dir: currentDir, destination, message }),
+      body: JSON.stringify({ paths, message }),
     });
     if (!r.ok) {
       const t = await r.text();
@@ -469,13 +666,10 @@ async function triggerUpload(destination) {
     refreshPreflight();
   }
 }
-document.getElementById('upload-irods').addEventListener('click',
-  () => triggerUpload('irods'));
-document.getElementById('upload-s3').addEventListener('click',
-  () => triggerUpload('s3'));
+document.getElementById('upload-go').addEventListener('click', triggerUpload);
 
 // ── go ─────────────────────────────────────────────────────────────────
-boot();
+loadKnownKeys().then(boot);
 </script>
 </body>
 </html>

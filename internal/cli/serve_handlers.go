@@ -44,6 +44,7 @@ func registerServeAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/tree", apiTree)
 	mux.HandleFunc("/api/cascade", apiCascade)
 	mux.HandleFunc("/api/vocab/", apiVocab) // trailing slash → subpath captures field name
+	mux.HandleFunc("/api/known-keys", apiKnownKeys)
 	// Write.
 	mux.HandleFunc("/api/config/set", apiConfigSet)
 	mux.HandleFunc("/api/config/unset", apiConfigUnset)
@@ -167,6 +168,22 @@ func apiCascade(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// apiKnownKeys returns the canonical list of mus.cfg keys the
+// annotation form's key dropdown shows. Plus, for each key, a
+// flag indicating whether the value is vocab-controlled (the form
+// can then fetch /api/vocab/<key> for the value dropdown).
+func apiKnownKeys(w http.ResponseWriter, r *http.Request) {
+	type keyDesc struct {
+		Key   string `json:"key"`
+		Vocab bool   `json:"vocab"` // true when /api/vocab/<key> has values
+	}
+	keys := make([]keyDesc, 0, len(knownConfigKeys))
+	for _, k := range knownConfigKeys {
+		keys = append(keys, keyDesc{Key: k, Vocab: isVocabConfigKey(k)})
+	}
+	writeJSON(w, map[string]any{"keys": keys})
+}
+
 // apiVocab returns the controlled-value list for one field. URL
 // path: /api/vocab/<field>. Browser uses this to populate
 // <datalist> autocomplete; the field name lives in the URL so
@@ -244,6 +261,38 @@ func resolveDirParam(raw string) (abs, rel string, err error) {
 		rel = ""
 	}
 	return abs, rel, nil
+}
+
+// resolveAnyPathParam is like resolveDirParam but accepts files
+// AND directories. Used by /api/upload where each selected path may
+// be a file or a folder. Returns the absolute path; same path-safety
+// guards apply (no absolute, no `..`, must resolve under serveRoot).
+func resolveAnyPathParam(raw string) (string, error) {
+	if serveRoot == "" {
+		return "", errors.New("server root not initialised (internal bug)")
+	}
+	if strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "\\") {
+		return "", fmt.Errorf("absolute path not allowed")
+	}
+	for _, segment := range strings.FieldsFunc(raw, func(r rune) bool { return r == '/' || r == '\\' }) {
+		if segment == ".." {
+			return "", fmt.Errorf("escapes the server root (.. not allowed)")
+		}
+	}
+	cleaned := filepath.Clean(raw)
+	if cleaned == "." {
+		cleaned = ""
+	}
+	abs := filepath.Join(serveRoot, cleaned)
+	rootAbs, _ := filepath.Abs(serveRoot)
+	rel, relErr := filepath.Rel(rootAbs, abs)
+	if relErr != nil || strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("escapes the server root")
+	}
+	if _, err := os.Stat(abs); err != nil {
+		return "", err
+	}
+	return abs, nil
 }
 
 // relJoin joins a parent relative path with a child name using

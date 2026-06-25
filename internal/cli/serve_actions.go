@@ -110,14 +110,11 @@ func apiPreflight(w http.ResponseWriter, r *http.Request) {
 		ironDetail = "on PATH (run `iron auth status` to verify the session)"
 	}
 	checks = append(checks, preflightCheck{
-		Key:    "iron_cli",
-		Label:  "iron CLI available",
-		OK:     ironOK,
-		Detail: ironDetail,
-		// Don't block — user might be uploading to S3 only. The
-		// underlying `mus irods upload` will fail loudly if iron
-		// is needed and missing.
-		BlockUp: false,
+		Key:     "iron_cli",
+		Label:   "iron CLI available",
+		OK:      ironOK,
+		Detail:  ironDetail,
+		BlockUp: true, // mus serve uploads via iron — must be present
 	})
 
 	// At least one data file present (ignore mus.cfg + sidecars + dotfiles)
@@ -146,10 +143,24 @@ func apiPreflight(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// apiUpload shells out to `mus irods upload` or `mus s3 upload`,
-// streaming the combined stdout+stderr back as the response body.
+// apiUpload shells out to `mus irods upload`, streaming the
+// combined stdout+stderr back as the response body.
 //
-// Method: POST. Body: {"dir": "<rel>", "destination": "irods"|"s3"}.
+// Method: POST. Body:
+//
+//	{"paths": ["<rel1>", "<rel2>", ...], "message": "<msg>"}
+//
+// Each path is resolved against serveRoot with the same path-safety
+// guard the read API uses (no absolute paths, no `..`). "" and "."
+// both resolve to serveRoot (whole-folder upload). mus irods upload
+// accepts a mix of files and folders — same here.
+//
+// S3 (= anthive catalog) upload is intentionally NOT exposed by
+// mus serve. The GUI is for the everyday "deposit-some-files-to-
+// iRODS-and-log-to-ELN" workflow; catalog deposits go through the
+// CLI where the depositor has the full DE-check / h5ad-check
+// machinery in front of them.
+//
 // The browser opens the response as a stream and shows lines in a
 // log pane. Synchronous — the request stays open for the duration
 // of the upload. For v1 this is fine; multi-GB uploads block the
@@ -166,17 +177,15 @@ func apiUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Dir         string `json:"dir"`
-		Destination string `json:"destination"` // "irods" or "s3"
-		Message     string `json:"message"`     // -m / --message (required)
+		Paths   []string `json:"paths"`
+		Message string   `json:"message"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, fmt.Sprintf("decode body: %v", err), http.StatusBadRequest)
 		return
 	}
-	abs, _, err := resolveDirParam(req.Dir)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if len(req.Paths) == 0 {
+		http.Error(w, "at least one path is required", http.StatusBadRequest)
 		return
 	}
 	if strings.TrimSpace(req.Message) == "" {
@@ -190,18 +199,18 @@ func apiUpload(w http.ResponseWriter, r *http.Request) {
 			http.StatusBadRequest)
 		return
 	}
-	var subcommand []string
-	switch req.Destination {
-	case "irods":
-		subcommand = []string{"irods", "upload", "-m", req.Message, abs}
-	case "s3":
-		subcommand = []string{"s3", "upload", "-m", req.Message, abs}
-	default:
-		http.Error(w,
-			`destination must be "irods" or "s3"`,
-			http.StatusBadRequest)
-		return
+	// Resolve every path. Refuse the whole batch if ANY single
+	// path escapes — never upload a partial set silently.
+	absPaths := make([]string, 0, len(req.Paths))
+	for _, p := range req.Paths {
+		abs, err := resolveAnyPathParam(p)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("path %q: %v", p, err), http.StatusBadRequest)
+			return
+		}
+		absPaths = append(absPaths, abs)
 	}
+	subcommand := append([]string{"irods", "upload", "-m", req.Message}, absPaths...)
 	self, err := os.Executable()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("locate mus binary: %v", err), http.StatusInternalServerError)
@@ -223,7 +232,10 @@ func apiUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	flushLine(fmt.Sprintf("$ mus %s", strings.Join(subcommand, " ")))
 	cmd := exec.CommandContext(r.Context(), self, subcommand...)
-	cmd.Dir = abs
+	// Run from serveRoot so the cascade `mus.cfg` cwd lookup picks
+	// up the right cascade even when the user has selected a
+	// sub-folder.
+	cmd.Dir = serveRoot
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		flushLine(fmt.Sprintf("ERROR: stdout pipe: %v", err))
