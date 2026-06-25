@@ -277,15 +277,44 @@ fallback (` + "`~/.config/mus/secrets.age`" + `) for HPC login nodes.
 ### Local web GUI
 
 - ` + "`mus serve`" + ` — boots a single-user localhost web GUI on a random
-  port and prints/opens the URL with a session token. Designed for
-  non-CLI lab depositors: folder tree (left), annotation form with
-  vocab autocomplete (middle), pre-flight + upload trigger with
-  streaming log pane (right). Ctrl-C to stop. Single-user, token in
-  URL → HttpOnly cookie, refuses non-loopback by design. To use from
-  a remote machine, port-forward over SSH:
+  port and prints/opens the URL with a session token. Single-user,
+  token in URL → HttpOnly cookie, refuses non-loopback by design.
+  To use from a remote machine, port-forward over SSH:
   ` + "`ssh -L <port>:127.0.0.1:<port> <host>`" + `.
 - Flags: ` + "`--port <N>`" + ` (default: random), ` + "`--no-browser`" + `
   (print URL only), ` + "`--bind`" + ` (loopback-only — non-loopback refused).
+- **Scope (mus 0.2.31+):** iRODS upload + folder annotation +
+  ELN linkage. Catalog (S3 / anthive) uploads are intentionally
+  CLI-only — those need the full DE-check / h5ad-check workflow
+  in front of the depositor.
+
+**Three-panel layout:**
+
+- **Left — folder tree.** Each non-sidecar row has a checkbox.
+  A highlighted ` + "`<this folder>`" + ` row at the top uploads the
+  current cwd as one unit (mutually exclusive with individual
+  picks). Files that already have a sidecar recording
+  ` + "`irods_uploaded_at`" + ` get a blue ✓ badge with a tooltip
+  showing when + where they landed. Folders carrying a
+  ` + "`mus.cfg`" + ` get a green ` + "`cfg`" + ` badge.
+- **Middle — folder annotation.** Cascade chips split into two
+  groups: "set in this folder:" (green, with × to unset that key
+  from the LOCAL mus.cfg) and "inherited from cascade:" (grey,
+  read-only at this level). The form key dropdown lists every
+  recognised mus.cfg key; vocab-controlled keys (organism,
+  tissue, …) render their value field as a ` + "`<select>`" + ` of
+  allowed values with a "Custom value (force-set)…" escape.
+  "Custom key…" at the bottom of the key dropdown handles
+  one-offs. ELN section: link-or-disable buttons.
+- **Right — upload to iRODS.** Pre-flight chips (data_project /
+  ELN state / iron-on-PATH / data-files-present). Required
+  message input. Dry-run checkbox runs ` + "`iron --dry-run`" + ` so
+  the depositor can preview without bytes transferring; safety
+  gates (ELN-undecided, sidecar checks) still fire under
+  dry-run. Single "Upload selected" button. After upload, the
+  whole UI refreshes so ✓ badges appear on freshly-uploaded
+  files immediately.
+
 - Trigger this when the user says "I want a UI", "non-techie
   colleague needs to deposit", or "the CLI is too much."
 

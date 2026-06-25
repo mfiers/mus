@@ -160,6 +160,12 @@ func TestMusSkill_BodyMentionsDEFlow(t *testing.T) {
 		"GROUP_ID of Sun2026", // the canonical bug case
 		// mus serve GUI (added in 0.2.26+)
 		"mus serve",
+		// mus 0.2.31+ — reshaped serve UI (iRODS-only, vocab-driven
+		// form, selectable tree, dry-run, ✓ uploaded badge)
+		"Catalog (S3 / anthive) uploads are intentionally",
+		"set in this folder:",
+		"inherited from cascade:",
+		"Dry-run checkbox",
 	}
 	for _, req := range requirements {
 		if !strings.Contains(musBody, req) {
