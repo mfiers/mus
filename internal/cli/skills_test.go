@@ -171,6 +171,9 @@ func TestMusSkill_BodyMentionsDEFlow(t *testing.T) {
 		"Pack folders as tar.gz",
 		"filtered to MANUAL keys only",
 		"Suggest",
+		// mus 0.2.33+ — iRODS path layout with year segment
+		"/projects/<YEAR>/<data_project>/<exp_name>",
+		"falls back to the legacy",
 	}
 	for _, req := range requirements {
 		if !strings.Contains(musBody, req) {

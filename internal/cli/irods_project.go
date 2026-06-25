@@ -30,14 +30,15 @@ func newIRODSProjectCmd() *cobra.Command {
 		Use:   "project NAME",
 		Short: "list the most recent uploads to one data_project on iRODS",
 		Long: "Drills into one project's iRODS subtree at\n" +
-			"<irods_home>/project/<NAME>/ and shows the most recently\n" +
-			"modified data objects, newest first.\n\n" +
+			"<irods_home>/projects/<YEAR>/<NAME>/ and shows the most recently\n" +
+			"modified data objects, newest first. YEAR is derived from the\n" +
+			"4-digit suffix of NAME (no manual input).\n\n" +
 			"NAME must be a valid data_project (NameYear format) — same\n" +
 			"validation `mus eln link` / `mus config set data_project`\n" +
 			"applies. Use `mus irods projects` to list all known names.\n\n" +
-			"One genquery (recursive LIKE-prefix), sorted DESC by\n" +
-			"DATA_MODIFY_TIME, capped at -n N (default 20). Useful for a\n" +
-			"quick 'what landed lately?' over a project.",
+			"Falls back to the legacy <irods_home>/project/<NAME>/ layout if\n" +
+			"the new path doesn't exist — so projects uploaded before this\n" +
+			"version stay reachable.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runIRODSProject(cmd, args[0], limit)
@@ -73,11 +74,27 @@ func runIRODSProject(cmd *cobra.Command, name string, limit int) error {
 		return fmt.Errorf("irods_home not set (no default available); " +
 			"`mus config set irods_home /your/zone/home/lab`")
 	}
-	projectPath := strings.TrimRight(home, "/") + "/project/" + name
+	homeTrim := strings.TrimRight(home, "/")
+	year := dataproject.Year(name)
+	// Try the new layout first. Fall back to the legacy /project/<name>
+	// path if the new one doesn't exist — backward-compat for data
+	// uploaded before the year segment landed.
+	projectPath := homeTrim + "/projects/" + year + "/" + name
+	legacyPath := homeTrim + "/project/" + name
 
 	client, err := iron.New()
 	if err != nil {
 		return err
+	}
+
+	if _, statErr := client.Stat(ctx, projectPath); statErr != nil {
+		// New layout absent → try the legacy path. We don't try to
+		// distinguish "no such collection" from other iron errors —
+		// the fallback is harmless and the legacy query will fail
+		// with the same kind of error if neither path exists.
+		if _, legacyStatErr := client.Stat(ctx, legacyPath); legacyStatErr == nil {
+			projectPath = legacyPath
+		}
 	}
 
 	rows, err := queryRecentInProject(ctx, client, projectPath, limit)

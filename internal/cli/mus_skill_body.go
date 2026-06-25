@@ -172,6 +172,22 @@ Run ` + "`mus de howto`" + ` for the canonical primer. Key points:
   9. **Confirm with user, then ` + "`mus s3 upload <folder>`" + `.** Don't
      run upload silently — it has external side effects.
 
+### iRODS path layout (mus 0.2.33+)
+
+Uploads land at:
+` + "`<irods_home>/projects/<YEAR>/<data_project>/<exp_name>/`" + `
+
+` + "`<YEAR>`" + ` is derived from the data_project's mandatory 4-digit
+suffix — not configurable. Splinters the top-level
+` + "`/projects/`" + ` collection so it doesn't accumulate thousands of
+children (iRODS catalog scans degrade noticeably on huge
+collections).
+
+` + "`mus irods project <NAME>`" + ` looks under the new path first,
+falls back to the legacy ` + "`<irods_home>/project/<NAME>/`" + ` for
+data uploaded before this change. ` + "`mus irods projects`" + ` walks
+BOTH layouts and merges (deduplicates by name).
+
 ### iRODS upload (general lab data, NOT catalog)
 
 - ` + "`mus irods upload <FILE-OR-FOLDER> -m <message>`" + ` — recursive, sha256-verified

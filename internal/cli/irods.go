@@ -44,10 +44,17 @@ func newIRODSCmd() *cobra.Command {
 // resolveIRODSCollection computes where on iRODS uploads from this folder
 // land. The layout is now MANDATORY:
 //
-//	<irods_home>/project/<data_project>/<safe_experiment_name>/
+//	<irods_home>/projects/<YEAR>/<data_project>/<safe_experiment_name>/
+//
+// The YEAR segment (4 digits, extracted from the data_project's mandatory
+// year suffix) splinters the top-level /projects/ collection so it doesn't
+// accumulate thousands of children — iRODS catalog scans on a single huge
+// collection degrade noticeably above ~5000 entries.
 //
 // Components:
 //   - irods_home          required, from .env cascade
+//   - YEAR                derived from data_project (last 4 chars; guaranteed
+//                         by the regex). Not configurable.
 //   - data_project        required; must pass dataproject.ValidateName.
 //     Override via --data-project flag.
 //   - safe_experiment_name reproducible sanitisation of eln_experiment_name.
@@ -149,7 +156,13 @@ func resolveIRODSCollection(env *config.Env, overrideDataProject, overrideRemote
 			"  - if you use ELN: `mus eln tag <experiment_id>` (auto-fills it).")
 	}
 
-	return home + "/project/" + dp + "/" + expName, nil
+	year := dataproject.Year(dp)
+	if year == "" {
+		// Should be impossible — ValidateName guarantees a 4-digit suffix.
+		// Fail loud rather than silently dropping the year segment.
+		return "", fmt.Errorf("could not extract year from data_project %q (internal bug)", dp)
+	}
+	return home + "/projects/" + year + "/" + dp + "/" + expName, nil
 }
 
 func newIRODSUploadCmd() *cobra.Command {
@@ -162,7 +175,7 @@ func newIRODSUploadCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "upload -m MESSAGE FILE_OR_FOLDER [FILE_OR_FOLDER...]",
 		Short: "upload via IRON; writes/refreshes *.mus sidecars",
-		Long: "Uploads land at <irods_home>/project/<data_project>/<exp_name>/.\n" +
+		Long: "Uploads land at <irods_home>/projects/<YEAR>/<data_project>/<exp_name>/.\n" +
 			"data_project and a non-empty experiment-name are MANDATORY.\n" +
 			"data_project comes from .env (set via `mus config set` or `mus eln tag`);\n" +
 			"the experiment-name component is a sanitised eln_experiment_name unless\n" +

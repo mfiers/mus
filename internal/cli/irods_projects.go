@@ -1,13 +1,17 @@
 package cli
 
 // `mus irods projects` — list distinct data_project names that
-// already exist on iRODS under <irods_home>/project/. Used by
+// already exist on iRODS, merged across the new
+// <irods_home>/projects/<YEAR>/<data_project> layout AND the
+// legacy <irods_home>/project/<data_project> layout. Used by
 // depositors picking a NEW data_project name to avoid colliding
 // with one that's already in use.
 //
 // No vocabulary; the source of truth is whatever subcollections
-// happen to exist on iRODS. Fast: one genquery against COLL_NAME
-// keyed on COLL_PARENT_NAME (no recursion, no AVU filter).
+// happen to exist on iRODS. Two ls passes (one per layout root)
+// merged client-side, deduplicated by name. Either tree may be
+// missing entirely (legacy never used / new tree predates the
+// upgrade) — both walks are best-effort.
 
 import (
 	"bufio"
@@ -34,9 +38,12 @@ func newIRODSProjectsCmd() *cobra.Command {
 		Use:   "projects",
 		Short: "list data_project names already in use on iRODS",
 		Long: "Lists the data_project names that have already been deposited\n" +
-			"under <irods_home>/project/ on the lab's iRODS catalog. Run\n" +
-			"this before `mus eln link` / `mus config set data_project` to\n" +
-			"avoid colliding with an existing project.\n\n" +
+			"on the lab's iRODS catalog. Walks both layouts:\n" +
+			"  - new:    <irods_home>/projects/<YEAR>/<NAME>\n" +
+			"  - legacy: <irods_home>/project/<NAME>\n" +
+			"and merges (deduplicates by name). Run this before\n" +
+			"`mus eln link` / `mus config set data_project` to avoid\n" +
+			"colliding with an existing project.\n\n" +
 			"Output is one project per line, alphabetically. With --details,\n" +
 			"runs one `iron tree` per project to summarise:\n" +
 			"  - files       data-object count in the project subtree\n" +
@@ -79,29 +86,131 @@ func runIRODSProjects(cmd *cobra.Command, details bool) error {
 		return fmt.Errorf("irods_home not set (no default available); " +
 			"`mus config set irods_home /your/zone/home/lab`")
 	}
-	parent := strings.TrimRight(home, "/") + "/project"
+	homeTrim := strings.TrimRight(home, "/")
+	// Two layouts to walk:
+	//   - NEW: <home>/projects/<YEAR>/<data_project>
+	//   - LEGACY: <home>/project/<data_project>  (uploaded before 0.2.33)
+	// Both are merged into one deduplicated list; row.Path keeps the
+	// real iRODS path so the detail-stats walker hits the right tree.
+	newParent := homeTrim + "/projects"
+	legacyParent := homeTrim + "/project"
 
 	client, err := iron.New()
 	if err != nil {
 		return err
 	}
 
-	rows, err := queryProjects(ctx, client, parent, details)
+	rows, err := queryProjectsBothLayouts(ctx, client, newParent, legacyParent)
 	if err != nil {
-		return fmt.Errorf("querying iRODS for projects under %s: %w", parent, err)
+		return fmt.Errorf("querying iRODS for projects: %w", err)
 	}
 
 	stdout := cmd.OutOrStdout()
 	if len(rows) == 0 {
-		fmt.Fprintf(stdout, "no projects found under %s\n", parent)
+		fmt.Fprintf(stdout, "no projects found under %s or %s\n", newParent, legacyParent)
 		return nil
 	}
 	if details {
 		enrichWithLocalFolders(rows)
-		enrichWithIRODSTreeStats(ctx, client, parent, rows)
+		enrichWithIRODSTreeStatsPerRow(ctx, client, rows)
 	}
 	writeProjects(stdout, rows, details)
 	return nil
+}
+
+// queryProjectsBothLayouts merges projects from the new
+// <home>/projects/<YEAR>/<name> tree with the legacy
+// <home>/project/<name> tree. Same-named project in both layouts
+// keeps the NEW path (where future uploads go).
+//
+// New layout walk: list <home>/projects/, each child is a YEAR
+// directory; list each YEAR's children to get the data_projects.
+// Legacy walk: list <home>/project/ directly.
+//
+// Either tree may be missing entirely (legacy never used on a
+// fresh deployment; new tree absent on a site that hasn't
+// upgraded yet) — both are best-effort, errors are swallowed and
+// reported via empty results.
+func queryProjectsBothLayouts(ctx context.Context, client *iron.Client,
+	newParent, legacyParent string) ([]projectRow, error) {
+	byName := map[string]projectRow{}
+
+	// New layout: /projects/<YEAR>/<name>
+	if yearEntries, err := listCollections(ctx, client, newParent); err == nil {
+		for _, yr := range yearEntries {
+			yearPath := newParent + "/" + yr
+			projEntries, err := listCollections(ctx, client, yearPath)
+			if err != nil {
+				continue
+			}
+			for _, p := range projEntries {
+				if _, exists := byName[p]; !exists {
+					byName[p] = projectRow{
+						Name: p,
+						Path: yearPath + "/" + p,
+					}
+				}
+			}
+		}
+	}
+	// Legacy layout: /project/<name>. Only fill in names we didn't
+	// already see in the new tree.
+	if entries, err := listCollections(ctx, client, legacyParent); err == nil {
+		for _, p := range entries {
+			if _, exists := byName[p]; !exists {
+				byName[p] = projectRow{
+					Name: p,
+					Path: legacyParent + "/" + p,
+				}
+			}
+		}
+	}
+	rows := make([]projectRow, 0, len(byName))
+	for _, r := range byName {
+		rows = append(rows, r)
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
+	return rows, nil
+}
+
+// listCollections returns the base names of every COLLECTION
+// directly under `parent`. Wrapper around the same iron ls
+// machinery queryProjects used.
+func listCollections(ctx context.Context, client *iron.Client, parent string) ([]string, error) {
+	raw, err := client.ListJSON(ctx, parent)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := parseIronListJSON(raw)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	out := []string{}
+	for _, e := range entries {
+		if e.IsObject {
+			continue
+		}
+		name := path.Base(e.Name)
+		if name == "" || name == "." || name == "/" || name == path.Base(parent) {
+			continue
+		}
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out, nil
+}
+
+// enrichWithIRODSTreeStatsPerRow walks each row's stored Path
+// individually — replaces the old parent-based enrichment now that
+// rows can live under different parents (new vs legacy layout).
+func enrichWithIRODSTreeStatsPerRow(ctx context.Context, client *iron.Client, rows []projectRow) {
+	for i := range rows {
+		enrichOneRow(ctx, client, &rows[i])
+	}
 }
 
 // enrichWithLocalFolders fills LocalFolder on each row from the
@@ -133,31 +242,24 @@ func enrichWithLocalFolders(rows []projectRow) {
 	}
 }
 
-// enrichWithIRODSTreeStats walks each project's iRODS subtree and
-// extracts file count, total bytes, distinct uploaders (creator
-// u-numbers), and the most recent modify time. One
-// `iron tree --json <project>` call per project — slow with many
-// large projects but bounded; called only when --details.
+// enrichOneRow fills the per-row stats by walking row.Path. Each
+// row stores its own iRODS path (new vs legacy layout), so this
+// works for the mixed-layout listing without a shared parent.
 //
-// Best-effort: a per-project tree failure leaves that row's stats
-// empty; the rest still get their values. Errors are silent.
-//
-// We avoid iCAT genquery here — iron 0.4.67 rejects LIKE / multi-
-// table projections in `iron query`. `iron tree --json` is the
-// reliable cross-version primitive.
-func enrichWithIRODSTreeStats(ctx context.Context, client *iron.Client, parent string, rows []projectRow) {
-	for i := range rows {
-		projectPath := parent + "/" + rows[i].Name
-		raw, err := client.TreeJSON(ctx, projectPath, "name", "size", "checksum", "date", "creator")
-		if err != nil {
-			continue
-		}
-		stats := projectStatsFromTreeJSON(raw)
-		rows[i].FileCount = stats.fileCount
-		rows[i].TotalBytes = stats.totalBytes
-		rows[i].Uploaders = stats.uploaders
-		rows[i].LastUpload = stats.lastUpload
+// Best-effort: a tree failure leaves the row's stats empty.
+func enrichOneRow(ctx context.Context, client *iron.Client, row *projectRow) {
+	if row.Path == "" {
+		return
 	}
+	raw, err := client.TreeJSON(ctx, row.Path, "name", "size", "checksum", "date", "creator")
+	if err != nil {
+		return
+	}
+	stats := projectStatsFromTreeJSON(raw)
+	row.FileCount = stats.fileCount
+	row.TotalBytes = stats.totalBytes
+	row.Uploaders = stats.uploaders
+	row.LastUpload = stats.lastUpload
 }
 
 // projectTreeStats is the per-project summary extracted from one
@@ -245,6 +347,7 @@ func formatICATTime(raw string) string {
 // populated unless --details was requested.
 type projectRow struct {
 	Name        string
+	Path        string // full iRODS path to the project's collection
 	FileCount   int    // data objects in the project subtree (--details)
 	TotalBytes  int64  // sum of DATA_SIZE across the subtree (--details)
 	Uploaders   string // comma-joined sorted set of `creator` u-numbers (--details)
@@ -252,47 +355,11 @@ type projectRow struct {
 	LocalFolder string // ~/.local/share/mus/local_projects.json (--details)
 }
 
-// queryProjects asks iRODS for every subcollection one level below
-// `parent`. We use `iron ls --json` because iron's genquery in
-// older releases (≤ 0.4.67) rejects the COLL_PARENT_NAME filter +
-// COLL_OWNER_NAME / COLL_CREATE_TIME projection with
-// SYS_INVALID_INPUT_PARAM. `iron ls` is the iRODS-native "what's
-// directly under here?" command and works on every iron version.
-//
-// Output handling: iron's ls --json comes in two shapes depending
-// on version — a single JSON array, or NDJSON (one object per
-// line). parseIronListJSON handles both. Only collection-shaped
-// entries are returned (data objects directly under the project
-// parent don't exist in mus's layout, but we filter defensively).
-func queryProjects(ctx context.Context, client *iron.Client, parent string, _details bool) ([]projectRow, error) {
-	raw, err := client.ListJSON(ctx, parent)
-	if err != nil {
-		return nil, err
-	}
-	entries, err := parseIronListJSON(raw)
-	if err != nil {
-		return nil, fmt.Errorf("decoding iron ls output: %w", err)
-	}
-	seen := make(map[string]bool, len(entries))
-	rows := make([]projectRow, 0, len(entries))
-	for _, e := range entries {
-		// Skip explicit data objects — projects must be collections.
-		if e.IsObject {
-			continue
-		}
-		name := path.Base(e.Name)
-		if name == "" || name == "." || name == "/" || name == path.Base(parent) {
-			continue
-		}
-		if seen[name] {
-			continue
-		}
-		seen[name] = true
-		rows = append(rows, projectRow{Name: name})
-	}
-	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
-	return rows, nil
-}
+// listCollections + queryProjectsBothLayouts above replaced the
+// single-parent queryProjects helper that lived here. The
+// historical comments about iron 0.4.67 genquery rejection and
+// the NDJSON-vs-array shape carry over: listCollections still
+// uses iron ls --json + parseIronListJSON for the same reasons.
 
 // ironListEntry is one record from `iron ls --json`. Different iron
 // versions emit slightly different field shapes — we accept the

@@ -37,6 +37,24 @@ func TestValidateNameRejects(t *testing.T) {
 	}
 }
 
+func TestYear(t *testing.T) {
+	cases := map[string]string{
+		"Fiers2025":          "2025",
+		"Fiers_Mancuso_2024": "2024",
+		"MusLab_Pilot2024":   "2024",
+		"Sun2026":            "2026",
+		"A2024":              "2024",
+		"abc":                "",   // too short — defensive
+		"":                   "",   // empty
+		"  Fiers2025  ":      "2025", // trimmed
+	}
+	for in, want := range cases {
+		if got := Year(in); got != want {
+			t.Errorf("Year(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // Edge-case names the regex accepts that look weird to a human but aren't
 // clearly malformed — left in to lock the parser's behaviour.
 func TestValidateNameAcceptsEdgeCases(t *testing.T) {

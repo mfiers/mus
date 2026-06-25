@@ -38,6 +38,24 @@ var nameRE = regexp.MustCompile(`^[A-Z][A-Za-z0-9_]*\d{4}$`)
 // stay readable and below filesystem-friendly limits.
 const MaxLen = 60
 
+// Year returns the 4-digit year suffix from a data_project name.
+// Assumes the name has already passed ValidateName — the regex
+// guarantees the last 4 characters are decimal digits. Returns
+// "" when the name is too short to contain a year suffix
+// (defensive — should not happen on validated input).
+//
+// Used by the iRODS path resolver: uploads land at
+// <irods_home>/projects/<Year>/<data_project>/<...>. The year
+// segment splinters the per-data_project sub-trees so a single
+// projects/ collection doesn't accumulate thousands of children.
+func Year(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) < 4 {
+		return ""
+	}
+	return s[len(s)-4:]
+}
+
 // ValidateName returns nil if s is a syntactically valid data_project name,
 // else a descriptive error.
 func ValidateName(s string) error {
