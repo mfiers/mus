@@ -106,7 +106,26 @@ type Report struct {
 // validation, and long-format aggregation as the plain variant.
 // The hash recorded in the sidecar is over the COMPRESSED bytes
 // on disk (whatever the depositor uploaded).
+// InspectWithOverride is Inspect's variant for the `--format` CLI
+// override. When `formatOverride == FormatUnknown`, behaves like
+// Inspect (auto-detects). When set, the override REPLACES detection
+// — useful when the depositor's file has renamed columns that don't
+// match the auto-detect signature but they know the underlying
+// preset.
+//
+// Crucially, when override is Long, this still computes the
+// long-specific TermIdx + ContrastIdx + TermSet + ContrastSet — so
+// downstream Validate doesn't refuse a perfectly good long file
+// just because the canonical `gene_id` column has been renamed.
+func InspectWithOverride(path string, formatOverride Format) (*Report, error) {
+	return inspectInternal(path, formatOverride)
+}
+
 func Inspect(path string) (*Report, error) {
+	return inspectInternal(path, FormatUnknown)
+}
+
+func inspectInternal(path string, formatOverride Format) (*Report, error) {
 	if isParquet(path) {
 		return nil, &ErrParquet{Path: path}
 	}
@@ -138,6 +157,15 @@ func Inspect(path string) (*Report, error) {
 		ContrastIdx: -1,
 	}
 	rep.Format, rep.MatchedCols = detectFormat(header)
+
+	// CLI --format override wins over auto-detect. The override is
+	// what downstream Validate + the post-mapping column gate work
+	// against, so we set it here BEFORE computing per-format
+	// derived fields (TermIdx etc).
+	if formatOverride != FormatUnknown {
+		rep.Format = formatOverride
+		rep.MatchedCols = nil // detection didn't fire; matched-cols loses meaning
+	}
 
 	// Count rows for every format. For `long`, also collect distinct
 	// term + contrast values; the index lookup is set up here so the
@@ -413,6 +441,15 @@ func toLowerRune(r rune) rune {
 		return r + ('a' - 'A')
 	}
 	return r
+}
+
+// HasColumn reports whether `target` is present in `header` after
+// applying mus's column-name normalisation (lowercase + strip
+// `.`/`_`/`-`/space). Exported wrapper so other packages can do
+// post-mapping column checks against a header without reimplementing
+// the normalizer. Returns true on the first match.
+func HasColumn(header []string, target string) bool {
+	return indexOfNormalized(header, target) >= 0
 }
 
 // indexOfNormalized returns the 0-based position of `target`

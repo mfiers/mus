@@ -141,6 +141,22 @@ Run ` + "`mus de howto`" + ` for the canonical primer. Key points:
       from the preset for everything EXCEPT ` + "`long`" + ` (which has no
       default). For long: ` + "`mus config set de_method <NAME>`" + `
       explicitly (e.g. ` + "`DESeq2`" + `, ` + "`edgeR`" + `, ` + "`custom-pipeline`" + `).
+  5b. **Post-mapping column gate (mus 0.2.30+):** mus de check
+      verifies every preset's required CANONICAL columns resolve
+      to a source column actually present in the file. The
+      resolution per canonical is:
+        ` + "`source = env(\"de_map_\" + canonical) OR preset_default`" + `.
+      Required canonicals per preset:
+        deseq2 / edger / seurat / glmmseq → gene, log2fc, pvalue, padj
+        scanpy → gene, contrast, log2fc, pvalue, padj
+        glmmtmb → gene, estimate, pvalue
+        long → gene, term, contrast
+      Catches the renamed-source-columns + ` + "`--format`" + ` override
+      case anthive4 surfaced — depositor uses ` + "`--format=deseq2`" + `
+      on a file with columns ` + "`g`" + `, ` + "`lfc`" + `, ` + "`pv`" + `, ` + "`fdr`" + `
+      but forgets the de_map_* keys. mus refuses before the upload
+      with the exact ` + "`mus config set de_map_<canonical> <source>`" + `
+      fix.
   6. **Optional but valuable:** ` + "`de_covariates`" + `, ` + "`de_description`" + `,
      ` + "`de_software_version`" + `, ` + "`de_reference_type`" + ` (vsreference |
      pairwise | vsgrandmean), ` + "`de_cluster_obs_column`" + ` (column in

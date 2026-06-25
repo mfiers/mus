@@ -154,6 +154,9 @@ func TestMusSkill_BodyMentionsDEFlow(t *testing.T) {
 		// mus 0.2.30+ — de_method always required + de_map_gene for long
 		"de_map_gene",
 		"de_method` always required",
+		// mus 0.2.30+ — post-mapping column gate
+		"Post-mapping column gate",
+		"required CANONICAL columns",
 		"GROUP_ID of Sun2026", // the canonical bug case
 		// mus serve GUI (added in 0.2.26+)
 		"mus serve",

@@ -262,20 +262,23 @@ func checkOneDEFile(cache *hashcache.Cache, path string, env *config.Env,
 
 	out.fileHeader(path)
 
-	// 1. Inspect (format detect + body scan).
-	rep, err := de.Inspect(path)
+	// 1. Inspect (format detect + body scan). InspectWithOverride
+	//    threads the --format flag into the inspection so the body-
+	//    scan can do long-specific work (TermIdx / ContrastIdx /
+	//    TermSet / ContrastSet) even when the file's header doesn't
+	//    auto-detect as long (renamed columns case).
+	rep, err := de.InspectWithOverride(path, formatOverride)
 	if err != nil {
 		out.errf("format", "%v", err)
 		return false, dePassFile{}, false
 	}
 	chosen := rep.Format
-	if formatOverride != de.FormatUnknown {
-		chosen = formatOverride
-		rep.Format = formatOverride
+	switch {
+	case formatOverride != de.FormatUnknown:
 		out.ok("format", fmt.Sprintf("override --format=%s", formatOverride))
-	} else if chosen == de.FormatUnknown {
+	case chosen == de.FormatUnknown:
 		// Validate will produce the right error; let it speak.
-	} else {
+	default:
 		out.ok("format", fmt.Sprintf(
 			"detected %s (matched: %s)",
 			chosen, strings.Join(rep.MatchedCols, ", ")))
@@ -436,6 +439,20 @@ func checkOneDEFile(cache *hashcache.Cache, path string, env *config.Env,
 		return false, dePassFile{}, unsetSoft
 	}
 
+	// 8.6. Post-mapping column reachability. After applying any
+	//      de_map_<TARGET>=<source> overrides (or falling back to
+	//      the preset's identity defaults), every required canonical
+	//      column must resolve to a source column actually present
+	//      in the file's header. Catches the remaining edge case
+	//      from anthive4 #222: depositor uses --format override
+	//      with renamed source columns and either forgets a
+	//      de_map_* or supplies a wrong source name. Without this
+	//      gate the file would slip through and fail at
+	//      ant-de-ingest's DuckDB binder.
+	if !reportPostMapColumns(env, chosen, rep.HeaderCols, out) {
+		return false, dePassFile{}, unsetSoft
+	}
+
 	// 9. Storage nudge: suggest gzipping plain .tsv / .csv files.
 	if !isGzippedFile(path) {
 		ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")
@@ -460,6 +477,246 @@ func checkOneDEFile(cache *hashcache.Cache, path string, env *config.Env,
 		DatasetH5ad: datasetH5ad,
 		Cluster:    cluster,
 	}, unsetSoft
+}
+
+// requiredCanonicalColumns maps each format to the anthive __de
+// CANONICAL column names that MUST be reachable (= present in the
+// file post-de_map_* application) for ant-de-ingest's binder to
+// succeed. Source of truth: anthive4 lib/de_presets.py preset
+// definitions (the `required_in_file` lists, mirrored here).
+var requiredCanonicalColumns = map[de.Format][]string{
+	de.FormatDESeq2:  {"gene", "log2fc", "pvalue", "padj"},
+	de.FormatEdgeR:   {"gene", "log2fc", "pvalue", "padj"},
+	de.FormatScanpy:  {"gene", "contrast", "log2fc", "pvalue", "padj"},
+	de.FormatSeurat:  {"gene", "log2fc", "pvalue", "padj"},
+	de.FormatGLMMseq: {"gene", "log2fc", "pvalue", "padj"},
+	de.FormatGLMMTMB: {"gene", "estimate", "pvalue"},
+	de.FormatLong:    {"gene", "term", "contrast"},
+}
+
+// presetSourceDefaults maps a (format, canonical-column) pair to
+// the SOURCE column name the preset expects when no de_map_* is
+// supplied. Derived from inverting anthive's preset column_map
+// (which goes source → anthive); we pick the canonical source for
+// each anthive column.
+//
+// When a preset's source format admits multiple variants for the
+// same canonical (e.g. glmmseq accepts both `P_FixedEffects` and
+// `pvalue` for canonical `pvalue`), we list the most common name.
+// Depositors using a non-default name set de_map_<canonical> to
+// their actual source column.
+var presetSourceDefaults = map[de.Format]map[string]string{
+	de.FormatDESeq2: {
+		"gene":   "gene",
+		"log2fc": "log2FoldChange",
+		"pvalue": "pvalue",
+		"padj":   "padj",
+	},
+	de.FormatEdgeR: {
+		"gene":   "gene",
+		"log2fc": "logFC",
+		"pvalue": "PValue",
+		"padj":   "FDR",
+	},
+	de.FormatScanpy: {
+		"gene":     "names",
+		"contrast": "group",
+		"log2fc":   "logfoldchanges",
+		"pvalue":   "pvals",
+		"padj":     "pvals_adj",
+	},
+	de.FormatSeurat: {
+		"gene":   "gene",
+		"log2fc": "avg_log2FC",
+		"pvalue": "p_val",
+		"padj":   "p_val_adj",
+	},
+	de.FormatGLMMseq: {
+		"gene":   "gene",
+		"log2fc": "log2fc",
+		"pvalue": "P_FixedEffects",
+		"padj":   "q.FixedEffects",
+	},
+	de.FormatGLMMTMB: {
+		"gene":     "gene",
+		"estimate": "Estimate",
+		"pvalue":   "Pr(>|z|)",
+	},
+	de.FormatLong: {
+		// long has identity defaults for every canonical; depositors
+		// must set de_map_gene at minimum (enforced by the per-format
+		// required-fields gate) AND de_map_term / de_map_contrast if
+		// their source columns aren't already named term / contrast.
+		"gene":     "gene",
+		"term":     "term",
+		"contrast": "contrast",
+	},
+}
+
+// reportPostMapColumns verifies that every required canonical
+// column maps to a source column actually present in the data
+// file. Source column resolves to:
+//
+//	source = env.String("de_map_" + canonical)  // explicit override
+//	if source == "" {
+//	    source = presetSourceDefaults[format][canonical]  // identity-ish default
+//	}
+//
+// Then check `de.HasColumn(headerCols, source)` (normalised compare).
+//
+// Returns true when every required canonical is reachable; false
+// (with one ERROR line per missing target) otherwise.
+//
+// Catches the gap that motivated this check: depositor uses
+// `--format` override AND/OR renamed source columns AND fails to
+// supply (or supplies a wrong) de_map_*. Without this gate the
+// file would slip through `mus de check`, land in __incoming/,
+// and break at ant-de-ingest's DuckDB binder.
+func reportPostMapColumns(env *config.Env, format de.Format,
+	headerCols []string, out *deReporter) bool {
+
+	required := requiredCanonicalColumns[format]
+	defaults := presetSourceDefaults[format]
+	if len(required) == 0 {
+		return true // no canonical requirements for this format (defensive)
+	}
+	type miss struct {
+		canonical string
+		source    string
+		viaMap    bool
+	}
+	var missing []miss
+	for _, canonical := range required {
+		var source string
+		var viaMap bool
+		if v := env.String("de_map_" + canonical); v != "" {
+			source = v
+			viaMap = true
+		} else {
+			source = defaults[canonical]
+		}
+		if source == "" || !de.HasColumn(headerCols, source) {
+			missing = append(missing, miss{canonical, source, viaMap})
+		}
+	}
+	if len(missing) == 0 {
+		out.ok("columns (post-map)",
+			fmt.Sprintf("all required canonicals reachable for %s preset", format))
+		return true
+	}
+	for _, m := range missing {
+		var hint string
+		if m.viaMap {
+			hint = fmt.Sprintf(
+				"canonical %q is mapped to source column %q (via de_map_%s) but that column is not in the file. "+
+					"Actual columns: %s. Update `mus config set de_map_%s <correct-source>`.",
+				m.canonical, m.source, m.canonical,
+				strings.Join(headerCols, ", "), m.canonical)
+		} else {
+			// Always tell depositor the escape hatch (de_map_<canonical>);
+			// add a specific source-column suggestion when one is close
+			// enough by Levenshtein.
+			suggestion := nearestColumnByDistance(m.source, headerCols)
+			fix := fmt.Sprintf("`mus config set de_map_%s <source-column>`", m.canonical)
+			if suggestion != "" {
+				fix = fmt.Sprintf("`mus config set de_map_%s %s` (best guess)",
+					m.canonical, suggestion)
+			}
+			hint = fmt.Sprintf(
+				"%s preset expects source column %q (canonical %q) but it's not in the file. "+
+					"Actual columns: %s. Fix with %s.",
+				format, m.source, m.canonical,
+				strings.Join(headerCols, ", "), fix)
+		}
+		out.errf("columns (required for "+string(format)+")", "%s", hint)
+	}
+	return false
+}
+
+// nearestColumnByDistance returns the closest column from `actual`
+// to `query` by Levenshtein distance, or "" when none is meaningfully
+// close. Uses the same normalisation mus's column detection uses,
+// so case + separator differences don't dominate the score.
+func nearestColumnByDistance(query string, actual []string) string {
+	if len(actual) == 0 {
+		return ""
+	}
+	q := normalize(query)
+	bestScore := -1
+	best := ""
+	for _, col := range actual {
+		d := levenshteinDist(q, normalize(col))
+		if bestScore == -1 || d < bestScore {
+			bestScore = d
+			best = col
+		}
+	}
+	// Only suggest if the match is meaningfully close — within
+	// ceil(len(query) / 2) edits. Otherwise it's noise.
+	if bestScore > (len(q)+1)/2 {
+		return ""
+	}
+	return best
+}
+
+// normalize collapses ASCII case + strips {`_`, `-`, `.`, ` `} —
+// mirrors de.normalizeColName (kept package-local here to avoid
+// adding another exported symbol for the rare suggestion path).
+func normalize(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch r {
+		case '.', '_', '-', ' ':
+			continue
+		}
+		if r >= 'A' && r <= 'Z' {
+			r += 'a' - 'A'
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// levenshteinDist is the standard 2-row DP edit distance. Used
+// once per missing column, on small strings — speed isn't critical.
+func levenshteinDist(a, b string) int {
+	if a == b {
+		return 0
+	}
+	if len(a) == 0 {
+		return len(b)
+	}
+	if len(b) == 0 {
+		return len(a)
+	}
+	prev := make([]int, len(b)+1)
+	curr := make([]int, len(b)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		curr[0] = i
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			ins := curr[j-1] + 1
+			del := prev[j] + 1
+			sub := prev[j-1] + cost
+			m := ins
+			if del < m {
+				m = del
+			}
+			if sub < m {
+				m = sub
+			}
+			curr[j] = m
+		}
+		prev, curr = curr, prev
+	}
+	return prev[len(b)]
 }
 
 // requiredFormatFields returns the de_* cascade keys that MUST be
@@ -1197,6 +1454,27 @@ validate; the catalog (anthive) accepts only files that pass it.
    Pass '--no-catalog-check' to skip the cross-check (offline mode
    or pre-S3-setup); mus falls back to a soft 'vark' query if that
    CLI is on PATH.
+
+5b. POST-MAPPING COLUMN GATE (mus 0.2.30+)
+    'mus de check' verifies every preset's required CANONICAL columns
+    actually resolve to a source column present in the file. The
+    resolution is:
+        source-col = env.de_map_<canonical>   (explicit override), OR
+                     preset's default for that canonical (e.g. deseq2:
+                     log2fc → log2FoldChange; scanpy: contrast → group).
+    Catches the case where you pass --format override on a file with
+    renamed columns and forgot the de_map_* — the file would slip mus
+    and break at ant-de-ingest's DuckDB binder.
+
+    Required canonicals per preset:
+        deseq2 / edger / seurat / glmmseq → gene, log2fc, pvalue, padj
+        scanpy                            → gene, contrast, log2fc, pvalue, padj
+        glmmtmb                           → gene, estimate, pvalue
+        long                              → gene, term, contrast
+
+    Missing column → ERROR with the depositor's actual columns + the
+    exact de_map_<canonical> fix (with a 'best guess' suggestion when
+    edit-distance is close enough).
 
 6. CO-INGEST (h5ad + DE in one upload)
    Layout your upload folder as:

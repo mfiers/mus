@@ -98,8 +98,8 @@ func TestDECheck_ClusterValidation_NoLocalH5adSkips(t *testing.T) {
 	}
 	writeMusCfg(t, deDir, "de_cluster=microglia.DAM")
 	writeDETSV(t, filepath.Join(deDir, "results.tsv"),
-		"names\tlogfoldchanges\tpvals_adj",
-		"G1\t0.1\t0.5")
+		"names\tgroup\tlogfoldchanges\tpvals\tpvals_adj",
+		"G1\tA_vs_B\t0.1\t0.05\t0.5")
 	stdout, _, err := runDECheckForTest(t, dir)
 	if err != nil {
 		t.Fatal(err)
@@ -127,8 +127,8 @@ func TestDECheck_CoIngestDetected_FlatLayout(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeDETSV(t, filepath.Join(dir, "de.tsv"),
-		"names\tlogfoldchanges\tpvals_adj",
-		"G1\t0.1\t0.5")
+		"names\tgroup\tlogfoldchanges\tpvals\tpvals_adj",
+		"G1\tA_vs_B\t0.1\t0.05\t0.5")
 
 	stdout, _, err := runDECheckForTest(t, dir)
 	if err != nil {
@@ -163,8 +163,8 @@ func TestDECheck_CoIngestDetected_NestedDELayout(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeDETSV(t, filepath.Join(deDir, "results.tsv"),
-		"names\tlogfoldchanges\tpvals_adj",
-		"G1\t0.1\t0.5")
+		"names\tgroup\tlogfoldchanges\tpvals\tpvals_adj",
+		"G1\tA_vs_B\t0.1\t0.05\t0.5")
 
 	stdout, _, err := runDECheckForTest(t, dir)
 	if err != nil {
@@ -183,8 +183,8 @@ func TestDECheck_NoCoIngest_FallsBackToVarkOrSkip(t *testing.T) {
 		"de_term=condition", // required for scanpy preset
 	)
 	writeDETSV(t, filepath.Join(dir, "de.tsv"),
-		"names\tlogfoldchanges\tpvals_adj",
-		"G1\t0.1\t0.5")
+		"names\tgroup\tlogfoldchanges\tpvals\tpvals_adj",
+		"G1\tA_vs_B\t0.1\t0.05\t0.5")
 
 	stdout, _, err := runDECheckForTest(t, dir)
 	if err != nil {
@@ -777,8 +777,8 @@ func TestDECheck_Scanpy_RequiresTermOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeDETSV(t, filepath.Join(dir, "de.tsv"),
-		"names\tlogfoldchanges\tpvals_adj",
-		"G1\t0.1\t0.5")
+		"names\tgroup\tlogfoldchanges\tpvals\tpvals_adj",
+		"G1\tA_vs_B\t0.1\t0.05\t0.5")
 	_, _, err := runDECheckForTest(t, dir)
 	if err != nil {
 		t.Fatalf("scanpy with de_term should pass; got: %v", err)
@@ -799,8 +799,8 @@ func TestDECheck_Scanpy_MissingTermFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeDETSV(t, filepath.Join(dir, "de.tsv"),
-		"names\tlogfoldchanges\tpvals_adj",
-		"G1\t0.1\t0.5")
+		"names\tgroup\tlogfoldchanges\tpvals\tpvals_adj",
+		"G1\tA_vs_B\t0.1\t0.05\t0.5")
 	_, stderr, err := runDECheckForTest(t, dir)
 	if err == nil {
 		t.Fatal("expected scanpy without de_term to fail")
@@ -900,5 +900,126 @@ func TestDECheck_NonLong_MethodAutoFills(t *testing.T) {
 	}
 	if !strings.Contains(stdout, `auto-filled "DESeq2"`) {
 		t.Errorf("expected the auto-fill notice:\n%s", stdout)
+	}
+}
+
+// --- post-mapping column gate (anthive4 #220 / #222) -----------------------
+
+// TestDECheck_PostMap_OverrideWithRenamedCols_Refused — the exact
+// edge case from #220.F: depositor uses --format=deseq2 to override
+// auto-detect on a file whose columns are renamed, but forgets
+// to declare the de_map_* mappings. Without this gate, the file
+// would pass mus and fail at ant-de-ingest's binder.
+func TestDECheck_PostMap_OverrideWithRenamedCols_Refused(t *testing.T) {
+	dir := t.TempDir()
+	writeMusCfg(t, dir,
+		"data_project=Fiers2025",
+		"de_dataset_id=ABC",
+		"de_term=condition",
+		"de_contrast=treated_vs_control",
+		// no de_map_* — depositor forgot to declare renames
+	)
+	// File has the right SHAPE for deseq2-via-mus-signature (would
+	// pass the existing signature check) but uses SHORTHAND names
+	// that don't match the canonical mappings.
+	writeDETSV(t, filepath.Join(dir, "de.tsv"),
+		"g\tlfc\tpv\tfdr",
+		"G1\t1\t0.001\t0.01")
+	_, stderr, err := runDECheckForTest(t, dir, "--format", "deseq2")
+	if err == nil {
+		t.Fatal("expected post-map column gate to refuse the file")
+	}
+	if !strings.Contains(stderr, "columns (required for deseq2)") {
+		t.Errorf("expected columns-required error; stderr:\n%s", stderr)
+	}
+	// Should suggest the de_map_* the depositor needs.
+	if !strings.Contains(stderr, "de_map_log2fc") {
+		t.Errorf("expected de_map_log2fc suggestion; stderr:\n%s", stderr)
+	}
+}
+
+// TestDECheck_PostMap_OverrideWithCorrectMap_Passes — same renamed
+// file, but this time the depositor declares the de_map_* keys
+// pointing at the actual source columns. Should pass.
+func TestDECheck_PostMap_OverrideWithCorrectMap_Passes(t *testing.T) {
+	dir := t.TempDir()
+	writeMusCfg(t, dir,
+		"data_project=Fiers2025",
+		"de_dataset_id=ABC",
+		"de_term=condition",
+		"de_contrast=treated_vs_control",
+		"de_map_gene=g",
+		"de_map_log2fc=lfc",
+		"de_map_pvalue=pv",
+		"de_map_padj=fdr",
+	)
+	writeDETSV(t, filepath.Join(dir, "de.tsv"),
+		"g\tlfc\tpv\tfdr",
+		"G1\t1\t0.001\t0.01")
+	_, _, err := runDECheckForTest(t, dir, "--format", "deseq2")
+	if err != nil {
+		t.Fatalf("override + matching de_map_* should pass; got: %v", err)
+	}
+}
+
+// TestDECheck_PostMap_WrongMapSourceCol_Refused — depositor sets
+// de_map_log2fc but points at a column that doesn't exist. mus
+// must catch the broken mapping (it would otherwise fail at
+// ant-de-ingest's binder).
+func TestDECheck_PostMap_WrongMapSourceCol_Refused(t *testing.T) {
+	dir := t.TempDir()
+	writeMusCfg(t, dir,
+		"data_project=Fiers2025",
+		"de_dataset_id=ABC",
+		"de_term=condition",
+		"de_contrast=treated_vs_control",
+		"de_map_log2fc=lfc_NONEXISTENT", // typo / wrong column name
+	)
+	writeDETSV(t, filepath.Join(dir, "de.tsv"),
+		"gene\tlog2FoldChange\tpvalue\tpadj",
+		"G1\t1\t0.001\t0.01")
+	_, stderr, err := runDECheckForTest(t, dir, "--format", "deseq2")
+	if err == nil {
+		t.Fatal("expected refusal when de_map_log2fc points at a missing column")
+	}
+	if !strings.Contains(stderr, "via de_map_log2fc") {
+		t.Errorf("error should name the broken mapping; stderr:\n%s", stderr)
+	}
+}
+
+// TestDECheck_PostMap_LongWithCustomGeneCol — long with non-default
+// source column name (Symbol instead of gene_id) + de_map_gene=Symbol.
+// Auto-detect wouldn't match the long signature, but with --format=long
+// override + correct map, the post-map gate must pass.
+func TestDECheck_PostMap_LongWithCustomGeneCol(t *testing.T) {
+	dir := t.TempDir()
+	writeMusCfg(t, dir,
+		"data_project=Fiers2025",
+		"de_dataset_id=ABC",
+		"de_method=custom-pipeline",
+		"de_map_gene=Symbol",
+		// term + contrast already named canonically in the file
+	)
+	writeDETSV(t, filepath.Join(dir, "de.tsv"),
+		"Symbol\teffsize\tpvalue\tpadj\tterm\tcontrast",
+		"G1\t0.5\t0.001\t0.05\tcondition\tA_vs_B")
+	_, _, err := runDECheckForTest(t, dir, "--format", "long")
+	if err != nil {
+		t.Fatalf("long with --format override + de_map_gene=Symbol should pass; got: %v", err)
+	}
+}
+
+// TestNearestColumnByDistance_PicksClose — single-char typo →
+// suggest the close match. Two distant strings → "".
+func TestNearestColumnByDistance_PicksClose(t *testing.T) {
+	got := nearestColumnByDistance("log2FoldChange",
+		[]string{"gene", "log2FldChange", "padj"}) // 1-edit typo
+	if got != "log2FldChange" {
+		t.Errorf("expected close-match suggestion; got %q", got)
+	}
+	got = nearestColumnByDistance("log2FoldChange",
+		[]string{"gene", "completely_unrelated_thing", "padj"})
+	if got != "" {
+		t.Errorf("expected no suggestion for distant match; got %q", got)
 	}
 }
