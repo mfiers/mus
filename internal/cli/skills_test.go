@@ -151,6 +151,9 @@ func TestMusSkill_BodyMentionsDEFlow(t *testing.T) {
 		// mus 0.2.29+ — per-format required de_term/de_contrast gate
 		"HARD-required PER format",
 		"BOTH `de_term` and `de_contrast` REQUIRED",
+		// mus 0.2.30+ — de_method always required + de_map_gene for long
+		"de_map_gene",
+		"de_method` always required",
 		"GROUP_ID of Sun2026", // the canonical bug case
 		// mus serve GUI (added in 0.2.26+)
 		"mus serve",

@@ -130,9 +130,17 @@ Run ` + "`mus de howto`" + ` for the canonical primer. Key points:
          → BOTH ` + "`de_term`" + ` and ` + "`de_contrast`" + ` REQUIRED
        - ` + "`scanpy`" + ` → ` + "`de_term`" + ` REQUIRED (de_contrast inferred at
          ingest from the file's group column)
-       - ` + "`de_format=long`" + ` → neither required; set
-         ` + "`de_term=auto`" + ` / ` + "`de_contrast=auto`" + ` and mus computes
-         the distinct sets from the body
+       - ` + "`de_format=long`" + ` → ` + "`de_term=auto`" + ` /
+         ` + "`de_contrast=auto`" + ` (body-derived). ALSO
+         ` + "`de_map_gene=<source-column>`" + ` REQUIRED — maps the TSV's
+         gene-id column to anthive's canonical ` + "`gene`" + `. Other
+         ` + "`de_map_<TARGET>`" + ` keys are optional and fall through
+         to identity. Valid TARGETs: gene, term, contrast, log2fc,
+         zeff, pvalue, padj, estimate, SE, ci_low, ci_high.
+  5a. **` + "`de_method`" + ` always required (mus 0.2.30+):** auto-filled
+      from the preset for everything EXCEPT ` + "`long`" + ` (which has no
+      default). For long: ` + "`mus config set de_method <NAME>`" + `
+      explicitly (e.g. ` + "`DESeq2`" + `, ` + "`edgeR`" + `, ` + "`custom-pipeline`" + `).
   6. **Optional but valuable:** ` + "`de_covariates`" + `, ` + "`de_description`" + `,
      ` + "`de_software_version`" + `, ` + "`de_reference_type`" + ` (vsreference |
      pairwise | vsgrandmean), ` + "`de_cluster_obs_column`" + ` (column in

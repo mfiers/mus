@@ -365,14 +365,20 @@ func checkOneDEFile(cache *hashcache.Cache, path string, env *config.Env,
 				"`mus s3 login` to enable manifest, or `--no-catalog-check` to silence")
 	}
 
-	// 5. Method (auto-fill from format).
+	// 5. Method (auto-fill from format for non-long; HARD-required
+	//    for long — anthive's ant-de-ingest needs --method on every
+	//    invocation and `long` is the one preset with no default).
 	method := env.String("de_method")
 	if method == "" {
 		method = de.MethodFromFormat(chosen)
 		if method != "" {
 			out.ok("method", fmt.Sprintf("auto-filled %q from de_format=%s", method, chosen))
 		} else {
-			out.skip("method", "no canonical name for de_format=long")
+			// long has no default — fail loudly with a fix-it hint.
+			out.errf("method",
+				"de_method unset and de_format=long has no default — "+
+					"`mus config set de_method <NAME>` (e.g. DESeq2, edgeR, custom-pipeline)")
+			return false, dePassFile{}, false
 		}
 	} else {
 		out.ok("method", fmt.Sprintf("set in cascade: %q", method))
@@ -474,7 +480,16 @@ func requiredFormatFields(f de.Format) []string {
 	case de.FormatScanpy:
 		return []string{"de_term"}
 	case de.FormatLong:
-		return nil // body-derived, set de_term=auto / de_contrast=auto
+		// term + contrast are body-derived (set de_term=auto /
+		// de_contrast=auto). But the long preset needs a column
+		// MAP to translate the depositor's TSV columns into
+		// anthive's canonical schema. Only de_map_gene is hard-
+		// required — the others (de_map_log2fc / de_map_padj /
+		// de_map_pvalue / de_map_zeff / de_map_estimate / de_map_SE
+		// / de_map_ci_low / de_map_ci_high / de_map_term /
+		// de_map_contrast) fall through to identity if the source
+		// TSV column names already match.
+		return []string{"de_map_gene"}
 	}
 	return nil
 }
@@ -1129,10 +1144,17 @@ validate; the catalog (anthive) accepts only files that pass it.
            → de_term required; de_contrast is inferred from the
              data file's group column at ingest
        long
-           → neither required (set de_term=auto / de_contrast=auto;
-             mus computes the distinct sets from the body)
-   AUTO-FILLED FROM de_format IF UNSET:
+           → de_term + de_contrast are body-derived (set
+             de_term=auto / de_contrast=auto)
+           → de_map_gene REQUIRED (TSV-column → 'gene' rename);
+             other de_map_<TARGET> keys optional, fall through to
+             identity. Acceptable TARGETs: gene, term, contrast,
+             log2fc, zeff, pvalue, padj, estimate, SE, ci_low,
+             ci_high.
+   HARD-required (always; auto-filled from format for most presets):
        de_method           DESeq2 / edgeR / scanpy.rank_genes_groups / …
+                           Auto-fills for all presets EXCEPT long.
+                           For long → no default, MUST be set explicitly.
    SOFT (passed through to anthive):
        de_cluster_obs_column   obs col in dataset h5ad to validate de_cluster against
        de_software_version

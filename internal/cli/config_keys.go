@@ -83,6 +83,13 @@ var knownConfigKeys = []string{
 	"de_term", "de_contrast",
 	"de_software_version", "de_reference_type",
 	"de_covariates", "de_filter_criteria", "de_description",
+	// long-format column-mapping (mus 0.2.30+). Translates the
+	// depositor's TSV columns into anthive's canonical __de schema.
+	// Only de_map_gene is hard-required; the rest are optional and
+	// fall through to identity if the source column name matches.
+	"de_map_gene", "de_map_term", "de_map_contrast",
+	"de_map_log2fc", "de_map_zeff", "de_map_pvalue", "de_map_padj",
+	"de_map_estimate", "de_map_SE", "de_map_ci_low", "de_map_ci_high",
 }
 
 // resolveConfigKey returns the canonical form of `key`. Three paths:

@@ -507,6 +507,8 @@ func TestDECheck_LongFormat_StampsDistinctSet(t *testing.T) {
 		"de_dataset_id=ABC",
 		"de_term=condition",
 		"de_contrast=treated_vs_control",
+		"de_method=custom-pipeline", // long has no default
+		"de_map_gene=gene_id",       // long-only required map key
 	)
 	body := strings.Join([]string{
 		"gene_id\teffsize\tpvalue\tpadj\tterm\tcontrast",
@@ -686,6 +688,8 @@ func TestDECheck_FormatOverride(t *testing.T) {
 		"de_dataset_id=ABC",
 		"de_term=condition",
 		"de_contrast=treated_vs_control",
+		"de_method=custom-pipeline", // override is long → method required
+		"de_map_gene=gene_id",       // long-only required map key
 	)
 	// File that looks like edger but pass --format=long. Override
 	// should be reported in the output.
@@ -810,12 +814,15 @@ func TestDECheck_Scanpy_MissingTermFails(t *testing.T) {
 }
 
 // TestDECheck_Long_RequiresNeither — long format's term + contrast
-// come from the body. Cascade values are not required.
+// come from the body. de_term + de_contrast are not required.
+// (de_method + de_map_gene ARE required and are set here.)
 func TestDECheck_Long_RequiresNeither(t *testing.T) {
 	dir := t.TempDir()
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
 		"de_dataset_id=ABC",
+		"de_method=custom-pipeline", // long has no default — required
+		"de_map_gene=gene_id",       // long-only required map key
 		// no de_term, no de_contrast — long derives from body
 	)
 	writeDETSV(t, filepath.Join(dir, "de.tsv"),
@@ -824,5 +831,74 @@ func TestDECheck_Long_RequiresNeither(t *testing.T) {
 	_, _, err := runDECheckForTest(t, dir)
 	if err != nil {
 		t.Fatalf("long format should not require de_term/de_contrast; got: %v", err)
+	}
+}
+
+// TestDECheck_Long_RequiresMethod — long has no default method.
+// Missing de_method → fail with a fix-it hint.
+func TestDECheck_Long_RequiresMethod(t *testing.T) {
+	dir := t.TempDir()
+	writeMusCfg(t, dir,
+		"data_project=Fiers2025",
+		"de_dataset_id=ABC",
+		"de_map_gene=gene_id",
+		// de_method deliberately unset
+	)
+	writeDETSV(t, filepath.Join(dir, "de.tsv"),
+		"gene_id\teffsize\tpvalue\tpadj\tterm\tcontrast",
+		"G1\t0.5\t0.01\t0.05\tcond\tA_vs_B")
+	_, stderr, err := runDECheckForTest(t, dir)
+	if err == nil {
+		t.Fatal("expected long format without de_method to fail")
+	}
+	if !strings.Contains(stderr, "de_method unset and de_format=long") {
+		t.Errorf("expected the long-no-default hint; stderr:\n%s", stderr)
+	}
+}
+
+// TestDECheck_Long_RequiresMapGene — long needs at least de_map_gene
+// so ant-de-ingest can build --map gene=<source-column>.
+func TestDECheck_Long_RequiresMapGene(t *testing.T) {
+	dir := t.TempDir()
+	writeMusCfg(t, dir,
+		"data_project=Fiers2025",
+		"de_dataset_id=ABC",
+		"de_method=custom-pipeline",
+		// de_map_gene deliberately unset
+	)
+	writeDETSV(t, filepath.Join(dir, "de.tsv"),
+		"gene_id\teffsize\tpvalue\tpadj\tterm\tcontrast",
+		"G1\t0.5\t0.01\t0.05\tcond\tA_vs_B")
+	_, stderr, err := runDECheckForTest(t, dir)
+	if err == nil {
+		t.Fatal("expected long without de_map_gene to fail")
+	}
+	if !strings.Contains(stderr, "de_map_gene (required for long)") {
+		t.Errorf("expected de_map_gene error line; stderr:\n%s", stderr)
+	}
+}
+
+// TestDECheck_NonLong_MethodAutoFills — non-long presets do NOT
+// need de_method explicitly; the value auto-fills from the format.
+// Spot-checked here with deseq2 — but the auto-fill applies to
+// every preset except long.
+func TestDECheck_NonLong_MethodAutoFills(t *testing.T) {
+	dir := t.TempDir()
+	writeMusCfg(t, dir,
+		"data_project=Fiers2025",
+		"de_dataset_id=ABC",
+		"de_term=condition",
+		"de_contrast=treated_vs_control",
+		// de_method intentionally unset — must auto-fill to DESeq2
+	)
+	writeDETSV(t, filepath.Join(dir, "de.tsv"),
+		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
+		"G1\t1\t1\t1\t1\t1\t1")
+	stdout, _, err := runDECheckForTest(t, dir)
+	if err != nil {
+		t.Fatalf("deseq2 should auto-fill de_method; got: %v", err)
+	}
+	if !strings.Contains(stdout, `auto-filled "DESeq2"`) {
+		t.Errorf("expected the auto-fill notice:\n%s", stdout)
 	}
 }
