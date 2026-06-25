@@ -224,16 +224,52 @@ func apiKnownKeys(w http.ResponseWriter, r *http.Request) {
 	manualOnly := r.URL.Query().Get("manual") == "true"
 	type keyDesc struct {
 		Key   string `json:"key"`
-		Vocab bool   `json:"vocab"` // true when /api/vocab/<key> has values
+		Vocab bool   `json:"vocab"`
+		// Group is the optgroup label the UI uses to bucket keys
+		// (Biology, Provenance, References, Tags, Ontology, Other).
+		// Letting the server own this keeps the grouping in one
+		// place — UI changes don't require knowing the semantic
+		// categories.
+		Group string `json:"group"`
 	}
 	keys := make([]keyDesc, 0, len(knownConfigKeys))
 	for _, k := range knownConfigKeys {
 		if manualOnly && !isManualAnnotationKey(k) {
 			continue
 		}
-		keys = append(keys, keyDesc{Key: k, Vocab: isVocabConfigKey(k)})
+		keys = append(keys, keyDesc{
+			Key:   k,
+			Vocab: isVocabConfigKey(k),
+			Group: groupForConfigKey(k),
+		})
 	}
 	writeJSON(w, map[string]any{"keys": keys})
+}
+
+// groupForConfigKey returns the optgroup label for a config key —
+// the visible "section heading" the UI's <select> uses to cluster
+// related keys. Order matters for the UI; the renderer walks the
+// groups in this declared order.
+func groupForConfigKey(key string) string {
+	switch key {
+	case "organism", "technology", "suspension_type",
+		"sex", "age", "strain",
+		"tissue", "cell_type", "disease", "condition":
+		return "Biology"
+	case "title", "contributor", "year",
+		"source", "license", "source_description",
+		"access", "accession":
+		return "Provenance"
+	case "doi", "pmid", "link":
+		return "References"
+	case "tag", "collaborator", "note":
+		return "Tags & free text"
+	case "organism_ontology_term_id", "tissue_ontology_term_id",
+		"cell_type_ontology_term_id", "assay_ontology_term_id",
+		"sex_ontology_term_id", "disease_ontology_term_id":
+		return "Ontology IDs"
+	}
+	return "Other"
 }
 
 // isManualAnnotationKey reports whether `key` is one a depositor

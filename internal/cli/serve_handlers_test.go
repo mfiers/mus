@@ -371,6 +371,52 @@ func TestAPIKnownKeys_ListsKnownCfgKeys(t *testing.T) {
 	}
 }
 
+// TestAPIKnownKeys_GroupingAssignsLoadBearingKeys — every manual
+// key gets a UI group label. Verifies the load-bearing keys land
+// in the right buckets so the <select> renders sensibly.
+func TestAPIKnownKeys_GroupingAssignsLoadBearingKeys(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/api/known-keys?manual=true", nil)
+	w := httptest.NewRecorder()
+	apiKnownKeys(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d", w.Code)
+	}
+	var resp struct {
+		Keys []struct {
+			Key   string `json:"key"`
+			Group string `json:"group"`
+		} `json:"keys"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	groupOf := map[string]string{}
+	for _, k := range resp.Keys {
+		groupOf[k.Key] = k.Group
+	}
+	want := map[string]string{
+		"organism":                    "Biology",
+		"cell_type":                   "Biology",
+		"tissue":                      "Biology",
+		"title":                       "Provenance",
+		"access":                      "Provenance",
+		"doi":                         "References",
+		"tag":                         "Tags & free text",
+		"note":                        "Tags & free text",
+		"cell_type_ontology_term_id":  "Ontology IDs",
+	}
+	for k, expected := range want {
+		if got := groupOf[k]; got != expected {
+			t.Errorf("%s: group = %q, want %q", k, got, expected)
+		}
+	}
+	// Every key must have a non-empty group — defensive against
+	// future keys that bypass groupForConfigKey.
+	for _, k := range resp.Keys {
+		if k.Group == "" {
+			t.Errorf("%s: group is empty (groupForConfigKey returned no value)", k.Key)
+		}
+	}
+}
+
 // TestAPIKnownKeys_ManualFilter — with ?manual=true the response
 // must hide auto-managed keys (eln_*/de_*/irods_*/h5ad_*/data_project)
 // and surface only the biology / provenance fields a depositor

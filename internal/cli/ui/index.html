@@ -186,15 +186,17 @@
     <div id="cascade-chips" class="chips"></div>
     <form class="kv-form" id="cfg-form" autocomplete="off">
       <div class="kv-row">
-        <input id="cfg-key" list="cfg-keys-list" placeholder="key (e.g. organism)">
+        <select id="cfg-key">
+          <option value="">— pick a key —</option>
+          <!-- populated from /api/known-keys?manual=true, grouped by category -->
+        </select>
         <div id="cfg-value-host"></div>
         <button type="button" id="cfg-add">Save</button>
       </div>
-      <datalist id="cfg-keys-list"></datalist>
       <div class="help">
-        Pick a known key from the autocomplete list, or type a custom key. The
-        value box switches to a dropdown when the key has a controlled vocabulary.
-        Off-vocab values save with <code>--force</code>.
+        Keys marked ★ have a controlled vocabulary — the value box becomes a
+        dropdown of allowed values (with a "Custom value (force-set)…" escape).
+        Pick "Custom key…" at the bottom for keys outside the known list.
       </div>
     </form>
 
@@ -490,25 +492,65 @@ async function unsetKey(key) {
   }
 }
 
-// ── annotation form (autocomplete key, vocab-driven value) ────────────
+// ── annotation form (grouped <select> for keys, vocab dropdown for values) ─
+//
+// Native <select> + <optgroup> instead of <input list>: datalist popups
+// hide options inconsistently across browsers (Safari + Firefox handle the
+// label attribute differently; Chrome sometimes truncates the popup). A
+// plain select always shows every option, scroll-accessible, with the
+// optgroup labels giving the depositor a visual map.
 async function loadKnownKeys() {
   try {
     // manual=true hides eln_*/de_*/irods_*/h5ad_*/data_project —
     // those are owned by other UI panels or auto-stamped.
     const r = await api('/api/known-keys?manual=true');
     knownKeys = r.keys || [];
-    const dl = document.getElementById('cfg-keys-list');
-    dl.innerHTML = '';
+    const sel = document.getElementById('cfg-key');
+    sel.innerHTML = '<option value="">— pick a key —</option>';
+    // Group keys by their server-supplied `group` field, preserving
+    // declaration order within each group.
+    const groupOrder = []; // first-seen order
+    const groups = {};     // group → [keyDesc, …]
     for (const k of knownKeys) {
-      dl.appendChild(el('option', { value: k.key, label: k.vocab ? '(vocab)' : '' }));
+      const g = k.group || 'Other';
+      if (!groups[g]) { groups[g] = []; groupOrder.push(g); }
+      groups[g].push(k);
     }
+    for (const g of groupOrder) {
+      const og = el('optgroup', { label: g });
+      for (const k of groups[g]) {
+        const star = k.vocab ? '  ★' : '';
+        og.appendChild(el('option', { value: k.key }, k.key + star));
+      }
+      sel.appendChild(og);
+    }
+    // Custom-key escape at the bottom.
+    sel.appendChild(el('option', { value: '__CUSTOM__' }, 'Custom key…'));
   } catch (e) { knownKeys = []; }
 }
 
-// Re-render the value field whenever the key changes.
 const keyInput = document.getElementById('cfg-key');
-keyInput.addEventListener('input', () => renderValueField(keyInput.value.trim()));
-keyInput.addEventListener('change', () => renderValueField(keyInput.value.trim()));
+let pendingCustomKey = false;
+keyInput.addEventListener('change', () => {
+  if (keyInput.value === '__CUSTOM__') {
+    pendingCustomKey = true;
+    renderCustomKeyValueField();
+    return;
+  }
+  pendingCustomKey = false;
+  renderValueField(keyInput.value);
+});
+
+function renderCustomKeyValueField() {
+  const host = document.getElementById('cfg-value-host');
+  host.innerHTML = '';
+  const wrap = el('div', { style: 'display: flex; gap: 0.3em;' });
+  wrap.appendChild(el('input', { id: 'cfg-custom-key',
+    placeholder: 'custom key', style: 'flex: 1;' }));
+  wrap.appendChild(el('input', { id: 'cfg-val',
+    placeholder: 'value (saved with --force)', style: 'flex: 1.4;' }));
+  host.appendChild(wrap);
+}
 
 async function renderValueField(key) {
   const host = document.getElementById('cfg-value-host');
@@ -543,7 +585,13 @@ async function renderValueField(key) {
 
 document.getElementById('cfg-add').addEventListener('click', async () => {
   const status = document.getElementById('form-status');
-  const key = keyInput.value.trim();
+  let key;
+  if (pendingCustomKey) {
+    const ckEl = document.getElementById('cfg-custom-key');
+    key = ckEl ? ckEl.value.trim() : '';
+  } else {
+    key = keyInput.value.trim();
+  }
   const valEl = document.getElementById('cfg-val');
   const value = valEl ? valEl.value.trim() : '';
   if (!key || !value) { showError(status, 'both key and value are required'); return; }
@@ -562,6 +610,7 @@ document.getElementById('cfg-add').addEventListener('click', async () => {
       showNotice(status, 'saved ' + r.key + '=' + r.value);
     }
     keyInput.value = '';
+    pendingCustomKey = false;
     document.getElementById('cfg-value-host').innerHTML = '';
     refreshAll();
   } catch (e) { showError(status, e.message); }
