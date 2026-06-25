@@ -89,6 +89,8 @@ func TestDECheck_ClusterValidation_NoLocalH5adSkips(t *testing.T) {
 		"data_project=Fiers2025",
 		"de_dataset_id=CMR",
 		"de_cluster_obs_column=leiden",
+		"de_term=condition",
+		"de_contrast=treated_vs_control",
 	)
 	deDir := filepath.Join(dir, "per_cluster", "DAM")
 	if err := os.MkdirAll(deDir, 0o755); err != nil {
@@ -118,6 +120,7 @@ func TestDECheck_CoIngestDetected_FlatLayout(t *testing.T) {
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
 		"de_dataset_h5ad=Single.Grafts.h5ad",
+		"de_term=condition", // required for scanpy preset
 	)
 	if err := os.WriteFile(filepath.Join(dir, "Single.Grafts.h5ad"),
 		[]byte("h5ad placeholder"), 0o644); err != nil {
@@ -149,6 +152,7 @@ func TestDECheck_CoIngestDetected_NestedDELayout(t *testing.T) {
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
 		"de_dataset_h5ad=Single.Grafts.h5ad",
+		"de_term=condition", // required for scanpy preset
 	)
 	if err := os.WriteFile(filepath.Join(dir, "Single.Grafts.h5ad"),
 		[]byte("h5ad placeholder"), 0o644); err != nil {
@@ -176,6 +180,7 @@ func TestDECheck_NoCoIngest_FallsBackToVarkOrSkip(t *testing.T) {
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
 		"de_dataset_h5ad=Nonexistent.h5ad",
+		"de_term=condition", // required for scanpy preset
 	)
 	writeDETSV(t, filepath.Join(dir, "de.tsv"),
 		"names\tlogfoldchanges\tpvals_adj",
@@ -203,6 +208,8 @@ func TestDECheck_RequiresMessage(t *testing.T) {
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
 		"de_dataset_id=ABC",
+		"de_term=condition",
+		"de_contrast=treated_vs_control",
 	)
 	writeDETSV(t, filepath.Join(dir, "de.tsv"),
 		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
@@ -223,6 +230,8 @@ func TestDECheck_MessageWritesDescription(t *testing.T) {
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
 		"de_dataset_id=ABC",
+		"de_term=condition",
+		"de_contrast=treated_vs_control",
 	)
 	writeDETSV(t, filepath.Join(dir, "de.tsv"),
 		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
@@ -246,6 +255,8 @@ func TestDECheck_MessageOverridesCascadeDescription(t *testing.T) {
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
 		"de_dataset_id=ABC",
+		"de_term=condition",
+		"de_contrast=treated_vs_control",
 		`de_description=stale folder-level description`,
 	)
 	writeDETSV(t, filepath.Join(dir, "de.tsv"),
@@ -271,6 +282,8 @@ func TestDECheck_SoftFieldNudges(t *testing.T) {
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
 		"de_dataset_id=ABC",
+		"de_term=condition",
+		"de_contrast=treated_vs_control",
 		`de_software_version=scanpy 1.10.4`,
 		// de_reference_type, de_covariates, de_filter_criteria deliberately unset
 	)
@@ -315,6 +328,8 @@ func TestDECheck_BottomHintSkippedWhenAllSoftFieldsSet(t *testing.T) {
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
 		"de_dataset_id=ABC",
+		"de_term=condition",
+		"de_contrast=treated_vs_control",
 		`de_software_version=scanpy 1.10.4`,
 		`de_reference_type=pairwise`,
 		`de_covariates=sex,age`,
@@ -341,6 +356,8 @@ func TestDECheck_StatusLinesDontRepeatFilename(t *testing.T) {
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
 		"de_dataset_id=ABC",
+		"de_term=condition",
+		"de_contrast=treated_vs_control",
 	)
 	writeDETSV(t, filepath.Join(dir, "de.tsv"),
 		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
@@ -363,7 +380,8 @@ func TestDECheck_StatusLinesDontRepeatFilename(t *testing.T) {
 
 func TestDECheck_CompressionNudge(t *testing.T) {
 	dir := t.TempDir()
-	writeMusCfg(t, dir, "data_project=Fiers2025", "de_dataset_id=ABC")
+	writeMusCfg(t, dir, "data_project=Fiers2025", "de_dataset_id=ABC",
+		"de_term=condition", "de_contrast=treated_vs_control")
 
 	// Plain .tsv → SKIP compression nudge.
 	writeDETSV(t, filepath.Join(dir, "plain.tsv"),
@@ -383,7 +401,8 @@ func TestDECheck_CompressionNudge(t *testing.T) {
 
 	// .tsv.gz → OK compression line.
 	dir2 := t.TempDir()
-	writeMusCfg(t, dir2, "data_project=Fiers2025", "de_dataset_id=ABC")
+	writeMusCfg(t, dir2, "data_project=Fiers2025", "de_dataset_id=ABC",
+		"de_term=condition", "de_contrast=treated_vs_control")
 	writeGzippedDE(t, filepath.Join(dir2, "de.tsv.gz"),
 		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
 		"G1\t1\t1\t1\t1\t1\t1")
@@ -402,6 +421,8 @@ func TestDECheck_HappyPath_DESeq2(t *testing.T) {
 		"data_project=Fiers2025",
 		"de_dataset_id=SGF",
 		"de_dataset_h5ad=Single.Grafts.h5ad",
+		"de_term=condition",
+		"de_contrast=treated_vs_control",
 	)
 	writeDETSV(t, filepath.Join(dir, "de.tsv"),
 		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
@@ -454,6 +475,8 @@ func TestDECheck_AcceptsGzippedDESeq2(t *testing.T) {
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
 		"de_dataset_id=SGF",
+		"de_term=condition",
+		"de_contrast=treated_vs_control",
 	)
 	writeGzippedDE(t, filepath.Join(dir, "de.tsv.gz"),
 		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
@@ -482,6 +505,8 @@ func TestDECheck_LongFormat_StampsDistinctSet(t *testing.T) {
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
 		"de_dataset_id=ABC",
+		"de_term=condition",
+		"de_contrast=treated_vs_control",
 	)
 	body := strings.Join([]string{
 		"gene_id\teffsize\tpvalue\tpadj\tterm\tcontrast",
@@ -543,6 +568,8 @@ func TestDECheck_ClusterLinesAppearWhenOptedIn(t *testing.T) {
 		"data_project=Fiers2025",
 		"de_dataset_id=SGF",
 		"de_cluster_obs_column=leiden",
+		"de_term=condition",
+		"de_contrast=treated_vs_control",
 	)
 	writeDETSV(t, filepath.Join(dir, "de.tsv"),
 		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
@@ -579,6 +606,8 @@ func TestDECheck_FailsOnUnknownFormat(t *testing.T) {
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
 		"de_dataset_id=ABC",
+		"de_term=condition",
+		"de_contrast=treated_vs_control",
 	)
 	writeDETSV(t, filepath.Join(dir, "mystery.tsv"),
 		"gene\tfc\tp", "G1\t1\t0.5")
@@ -597,6 +626,8 @@ func TestDECheck_RejectsParquet(t *testing.T) {
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
 		"de_dataset_id=ABC",
+		"de_term=condition",
+		"de_contrast=treated_vs_control",
 	)
 	if err := os.WriteFile(filepath.Join(dir, "de.parquet"), []byte("PAR1"), 0o644); err != nil {
 		t.Fatal(err)
@@ -625,6 +656,8 @@ func TestDECheck_SilentSuppressesOKAndSkip(t *testing.T) {
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
 		"de_dataset_id=ABC",
+		"de_term=condition",
+		"de_contrast=treated_vs_control",
 	)
 	writeDETSV(t, filepath.Join(dir, "de.tsv"),
 		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
@@ -651,6 +684,8 @@ func TestDECheck_FormatOverride(t *testing.T) {
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
 		"de_dataset_id=ABC",
+		"de_term=condition",
+		"de_contrast=treated_vs_control",
 	)
 	// File that looks like edger but pass --format=long. Override
 	// should be reported in the output.
@@ -673,6 +708,8 @@ func TestDECheck_GroupsByDataset(t *testing.T) {
 		"data_project=Fiers2025",
 		"de_dataset_id=ABC",
 		"de_dataset_h5ad=foo.h5ad",
+		"de_term=condition",
+		"de_contrast=treated_vs_control",
 	)
 	writeDETSV(t, filepath.Join(dir, "a.tsv"),
 		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
@@ -687,5 +724,105 @@ func TestDECheck_GroupsByDataset(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "ABC (foo.h5ad) — 2 file(s)") {
 		t.Errorf("expected grouped dataset line:\n%s", stdout)
+	}
+}
+
+// TestDECheck_DESeq2_RequiresTermAndContrast — the exact bug class
+// reported by anthive4 #212: a DESeq2 sidecar shipped without
+// de_term / de_contrast and was refused at ant-de-ingest. After
+// this gate lands, mus de check refuses upstream with both
+// missing-field error lines.
+func TestDECheck_DESeq2_RequiresTermAndContrast(t *testing.T) {
+	dir := t.TempDir()
+	writeMusCfg(t, dir,
+		"data_project=Fiers2025",
+		"de_dataset_id=ABC",
+		// de_term + de_contrast deliberately UNSET
+	)
+	writeDETSV(t, filepath.Join(dir, "de.tsv"),
+		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
+		"G1\t1\t1\t1\t1\t1\t1")
+	_, stderr, err := runDECheckForTest(t, dir)
+	if err == nil {
+		t.Fatal("expected the deseq2 preset to refuse missing de_term + de_contrast")
+	}
+	if !strings.Contains(stderr, "de_term (required for deseq2)") {
+		t.Errorf("expected de_term error line; stderr:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "de_contrast (required for deseq2)") {
+		t.Errorf("expected de_contrast error line; stderr:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "ant-de-ingest would refuse") {
+		t.Errorf("expected the ant-de-ingest hint; stderr:\n%s", stderr)
+	}
+}
+
+// TestDECheck_Scanpy_RequiresTermOnly — scanpy's preset only needs
+// de_term; de_contrast comes from the data file's group column at
+// ingest. Setting de_term alone must PASS.
+func TestDECheck_Scanpy_RequiresTermOnly(t *testing.T) {
+	dir := t.TempDir()
+	writeMusCfg(t, dir,
+		"data_project=Fiers2025",
+		"de_dataset_h5ad=Single.Grafts.h5ad",
+		"de_term=condition",
+		// de_contrast UNSET — fine for scanpy
+	)
+	if err := os.WriteFile(filepath.Join(dir, "Single.Grafts.h5ad"),
+		[]byte("h5ad placeholder"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeDETSV(t, filepath.Join(dir, "de.tsv"),
+		"names\tlogfoldchanges\tpvals_adj",
+		"G1\t0.1\t0.5")
+	_, _, err := runDECheckForTest(t, dir)
+	if err != nil {
+		t.Fatalf("scanpy with de_term should pass; got: %v", err)
+	}
+}
+
+// TestDECheck_Scanpy_MissingTermFails — scanpy without de_term must
+// fail.
+func TestDECheck_Scanpy_MissingTermFails(t *testing.T) {
+	dir := t.TempDir()
+	writeMusCfg(t, dir,
+		"data_project=Fiers2025",
+		"de_dataset_h5ad=Single.Grafts.h5ad",
+		// de_term deliberately UNSET
+	)
+	if err := os.WriteFile(filepath.Join(dir, "Single.Grafts.h5ad"),
+		[]byte("h5ad placeholder"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeDETSV(t, filepath.Join(dir, "de.tsv"),
+		"names\tlogfoldchanges\tpvals_adj",
+		"G1\t0.1\t0.5")
+	_, stderr, err := runDECheckForTest(t, dir)
+	if err == nil {
+		t.Fatal("expected scanpy without de_term to fail")
+	}
+	if !strings.Contains(stderr, "de_term (required for scanpy)") {
+		t.Errorf("expected de_term error for scanpy; stderr:\n%s", stderr)
+	}
+	if strings.Contains(stderr, "de_contrast (required for scanpy)") {
+		t.Errorf("scanpy MUST NOT require de_contrast; stderr:\n%s", stderr)
+	}
+}
+
+// TestDECheck_Long_RequiresNeither — long format's term + contrast
+// come from the body. Cascade values are not required.
+func TestDECheck_Long_RequiresNeither(t *testing.T) {
+	dir := t.TempDir()
+	writeMusCfg(t, dir,
+		"data_project=Fiers2025",
+		"de_dataset_id=ABC",
+		// no de_term, no de_contrast — long derives from body
+	)
+	writeDETSV(t, filepath.Join(dir, "de.tsv"),
+		"gene_id\teffsize\tpvalue\tpadj\tterm\tcontrast",
+		"G1\t0.5\t0.01\t0.05\tcond\tA_vs_B")
+	_, _, err := runDECheckForTest(t, dir)
+	if err != nil {
+		t.Fatalf("long format should not require de_term/de_contrast; got: %v", err)
 	}
 }

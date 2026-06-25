@@ -148,6 +148,9 @@ func TestMusSkill_BodyMentionsDEFlow(t *testing.T) {
 		// mus 0.2.28+ — anthive catalog cross-check
 		"Catalog cross-check",
 		"--no-catalog-check",
+		// mus 0.2.29+ — per-format required de_term/de_contrast gate
+		"HARD-required PER format",
+		"BOTH `de_term` and `de_contrast` REQUIRED",
 		"GROUP_ID of Sun2026", // the canonical bug case
 		// mus serve GUI (added in 0.2.26+)
 		"mus serve",

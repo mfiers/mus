@@ -422,6 +422,14 @@ func checkOneDEFile(cache *hashcache.Cache, path string, env *config.Env,
 	//    one-shot bottom hint.
 	unsetSoft := reportSoftFields(env, out)
 
+	// 8.5. Per-format required de_* fields. Hard-fail BEFORE the
+	//      sidecar is stamped — otherwise the file would land in
+	//      __incoming/ only to be refused by ant-de-ingest with
+	//      "preset 'deseq2' requires --term, --contrast" or similar.
+	if !reportRequiredFormatFields(env, chosen, out) {
+		return false, dePassFile{}, unsetSoft
+	}
+
 	// 9. Storage nudge: suggest gzipping plain .tsv / .csv files.
 	if !isGzippedFile(path) {
 		ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")
@@ -446,6 +454,52 @@ func checkOneDEFile(cache *hashcache.Cache, path string, env *config.Env,
 		DatasetH5ad: datasetH5ad,
 		Cluster:    cluster,
 	}, unsetSoft
+}
+
+// requiredFormatFields returns the de_* cascade keys that MUST be
+// set for the given DE format. Mirrors ant-de-ingest's per-preset
+// CLI-flag requirements so a deposit refused at ingest is caught
+// upstream at `mus de check` time.
+//
+// One-file-one-contrast presets (deseq2 / edger / seurat / glmmseq
+// / glmmtmb) need BOTH de_term + de_contrast. scanpy needs only
+// de_term — its de_contrast comes from the data file's group column
+// at ingest. long needs neither (term + contrast are computed from
+// the body by `mus de check` itself).
+func requiredFormatFields(f de.Format) []string {
+	switch f {
+	case de.FormatDESeq2, de.FormatEdgeR, de.FormatSeurat,
+		de.FormatGLMMseq, de.FormatGLMMTMB:
+		return []string{"de_term", "de_contrast"}
+	case de.FormatScanpy:
+		return []string{"de_term"}
+	case de.FormatLong:
+		return nil // body-derived, set de_term=auto / de_contrast=auto
+	}
+	return nil
+}
+
+// reportRequiredFormatFields emits OK / ERROR lines for each
+// per-format required field and returns true when every required
+// field is set. Missing fields ERROR with a precise fix-it command.
+func reportRequiredFormatFields(env *config.Env, f de.Format, out *deReporter) bool {
+	missing := []string{}
+	for _, k := range requiredFormatFields(f) {
+		if v := env.String(k); v == "" {
+			missing = append(missing, k)
+		} else {
+			out.ok(k+" (required for "+string(f)+")", v)
+		}
+	}
+	if len(missing) == 0 {
+		return true
+	}
+	for _, k := range missing {
+		fix := fmt.Sprintf("`mus config set %s <VALUE>`", k)
+		out.errf(k+" (required for "+string(f)+")",
+			"unset — %s preset requires it (ant-de-ingest would refuse). %s", f, fix)
+	}
+	return false
 }
 
 // softFieldDef describes one optional de_* cascade key for the
@@ -1062,17 +1116,24 @@ validate; the catalog (anthive) accepts only files that pass it.
 2. FOLDER METADATA — mus.cfg with de_* keys
    Cascades the existing way; one mus.cfg can carry h5ad biology
    fields (organism, tissue, …) AND DE fields side by side.
-   HARD-required at the deposit gate:
+   HARD-required at the deposit gate (always):
        data_project        e.g. Fiers2025
        de_format           (or inferable from the columns)
        de_dataset_id        3-char anthive id of the dataset h5ad   PREFERRED
        de_dataset_h5ad      basename within data_project           (escape hatch
                                                                    for co-ingest)
+   HARD-required PER FORMAT (mirrors ant-de-ingest preset flags):
+       deseq2 / edger / seurat / glmmseq / glmmtmb
+           → BOTH de_term + de_contrast required
+       scanpy
+           → de_term required; de_contrast is inferred from the
+             data file's group column at ingest
+       long
+           → neither required (set de_term=auto / de_contrast=auto;
+             mus computes the distinct sets from the body)
    AUTO-FILLED FROM de_format IF UNSET:
        de_method           DESeq2 / edgeR / scanpy.rank_genes_groups / …
    SOFT (passed through to anthive):
-       de_term             single value for one-term presets
-       de_contrast         single value for one-contrast presets
        de_cluster_obs_column   obs col in dataset h5ad to validate de_cluster against
        de_software_version
        de_reference_type   vsreference | pairwise | vsgrandmean

@@ -124,19 +124,28 @@ Run ` + "`mus de howto`" + ` for the canonical primer. Key points:
      computed from. If they don't know, ` + "`mus irods find <data_project>`" + `
      lists iRODS catalog entries; the anthive web catalog and the
      ` + "`vark`" + ` CLI (if installed) browse the live datasets.
-  5. **Optional but valuable:** ` + "`de_term`" + `, ` + "`de_contrast`" + `,
-     ` + "`de_covariates`" + `, ` + "`de_description`" + `, ` + "`de_software_version`" + `,
-     ` + "`de_reference_type`" + ` (vsreference | pairwise | vsgrandmean),
-     ` + "`de_cluster_obs_column`" + ` (column in the h5ad to validate against).
-     For ` + "`de_format=long`" + `, set ` + "`de_term=auto`" + ` ` + "`de_contrast=auto`" + ` —
-     mus computes them from the body and stamps the sorted set.
-  6. **Show the proposed mus.cfg to the user before writing.** Either
+  5. **HARD-required PER format (mus 0.2.29+):** mus de check
+     enforces the same per-preset requirements ant-de-ingest does:
+       - ` + "`deseq2`" + ` / ` + "`edger`" + ` / ` + "`seurat`" + ` / ` + "`glmmseq`" + ` / ` + "`glmmtmb`" + `
+         → BOTH ` + "`de_term`" + ` and ` + "`de_contrast`" + ` REQUIRED
+       - ` + "`scanpy`" + ` → ` + "`de_term`" + ` REQUIRED (de_contrast inferred at
+         ingest from the file's group column)
+       - ` + "`de_format=long`" + ` → neither required; set
+         ` + "`de_term=auto`" + ` / ` + "`de_contrast=auto`" + ` and mus computes
+         the distinct sets from the body
+  6. **Optional but valuable:** ` + "`de_covariates`" + `, ` + "`de_description`" + `,
+     ` + "`de_software_version`" + `, ` + "`de_reference_type`" + ` (vsreference |
+     pairwise | vsgrandmean), ` + "`de_cluster_obs_column`" + ` (column in
+     the h5ad to validate against).
+  7. **Show the proposed mus.cfg to the user before writing.** Either
      write it yourself with Write/Edit, OR give the exact
      ` + "`mus config set`" + ` commands. User confirms.
-  7. **Run ` + "`mus de check <folder>`" + `.** Read the output carefully — a
+  8. **Run ` + "`mus de check <folder>`" + `.** Read the output carefully — a
      common failure is format misdetection (columns renamed); fix
-     with ` + "`--format <name>`" + `.
-  8. **Confirm with user, then ` + "`mus s3 upload <folder>`" + `.** Don't
+     with ` + "`--format <name>`" + `. Another common one is missing
+     ` + "`de_term`" + ` / ` + "`de_contrast`" + ` for one-contrast presets
+     (deseq2 / edger / seurat / glmmseq / glmmtmb).
+  9. **Confirm with user, then ` + "`mus s3 upload <folder>`" + `.** Don't
      run upload silently — it has external side effects.
 
 ### iRODS upload (general lab data, NOT catalog)
