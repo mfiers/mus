@@ -27,6 +27,7 @@ import (
 
 	"codeberg.org/mfiers/mus/internal/config"
 	"codeberg.org/mfiers/mus/internal/dataproject"
+	"codeberg.org/mfiers/mus/internal/elnmap"
 	"codeberg.org/mfiers/mus/internal/sidecar"
 	"codeberg.org/mfiers/mus/internal/vocab"
 )
@@ -51,6 +52,7 @@ func registerServeAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/eln/disable", apiELNDisable)
 	mux.HandleFunc("/api/eln/enable", apiELNEnable)
 	mux.HandleFunc("/api/eln/link", apiELNLink)
+	mux.HandleFunc("/api/eln/suggest-dp", apiELNSuggestDataProject)
 }
 
 // apiCwd returns the directory `mus serve` was invoked from.
@@ -205,16 +207,53 @@ func apiCascade(w http.ResponseWriter, r *http.Request) {
 // annotation form's key dropdown shows. Plus, for each key, a
 // flag indicating whether the value is vocab-controlled (the form
 // can then fetch /api/vocab/<key> for the value dropdown).
+//
+// Query param `manual=true` filters to the keys depositors
+// realistically set by hand in the annotation form: biology /
+// provenance fields. Hides keys that are owned by other parts of
+// mus and shouldn't be edited in this picker:
+//   - eln_*  — managed by the ELN picker (link / disable)
+//   - de_*   — managed by `mus de check` per-deposit
+//   - irods_* — stamped automatically on upload
+//   - h5ad_* — stamped automatically by `mus h5ad check`
+//   - data_project — derived from the ELN linkage
+//
+// Without the flag, returns every recognised key (legacy / debug
+// path).
 func apiKnownKeys(w http.ResponseWriter, r *http.Request) {
+	manualOnly := r.URL.Query().Get("manual") == "true"
 	type keyDesc struct {
 		Key   string `json:"key"`
 		Vocab bool   `json:"vocab"` // true when /api/vocab/<key> has values
 	}
 	keys := make([]keyDesc, 0, len(knownConfigKeys))
 	for _, k := range knownConfigKeys {
+		if manualOnly && !isManualAnnotationKey(k) {
+			continue
+		}
 		keys = append(keys, keyDesc{Key: k, Vocab: isVocabConfigKey(k)})
 	}
 	writeJSON(w, map[string]any{"keys": keys})
+}
+
+// isManualAnnotationKey reports whether `key` is one a depositor
+// would normally set in the mus serve annotation form, vs an
+// auto-managed key owned by a specific mus subsystem (ELN, DE,
+// iRODS upload stamp, h5ad inspector).
+func isManualAnnotationKey(key string) bool {
+	switch {
+	case key == "data_project":
+		return false // ELN picker territory
+	case strings.HasPrefix(key, "eln_"):
+		return false
+	case strings.HasPrefix(key, "de_"):
+		return false
+	case strings.HasPrefix(key, "irods_"):
+		return false
+	case strings.HasPrefix(key, "h5ad_"):
+		return false
+	}
+	return true
 }
 
 // apiVocab returns the controlled-value list for one field. URL
@@ -601,6 +640,73 @@ func apiELNLink(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
 		"ok":     true,
 		"values": kv,
+	})
+}
+
+// apiELNSuggestDataProject — POST /api/eln/suggest-dp with
+//
+//	{"experiment_id": "<id>"}
+//
+// Looks the experiment up via the ELN API, runs the same
+// suggestion logic the CLI's `mus eln link` uses (cached value
+// from another folder if available, else "FirstCollaboratorSurname"
+// + current year), and returns:
+//
+//	{"data_project": "<proposed>", "source": "cached|derived",
+//	 "experiment_name": "...", "collaborators": [...]}
+//
+// UI pre-fills the data_project input with the suggestion. The
+// user can still edit before hitting Link. Anything else mus
+// would have prompted for (existing cascade value, --force) is
+// out of scope — the GUI's Link button posts to /api/eln/link
+// which has its own validation.
+func apiELNSuggestDataProject(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		ExperimentID string `json:"experiment_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("decode body: %v", err), http.StatusBadRequest)
+		return
+	}
+	expID, err := parseELNExperimentID(req.ExperimentID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	client, err := openELN()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("open ELN: %v", err), http.StatusInternalServerError)
+		return
+	}
+	info, err := client.ExpInfo(expID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("fetch experiment %d: %v", expID, err), http.StatusBadGateway)
+		return
+	}
+	// First check the cross-folder mapping cache for a known
+	// data_project for this experiment — saves the depositor
+	// retyping a value an earlier folder already settled on.
+	source := "derived"
+	suggestion := ""
+	if store, err := elnmap.Open(""); err == nil {
+		if cached, _ := store.Lookup(strconv.FormatInt(expID, 10)); cached != nil &&
+			cached.DataProject != "" {
+			suggestion = cached.DataProject
+			source = "cached"
+		}
+	}
+	if suggestion == "" {
+		suggestion = suggestDataProjectFromELN(info)
+	}
+	writeJSON(w, map[string]any{
+		"data_project":    suggestion,
+		"source":          source,
+		"experiment_name": info.ExperimentName,
+		"collaborators":   info.Collaborators,
 	})
 }
 

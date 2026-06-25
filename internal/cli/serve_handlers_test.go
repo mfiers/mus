@@ -371,6 +371,82 @@ func TestAPIKnownKeys_ListsKnownCfgKeys(t *testing.T) {
 	}
 }
 
+// TestAPIKnownKeys_ManualFilter — with ?manual=true the response
+// must hide auto-managed keys (eln_*/de_*/irods_*/h5ad_*/data_project)
+// and surface only the biology / provenance fields a depositor
+// realistically sets by hand.
+func TestAPIKnownKeys_ManualFilter(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/api/known-keys?manual=true", nil)
+	w := httptest.NewRecorder()
+	apiKnownKeys(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d; body: %s", w.Code, w.Body)
+	}
+	var resp struct {
+		Keys []struct {
+			Key   string `json:"key"`
+			Vocab bool   `json:"vocab"`
+		} `json:"keys"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	got := map[string]bool{}
+	for _, k := range resp.Keys {
+		got[k.Key] = true
+	}
+	// MUST be present.
+	for _, want := range []string{"organism", "tissue", "cell_type", "technology", "tag", "note"} {
+		if !got[want] {
+			t.Errorf("manual filter missing %q", want)
+		}
+	}
+	// MUST NOT be present.
+	for _, banned := range []string{
+		"data_project",
+		"eln_experiment_id", "eln_disabled",
+		"de_dataset_id", "de_format",
+		"irods_home", "irods_group",
+		"h5ad_n_cells",
+	} {
+		if got[banned] {
+			t.Errorf("manual filter should hide %q (auto-managed by another panel)", banned)
+		}
+	}
+}
+
+// TestAPIELNSuggestDataProject_RejectsBadInputs — the suggest
+// endpoint shares experiment-id validation with /api/eln/link.
+// Don't hit the real ELN API in unit tests (no creds); just
+// confirm input validation refuses the wrong shapes.
+func TestAPIELNSuggestDataProject_RejectsBadInputs(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body map[string]any
+		want int
+	}{
+		{"missing-id", map[string]any{}, http.StatusBadRequest},
+		{"bad-id", map[string]any{"experiment_id": "not-a-number"}, http.StatusBadRequest},
+		{"get-method", nil, http.StatusMethodNotAllowed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var r *http.Request
+			if tc.body == nil {
+				r = httptest.NewRequest(http.MethodGet, "/api/eln/suggest-dp", nil)
+			} else {
+				buf, _ := json.Marshal(tc.body)
+				r = httptest.NewRequest(http.MethodPost, "/api/eln/suggest-dp",
+					strings.NewReader(string(buf)))
+				r.Header.Set("Content-Type", "application/json")
+			}
+			w := httptest.NewRecorder()
+			apiELNSuggestDataProject(w, r)
+			if w.Code != tc.want {
+				t.Errorf("%s: status %d, want %d; body: %s",
+					tc.name, w.Code, tc.want, w.Body)
+			}
+		})
+	}
+}
+
 func TestAPIVocab_RefusesSlashesInField(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/api/vocab/foo/bar", nil)
 	w := httptest.NewRecorder()

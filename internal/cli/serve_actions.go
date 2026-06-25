@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"codeberg.org/mfiers/mus/internal/config"
+	"codeberg.org/mfiers/mus/internal/sidecar"
 )
 
 // registerServeActions wires the action endpoints onto mux. Called
@@ -180,6 +181,10 @@ func apiUpload(w http.ResponseWriter, r *http.Request) {
 		Paths   []string `json:"paths"`
 		Message string   `json:"message"`
 		DryRun  bool     `json:"dry_run"`
+		// Pack=true → pass --pack tar.gz to mus irods upload so
+		// dense folders get archived before upload. Default off:
+		// the depositor opts in via the GUI checkbox.
+		Pack bool `json:"pack"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, fmt.Sprintf("decode body: %v", err), http.StatusBadRequest)
@@ -211,6 +216,28 @@ func apiUpload(w http.ResponseWriter, r *http.Request) {
 		}
 		absPaths = append(absPaths, abs)
 	}
+	// Skip-already-uploaded: for any path pointing at a single
+	// FILE, peek the matching sidecar. If it carries an
+	// irods_uploaded_at timestamp, drop it from this batch — mus's
+	// 0.2.27 skip-if-same gate would no-op the upload anyway, but
+	// the GUI promise is "never re-upload" so we drop pre-emptively
+	// and surface what was skipped in the log. Folders pass through
+	// unchanged (mus walks them and the per-file skip-if-same gate
+	// inside `mus irods upload` does the right thing).
+	upload, skipped := filterAlreadyUploaded(absPaths)
+	if len(upload) == 0 {
+		// Everything in the batch was already uploaded — return a
+		// friendly note via the streaming response, not a 400.
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		fmt.Fprintln(w, "✓ nothing to upload — every selected file already has a sidecar")
+		fmt.Fprintln(w, "  recording an iRODS upload. Re-tagging or re-uploading on top of")
+		fmt.Fprintln(w, "  these would be a no-op; use the CLI if you really need to force.")
+		for _, p := range skipped {
+			fmt.Fprintln(w, "  - skipped: "+p)
+		}
+		return
+	}
 	subcommand := []string{"irods", "upload", "-m", req.Message}
 	if req.DryRun {
 		// iron prints what it WOULD upload without transferring
@@ -218,7 +245,13 @@ func apiUpload(w http.ResponseWriter, r *http.Request) {
 		// preview before the real run.
 		subcommand = append(subcommand, "--dry-run")
 	}
-	subcommand = append(subcommand, absPaths...)
+	if req.Pack {
+		// Auto-archive dense folders into a single tar.gz before
+		// upload. Mirrors `mus irods upload --pack tar.gz`. No-op
+		// for file args.
+		subcommand = append(subcommand, "--pack", "tar.gz")
+	}
+	subcommand = append(subcommand, upload...)
 	self, err := os.Executable()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("locate mus binary: %v", err), http.StatusInternalServerError)
@@ -237,6 +270,9 @@ func apiUpload(w http.ResponseWriter, r *http.Request) {
 		if flusher != nil {
 			flusher.Flush()
 		}
+	}
+	for _, p := range skipped {
+		flushLine("  ↷ skipping " + p + " — sidecar already records an iRODS upload")
 	}
 	flushLine(fmt.Sprintf("$ mus %s", strings.Join(subcommand, " ")))
 	cmd := exec.CommandContext(r.Context(), self, subcommand...)
@@ -271,6 +307,38 @@ func apiUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	flushLine("EXIT: 0 (upload completed)")
+}
+
+// filterAlreadyUploaded splits `paths` into (toUpload, skipped).
+// A path is skipped when:
+//   - it points at an existing file (not a directory)
+//   - a matching <basename>.mus sidecar exists with a non-zero
+//     irods_uploaded_at timestamp
+//
+// Directories pass through unchanged — mus irods upload's own
+// per-file skip-if-same gate handles their contents at upload time.
+//
+// Any I/O error (stat, sidecar parse) is treated as "we can't
+// prove this is already uploaded, so let it through." Better to
+// risk a no-op re-run than to silently exclude a file the
+// depositor explicitly selected.
+func filterAlreadyUploaded(paths []string) (toUpload []string, skipped []string) {
+	for _, p := range paths {
+		st, err := os.Stat(p)
+		if err != nil || st.IsDir() {
+			toUpload = append(toUpload, p)
+			continue
+		}
+		scPath := sidecar.SidecarPath(p)
+		doc, err := readMaybe(scPath)
+		if err != nil || doc == nil || doc.IRODS == nil ||
+			doc.IRODS.UploadedAt.IsZero() {
+			toUpload = append(toUpload, p)
+			continue
+		}
+		skipped = append(skipped, p)
+	}
+	return toUpload, skipped
 }
 
 // streamLines copies lines from r into flushLine until r is

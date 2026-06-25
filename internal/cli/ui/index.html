@@ -19,7 +19,7 @@
   header h1 { font-size: 1.1em; margin: 0; flex: 1; }
   header .root { color: #666; font-family: ui-monospace, Menlo, monospace; }
   main {
-    display: grid; grid-template-columns: 280px 1fr 360px;
+    display: grid; grid-template-columns: 300px 1fr 340px;
     gap: 0; height: calc(100vh - 50px);
   }
   .panel { padding: 0.8em; overflow-y: auto; background: #fff; }
@@ -32,9 +32,13 @@
 
   /* Folder tree */
   .crumbs { font-family: ui-monospace, Menlo, monospace; font-size: 0.85em;
-            color: #888; margin-bottom: 0.6em; word-break: break-all; }
+            color: #888; margin-bottom: 0.4em; word-break: break-all; }
   .crumbs a { color: #2563eb; text-decoration: none; cursor: pointer; }
   .crumbs a:hover { text-decoration: underline; }
+  .filter {
+    width: 100%; padding: 0.4em 0.5em; margin-bottom: 0.4em;
+    border: 1px solid #d0d0d0; border-radius: 4px; font-size: 0.9em;
+  }
   .tree-row {
     display: flex; align-items: center; padding: 0.25em 0.4em;
     border-radius: 4px; gap: 0.4em;
@@ -84,19 +88,17 @@
   }
   .chip-x:hover { background: #fee2e2; color: #b91c1c; }
 
-  /* Form */
-  form.kv { display: flex; flex-direction: column; gap: 0.6em; }
-  form.kv label { font-size: 0.85em; color: #555; }
-  form.kv input, form.kv select,
-  form.kv #cfg-value-host input, form.kv #cfg-value-host select {
-    width: 100%; padding: 0.4em 0.5em;
+  /* Form — annotation key+value side by side */
+  .kv-form .kv-row {
+    display: grid; grid-template-columns: 1fr 1.4fr auto;
+    gap: 0.4em; align-items: center; margin-bottom: 0.4em;
+  }
+  .kv-form input, .kv-form select {
+    padding: 0.4em 0.5em;
     border: 1px solid #d0d0d0; border-radius: 4px; font-size: 0.92em;
     font-family: ui-monospace, Menlo, monospace;
-    box-sizing: border-box;
+    box-sizing: border-box; width: 100%;
   }
-  form.kv #cfg-value-host > .row input { width: auto; flex: 1; }
-  form.kv .row { display: flex; gap: 0.4em; }
-  form.kv .row > * { flex: 1; }
   button {
     padding: 0.4em 0.8em; font-size: 0.9em;
     background: #2563eb; color: #fff; border: 0; border-radius: 4px;
@@ -105,11 +107,9 @@
   button:hover { background: #1d4ed8; }
   button.ghost { background: #fff; color: #2563eb; border: 1px solid #2563eb; }
   button.ghost:hover { background: #eff6ff; }
-  button.danger { background: #b91c1c; }
-  button.danger:hover { background: #991b1b; }
   button:disabled { opacity: 0.4; cursor: not-allowed; }
 
-  /* Preflight + upload */
+  /* Pre-flight + ELN + Upload */
   .checks { list-style: none; padding: 0; margin: 0 0 0.8em 0; }
   .checks li {
     display: flex; align-items: center; gap: 0.5em;
@@ -119,7 +119,15 @@
   .checks .ok  .mark { color: #16a34a; }
   .checks .bad .mark { color: #dc2626; }
   .checks .label { flex: 1; }
-  .checks .detail { color: #888; font-size: 0.85em; }
+  .checks .detail { color: #888; font-size: 0.82em; }
+
+  /* Big message textarea in center */
+  textarea.message {
+    width: 100%; padding: 0.5em; min-height: 4em;
+    border: 1px solid #d0d0d0; border-radius: 4px;
+    font: 0.92em ui-monospace, Menlo, monospace; box-sizing: border-box;
+    resize: vertical;
+  }
 
   pre.log {
     background: #0f172a; color: #e2e8f0; padding: 0.6em; border-radius: 4px;
@@ -128,11 +136,32 @@
     margin: 0.6em 0 0 0;
   }
 
+  /* ELN block — collapsible */
+  .eln-block { border: 1px solid #e5e7eb; border-radius: 6px;
+               padding: 0.5em 0.7em; margin-bottom: 0.8em; background: #fafafa; }
+  .eln-block.decided { background: #f0fdf4; border-color: #bbf7d0; }
+  .eln-block summary {
+    cursor: pointer; font-weight: 600; font-size: 0.9em; color: #333;
+    list-style: none;
+  }
+  .eln-block summary::-webkit-details-marker { display: none; }
+  .eln-block summary::before {
+    content: '▸ '; display: inline-block; transition: transform 0.1s;
+    color: #888;
+  }
+  .eln-block[open] summary::before { transform: rotate(90deg); }
+  .eln-block .eln-form { margin-top: 0.6em; display: flex;
+                         flex-direction: column; gap: 0.4em; }
+  .eln-block input { padding: 0.35em 0.5em; border: 1px solid #d0d0d0;
+                     border-radius: 4px; font-size: 0.88em;
+                     font-family: ui-monospace, Menlo, monospace; }
+
   .notice { color: #92400e; background: #fef3c7; padding: 0.4em 0.6em;
             border-radius: 4px; font-size: 0.85em; margin-bottom: 0.6em; }
   .error  { color: #991b1b; background: #fee2e2; padding: 0.4em 0.6em;
             border-radius: 4px; font-size: 0.85em; margin-bottom: 0.6em;
             white-space: pre-wrap; }
+  .help { color: #555; font-size: 0.82em; margin: 0.3em 0 0.6em; }
 </style>
 </head>
 <body>
@@ -141,69 +170,80 @@
   <span class="root" id="server-root">…</span>
 </header>
 <main>
-  <!-- LEFT: folder tree -->
+  <!-- LEFT: folder tree + filter -->
   <section class="panel" id="panel-tree">
     <h2>Folders</h2>
     <div class="crumbs" id="crumbs"></div>
+    <input class="filter" id="filter" type="search"
+           placeholder="filter (substring of file name)…">
     <div id="tree"></div>
   </section>
 
-  <!-- MIDDLE: annotation form (folder-level mus.cfg) -->
+  <!-- MIDDLE: annotation + message + upload -->
   <section class="panel" id="panel-form">
     <h2>Folder annotation (mus.cfg)</h2>
     <div id="form-status"></div>
     <div id="cascade-chips" class="chips"></div>
-    <form class="kv" id="cfg-form" autocomplete="off">
-      <label for="cfg-key" style="font-size: 0.85em; color: #555;">Key:</label>
-      <select id="cfg-key">
-        <option value="">— pick a key —</option>
-        <!-- populated from /api/known-keys + a "Custom key…" at the bottom -->
-      </select>
-      <label for="cfg-value-host" style="font-size: 0.85em; color: #555;">Value:</label>
-      <div id="cfg-value-host"></div>
-      <div class="row" style="margin-top: 0.5em;">
+    <form class="kv-form" id="cfg-form" autocomplete="off">
+      <div class="kv-row">
+        <input id="cfg-key" list="cfg-keys-list" placeholder="key (e.g. organism)">
+        <div id="cfg-value-host"></div>
         <button type="button" id="cfg-add">Save</button>
-        <button type="button" class="ghost" id="cfg-reset">Reset</button>
+      </div>
+      <datalist id="cfg-keys-list"></datalist>
+      <div class="help">
+        Pick a known key from the autocomplete list, or type a custom key. The
+        value box switches to a dropdown when the key has a controlled vocabulary.
+        Off-vocab values save with <code>--force</code>.
       </div>
     </form>
-    <h2 style="margin-top: 1.2em;">ELN</h2>
-    <div id="eln-status"></div>
-    <div class="row">
-      <input id="eln-expid" placeholder="experiment_id (e.g. 12345)">
-      <input id="eln-dp" placeholder="data_project (required)">
-      <button type="button" id="eln-link">Link</button>
-    </div>
-    <div style="margin-top: 0.5em;">
-      <button type="button" class="ghost" id="eln-disable">Disable ELN here</button>
-      <button type="button" class="ghost" id="eln-enable">Re-enable</button>
-    </div>
-  </section>
 
-  <!-- RIGHT: upload action (iRODS-only; ELN comment is automatic) -->
-  <section class="panel" id="panel-upload">
-    <h2>Pre-flight</h2>
-    <ul class="checks" id="checks"></ul>
-    <h2>Upload to iRODS</h2>
-    <div style="font-size: 0.82em; color: #666; margin-bottom: 0.4em;">
-      Select files/folders on the left; check the
-      <code>&lt;this folder&gt;</code> row at the top to upload everything.
-      ELN comment is logged automatically if the folder is linked.
-    </div>
-    <label for="upload-msg" style="font-size: 0.85em; color: #555;">
-      Message (required — what / why):
-    </label>
-    <input id="upload-msg" placeholder="e.g. raw data for project Fiers2025">
-    <label style="display: flex; align-items: center; gap: 0.4em;
-                  margin-top: 0.5em; font-size: 0.85em; color: #555;">
-      <input type="checkbox" id="upload-dryrun">
-      <span>Dry-run (show what would happen, don't actually upload)</span>
-    </label>
-    <div class="row" style="margin-top: 0.5em;">
-      <button type="button" id="upload-go">Upload selected</button>
+    <h2 style="margin-top: 1.2em;">Upload message</h2>
+    <textarea class="message" id="upload-msg" rows="3"
+              placeholder="Required. Describe what's being uploaded and why — like a git commit message."></textarea>
+    <div style="display: flex; gap: 1em; flex-wrap: wrap; margin-top: 0.4em;">
+      <label style="display: flex; align-items: center; gap: 0.4em; font-size: 0.85em; color: #555;">
+        <input type="checkbox" id="upload-dryrun">
+        <span>Dry-run (no bytes transferred)</span>
+      </label>
+      <label style="display: flex; align-items: center; gap: 0.4em; font-size: 0.85em; color: #555;">
+        <input type="checkbox" id="upload-pack">
+        <span>Pack folders as <code>.tar.gz</code> first</span>
+      </label>
     </div>
     <div id="upload-selected-summary"
          style="font-size: 0.82em; color: #555; margin-top: 0.4em;"></div>
+    <div style="margin-top: 0.5em;">
+      <button type="button" id="upload-go">Upload to iRODS</button>
+    </div>
     <pre class="log" id="upload-log" hidden></pre>
+  </section>
+
+  <!-- RIGHT: pre-flight + ELN -->
+  <section class="panel" id="panel-right">
+    <h2>Pre-flight</h2>
+    <ul class="checks" id="checks"></ul>
+
+    <h2>ELN</h2>
+    <details class="eln-block" id="eln-block">
+      <summary id="eln-summary">ELN: …</summary>
+      <div class="eln-form">
+        <div id="eln-form-status"></div>
+        <input id="eln-expid" placeholder="experiment_id (e.g. 12345)">
+        <div style="display: flex; gap: 0.4em;">
+          <input id="eln-dp" placeholder="data_project (required)" style="flex: 1;">
+          <button type="button" class="ghost" id="eln-suggest"
+                  title="Look up the experiment in eLab and propose a data_project name">
+            Suggest
+          </button>
+        </div>
+        <div style="display: flex; gap: 0.4em;">
+          <button type="button" id="eln-link" style="flex: 1;">Link</button>
+          <button type="button" class="ghost" id="eln-disable">Disable here</button>
+          <button type="button" class="ghost" id="eln-enable">Re-enable</button>
+        </div>
+      </div>
+    </details>
   </section>
 </main>
 
@@ -211,8 +251,11 @@
 'use strict';
 
 // ── state ──────────────────────────────────────────────────────────────
-let currentDir = '';   // relative to serveRoot; "" = root
+let currentDir = '';
 let serverRoot = '';
+const selectedPaths = new Set();
+let filterText = '';
+let knownKeys = [];        // [{key, vocab}] from /api/known-keys?manual=true
 
 // ── helpers ────────────────────────────────────────────────────────────
 async function api(path, opts) {
@@ -261,7 +304,6 @@ async function boot() {
   } catch (e) { /* leave header blank */ }
   await refreshAll();
 }
-
 async function refreshAll() {
   renderCrumbs();
   await Promise.all([refreshTree(), refreshCascade(), refreshPreflight()]);
@@ -284,48 +326,42 @@ function renderCrumbs() {
 }
 function navigate(dir) {
   currentDir = dir;
+  selectedPaths.clear();
+  filterText = '';
+  document.getElementById('filter').value = '';
   refreshAll();
 }
 
-// ── folder tree with selectable rows ──────────────────────────────────
-// Selection is BY ABSOLUTE-IN-SERVE-ROOT PATH (the e.path the API
-// returns). Sidecars are not selectable — mus s.. err mus irods upload
-// skips them automatically AND the depositor shouldn't be picking them
-// individually. A synthetic "<this folder>" row at the top lets the
-// user upload the current cwd as one unit.
-const selectedPaths = new Set();   // keys: tree entry .path (or "" for cwd)
-
+// ── folder tree with selectable rows ───────────────────────────────────
 async function refreshTree() {
   const root = document.getElementById('tree');
   root.innerHTML = '';
-  // Synthetic "this folder" row.
+  // Synthetic "this folder" row at the top.
   const wholeRow = el('div', { class: 'tree-row dir whole-folder' });
-  const wholeChk = el('input', { type: 'checkbox', class: 'select',
+  wholeRow.appendChild(el('input', { type: 'checkbox', class: 'select',
     checked: selectedPaths.has(''),
-    on: { change: e => toggleSelect('', e.target.checked, true) } });
-  wholeRow.appendChild(wholeChk);
+    on: { change: e => toggleSelect('', e.target.checked, true) } }));
   wholeRow.appendChild(el('span', { class: 'icon' }, '⌂'));
   wholeRow.appendChild(el('span', { class: 'name', style: 'font-weight: 600;' },
     '<this folder>' + (currentDir ? ' (' + currentDir + ')' : '')));
   root.appendChild(wholeRow);
   try {
     const r = await api('/api/tree?dir=' + encodeURIComponent(currentDir));
+    const f = (filterText || '').toLowerCase();
+    let shown = 0;
     for (const e of r.entries) {
+      if (f && !e.name.toLowerCase().includes(f)) continue;
+      shown++;
       const isDir = e.kind === 'dir';
       const isSidecar = e.kind === 'sidecar';
       const row = el('div', { class: 'tree-row ' + e.kind });
-      // Checkbox for files + directories. Sidecars stay non-
-      // selectable (greyed) — they ride along with their data file.
       if (!isSidecar) {
-        const chk = el('input', { type: 'checkbox', class: 'select',
+        row.appendChild(el('input', { type: 'checkbox', class: 'select',
           checked: selectedPaths.has(e.path),
-          on: { change: ev => toggleSelect(e.path, ev.target.checked, false) } });
-        row.appendChild(chk);
+          on: { change: ev => toggleSelect(e.path, ev.target.checked, false) } }));
       } else {
         row.appendChild(el('span', { class: 'select-spacer' }));
       }
-      // Click-to-drill on the icon+name area only — checkbox events
-      // shouldn't trigger navigation.
       const drill = el('span', { class: 'drill',
         on: { click: () => isDir && navigate(e.path) } });
       drill.appendChild(el('span', { class: 'icon' },
@@ -333,20 +369,20 @@ async function refreshTree() {
       drill.appendChild(el('span', { class: 'name' }, e.name));
       row.appendChild(drill);
       if (e.has_mus_cfg) row.appendChild(el('span', { class: 'badge' }, 'cfg'));
-      // Upload-status badge: ✓ when the sidecar records an
-      // iRODS upload. Tooltip shows when + where.
       if (e.uploaded_at) {
-        const badge = el('span', {
+        row.appendChild(el('span', {
           class: 'badge uploaded',
           title: 'uploaded ' + e.uploaded_at +
             (e.irods_path ? ' → ' + e.irods_path : ''),
-        }, '✓');
-        row.appendChild(badge);
+        }, '✓'));
       }
       root.appendChild(row);
     }
     if (r.entries.length === 0) {
       root.appendChild(el('div', { class: 'notice' }, 'empty folder'));
+    } else if (shown === 0 && f) {
+      root.appendChild(el('div', { class: 'notice' },
+        'no matches for "' + filterText + '"'));
     }
   } catch (e) {
     showError(root, 'tree error: ' + e.message);
@@ -354,9 +390,6 @@ async function refreshTree() {
   refreshSelectionSummary();
 }
 
-// toggleSelect mutates selectedPaths. The "<this folder>" entry is
-// mutually exclusive with individual rows — picking it clears the
-// rest, and picking any individual row clears it.
 function toggleSelect(path, on, isWholeFolder) {
   if (on) {
     if (isWholeFolder) {
@@ -369,7 +402,7 @@ function toggleSelect(path, on, isWholeFolder) {
   } else {
     selectedPaths.delete(path);
   }
-  refreshTree();              // re-render to sync the other checkboxes
+  refreshTree();
 }
 
 function refreshSelectionSummary() {
@@ -390,7 +423,12 @@ function refreshSelectionSummary() {
   document.getElementById('upload-go').disabled = false;
 }
 
-// ── cascade + form ─────────────────────────────────────────────────────
+document.getElementById('filter').addEventListener('input', e => {
+  filterText = e.target.value;
+  refreshTree();
+});
+
+// ── cascade + chips ────────────────────────────────────────────────────
 async function refreshCascade() {
   const chips = document.getElementById('cascade-chips');
   const status = document.getElementById('form-status');
@@ -414,7 +452,7 @@ async function refreshCascade() {
     }
     if (local.length + inherited.length === 0) {
       chips.appendChild(el('div', { class: 'notice' },
-        'no cascade values — start by setting `data_project`'));
+        'no cascade values — start by linking an ELN experiment (or disabling ELN) on the right.'));
     }
     refreshELNState(r.values);
   } catch (e) {
@@ -422,21 +460,17 @@ async function refreshCascade() {
   }
 }
 
-// renderChip builds one chip. Local chips get an × that calls
-// /api/config/unset on the LOCAL mus.cfg. Inherited chips are
-// read-only (the × wouldn't apply at this level anyway).
 function renderChip(v, isLocal) {
   const chip = el('div', { class: 'chip' + (isLocal ? ' local' : ' inherited') });
   chip.appendChild(el('b', null, v.key + '='));
   chip.appendChild(document.createTextNode(v.value + (v.is_list ? ' (list)' : '')));
   if (isLocal) {
-    const x = el('button', {
+    chip.appendChild(el('button', {
       type: 'button',
       class: 'chip-x',
       title: 'unset ' + v.key + ' from this folder\'s mus.cfg',
       on: { click: () => unsetKey(v.key) },
-    }, '×');
-    chip.appendChild(x);
+    }, '×'));
   }
   return chip;
 }
@@ -449,111 +483,43 @@ async function unsetKey(key) {
   }
   try {
     await apiPost('/api/config/unset', { dir: currentDir, key });
-    showNotice(status, 'unset ' + key + ' from local mus.cfg');
+    showNotice(status, 'unset ' + key);
     refreshAll();
   } catch (e) {
     showError(status, e.message);
   }
 }
 
-function refreshELNState(values) {
-  const elnDiv = document.getElementById('eln-status');
-  elnDiv.innerHTML = '';
-  const mp = {};
-  for (const v of values) mp[v.key] = v.value;
-  if (mp.eln_experiment_id) {
-    elnDiv.appendChild(el('div', { class: 'chip' },
-      el('b', null, 'linked: '),
-      'experiment ' + mp.eln_experiment_id + ' (' + (mp.eln_experiment_name || '?') + ')'));
-  } else if (mp.eln_disabled === 'true') {
-    elnDiv.appendChild(el('div', { class: 'chip' },
-      el('b', null, 'disabled '), 'for this folder'));
-  } else {
-    elnDiv.appendChild(el('div', { class: 'notice' },
-      'ELN state undecided — link an experiment or disable below'));
-  }
-}
-
-// ── vocab-driven annotation form ──────────────────────────────────────
-//
-// Key dropdown: populated from /api/known-keys (which lists every
-// recognised mus.cfg key + whether it's vocab-controlled). Picking
-// "Custom key…" exposes a free-text input for anything outside the
-// known set — depositor still needs to be sane, but mus's vocab
-// validation will catch obvious mistakes server-side.
-//
-// Value rendering: changes based on key type.
-//   - Vocab-controlled key (organism, tissue, …): <select> from
-//     /api/vocab/<key> with a "Custom value (force-set)…" option
-//     at the bottom for off-vocab cases.
-//   - Anything else: free <input>.
-
-let knownKeys = [];   // [{key, vocab}] from /api/known-keys
-
+// ── annotation form (autocomplete key, vocab-driven value) ────────────
 async function loadKnownKeys() {
   try {
-    const r = await api('/api/known-keys');
+    // manual=true hides eln_*/de_*/irods_*/h5ad_*/data_project —
+    // those are owned by other UI panels or auto-stamped.
+    const r = await api('/api/known-keys?manual=true');
     knownKeys = r.keys || [];
-    const sel = document.getElementById('cfg-key');
-    sel.innerHTML = '<option value="">— pick a key —</option>';
+    const dl = document.getElementById('cfg-keys-list');
+    dl.innerHTML = '';
     for (const k of knownKeys) {
-      const label = k.key + (k.vocab ? '  (vocab)' : '');
-      sel.appendChild(el('option', { value: k.key }, label));
+      dl.appendChild(el('option', { value: k.key, label: k.vocab ? '(vocab)' : '' }));
     }
-    sel.appendChild(el('option', { value: '__CUSTOM__' }, 'Custom key…'));
-  } catch (e) {
-    // Non-fatal — depositor can still use Custom key input
-    knownKeys = [];
-  }
+  } catch (e) { knownKeys = []; }
 }
 
-// Render the value input based on the currently-selected key.
-let pendingCustomKey = '';  // when Custom key… is chosen
-let pendingValueIsCustom = false;
-
-document.getElementById('cfg-key').addEventListener('change', async () => {
-  const sel = document.getElementById('cfg-key');
-  if (sel.value === '__CUSTOM__') {
-    // Show a custom-key text input + free value input.
-    pendingCustomKey = '';
-    pendingValueIsCustom = true;
-    renderCustomKeyField();
-    return;
-  }
-  pendingValueIsCustom = false;
-  renderValueField(sel.value);
-});
-
-function renderCustomKeyField() {
-  const host = document.getElementById('cfg-value-host');
-  host.innerHTML = '';
-  const wrap = el('div', { class: 'row' });
-  const keyInp = el('input', { id: 'cfg-custom-key', placeholder: 'custom key (e.g. comment)' });
-  const valInp = el('input', { id: 'cfg-custom-val', placeholder: 'value (free text)' });
-  wrap.appendChild(keyInp);
-  wrap.appendChild(valInp);
-  host.appendChild(wrap);
-  host.appendChild(el('div', { class: 'notice' },
-    'Custom key — must follow the cascading mus.cfg convention. ' +
-    'Off-vocab values are saved with --force and a stderr warning.'));
-}
+// Re-render the value field whenever the key changes.
+const keyInput = document.getElementById('cfg-key');
+keyInput.addEventListener('input', () => renderValueField(keyInput.value.trim()));
+keyInput.addEventListener('change', () => renderValueField(keyInput.value.trim()));
 
 async function renderValueField(key) {
   const host = document.getElementById('cfg-value-host');
   host.innerHTML = '';
-  if (!key) { return; }
-  const info = knownKeys.find(k => k.key === key);
-  const isVocab = info && info.vocab;
+  if (!key) return;
+  const known = knownKeys.find(k => k.key === key);
+  const isVocab = known && known.vocab;
   if (!isVocab) {
-    // Free-text input. Some keys have known shape — could nudge
-    // here later (e.g. eln_experiment_id digits-only) but keep
-    // simple for v1.
-    const inp = el('input', { id: 'cfg-val', placeholder: 'value' });
-    host.appendChild(inp);
+    host.appendChild(el('input', { id: 'cfg-val', placeholder: 'value' }));
     return;
   }
-  // Vocab-controlled — fetch the list and render a <select> with
-  // a "Custom value (force-set)…" escape hatch.
   try {
     const r = await api('/api/vocab/' + encodeURIComponent(key));
     const sel = el('select', { id: 'cfg-val' });
@@ -564,51 +530,28 @@ async function renderValueField(key) {
     sel.appendChild(el('option', { value: '__CUSTOMVAL__' }, 'Custom value (force-set)…'));
     sel.addEventListener('change', () => {
       if (sel.value === '__CUSTOMVAL__') {
-        // Replace with a free input that force-sets server-side.
-        const free = el('input', { id: 'cfg-val', placeholder: 'off-vocab value' });
+        const free = el('input', { id: 'cfg-val', placeholder: 'off-vocab value (saved with --force)' });
         host.replaceChild(free, sel);
-        host.appendChild(el('div', { class: 'notice' },
-          'Off-vocab value will be saved with --force. ' +
-          'If this term should be added to the controlled vocabulary, ' +
-          'open an issue at codeberg.org/mfiers/mus.'));
         free.focus();
       }
     });
     host.appendChild(sel);
   } catch (e) {
-    // Vocab fetch failed — degrade to free text rather than block.
     host.appendChild(el('input', { id: 'cfg-val', placeholder: 'value (vocab unavailable)' }));
   }
 }
 
-// Save handler — reads whichever input combination is currently rendered.
 document.getElementById('cfg-add').addEventListener('click', async () => {
   const status = document.getElementById('form-status');
-  let key, value, isCustomKey = false, isCustomVal = false;
-  if (pendingValueIsCustom) {
-    key = (document.getElementById('cfg-custom-key') || {}).value || '';
-    value = (document.getElementById('cfg-custom-val') || {}).value || '';
-    isCustomKey = true;
-  } else {
-    key = document.getElementById('cfg-key').value;
-    const valEl = document.getElementById('cfg-val');
-    value = valEl ? valEl.value : '';
-    // If the value input came from the "Custom value (force-set)…"
-    // path, the element was replaced from <select> to <input>; flag it.
-    isCustomVal = valEl && valEl.tagName === 'INPUT';
-  }
-  key = (key || '').trim();
-  value = (value || '').trim();
-  if (!key || !value) {
-    showError(status, 'both key and value are required');
-    return;
-  }
-  // Force only when the depositor explicitly picked the off-vocab
-  // escape hatch (either custom key OR custom value on a vocab-
-  // controlled field). The server's normalisation message is the
-  // real source of truth — we just don't refuse on a deliberate
-  // off-vocab pick.
-  const force = isCustomKey || isCustomVal;
+  const key = keyInput.value.trim();
+  const valEl = document.getElementById('cfg-val');
+  const value = valEl ? valEl.value.trim() : '';
+  if (!key || !value) { showError(status, 'both key and value are required'); return; }
+  const known = knownKeys.find(k => k.key === key);
+  const isKnown = !!known;
+  // Force when: (a) custom (unknown) key, OR (b) vocab-controlled
+  // key with a free-text input (came via "Custom value (force-set)…").
+  const force = !isKnown || (known && known.vocab && valEl && valEl.tagName === 'INPUT');
   try {
     const r = await apiPost('/api/config/set',
       { dir: currentDir, key, value, force });
@@ -618,40 +561,64 @@ document.getElementById('cfg-add').addEventListener('click', async () => {
     } else {
       showNotice(status, 'saved ' + r.key + '=' + r.value);
     }
-    document.getElementById('cfg-key').value = '';
+    keyInput.value = '';
     document.getElementById('cfg-value-host').innerHTML = '';
-    pendingValueIsCustom = false;
     refreshAll();
-  } catch (e) {
-    showError(status, e.message);
+  } catch (e) { showError(status, e.message); }
+});
+
+// ── ELN block (right panel, collapsible) ──────────────────────────────
+function refreshELNState(values) {
+  const mp = {};
+  for (const v of values) mp[v.key] = v.value;
+  const block = document.getElementById('eln-block');
+  const summary = document.getElementById('eln-summary');
+  let decided = false;
+  if (mp.eln_experiment_id) {
+    summary.textContent = 'ELN ✓ linked to experiment ' + mp.eln_experiment_id +
+      (mp.eln_experiment_name ? ' (' + mp.eln_experiment_name + ')' : '');
+    decided = true;
+  } else if (mp.eln_disabled === 'true') {
+    summary.textContent = 'ELN ✓ disabled for this folder';
+    decided = true;
+  } else {
+    summary.textContent = 'ELN ⚠ undecided — link or disable below';
   }
+  block.classList.toggle('decided', decided);
+  // Auto-collapse when decided; auto-open when undecided.
+  block.open = !decided;
+}
+
+document.getElementById('eln-suggest').addEventListener('click', async () => {
+  const status = document.getElementById('eln-form-status');
+  const expid = document.getElementById('eln-expid').value.trim();
+  if (!expid) { showError(status, 'enter an experiment_id first'); return; }
+  try {
+    const r = await apiPost('/api/eln/suggest-dp', { experiment_id: expid });
+    document.getElementById('eln-dp').value = r.data_project || '';
+    showNotice(status, 'proposed data_project=' + r.data_project +
+      ' (' + r.source + ')\n  experiment: ' +
+      (r.experiment_name || '(no name)'));
+  } catch (e) { showError(status, e.message); }
 });
 
-document.getElementById('cfg-reset').addEventListener('click', () => {
-  document.getElementById('cfg-key').value = '';
-  document.getElementById('cfg-value-host').innerHTML = '';
-  clearStatus(document.getElementById('form-status'));
-  pendingValueIsCustom = false;
-});
-
-// ── ELN actions ────────────────────────────────────────────────────────
 document.getElementById('eln-link').addEventListener('click', async () => {
   const expid = document.getElementById('eln-expid').value.trim();
   const dp = document.getElementById('eln-dp').value.trim();
-  const status = document.getElementById('form-status');
+  const status = document.getElementById('eln-form-status');
   if (!expid || !dp) {
-    showError(status, 'experiment_id AND data_project are required');
+    showError(status, 'experiment_id AND data_project are required (try Suggest)');
     return;
   }
   try {
     await apiPost('/api/eln/link',
       { dir: currentDir, experiment_id: expid, data_project: dp });
-    showNotice(status, 'linked to experiment ' + expid + ' (data_project=' + dp + ')');
+    showNotice(status, 'linked → experiment ' + expid + ' / data_project ' + dp);
     refreshAll();
   } catch (e) { showError(status, e.message); }
 });
 document.getElementById('eln-disable').addEventListener('click', async () => {
-  const status = document.getElementById('form-status');
+  const status = document.getElementById('eln-form-status');
   try {
     await apiPost('/api/eln/disable', { dir: currentDir });
     showNotice(status, 'ELN disabled for this folder');
@@ -659,10 +626,10 @@ document.getElementById('eln-disable').addEventListener('click', async () => {
   } catch (e) { showError(status, e.message); }
 });
 document.getElementById('eln-enable').addEventListener('click', async () => {
-  const status = document.getElementById('form-status');
+  const status = document.getElementById('eln-form-status');
   try {
     await apiPost('/api/eln/enable', { dir: currentDir });
-    showNotice(status, 'ELN re-enabled (now undecided — link an experiment)');
+    showNotice(status, 'ELN re-enabled (now undecided)');
     refreshAll();
   } catch (e) { showError(status, e.message); }
 });
@@ -682,56 +649,54 @@ async function refreshPreflight() {
       ul.appendChild(li);
       if (!c.ok && c.block_upload) canUpload = false;
     }
-    // Re-evaluate selection summary (which also flips the button
-    // when nothing is selected).
     refreshSelectionSummary();
-    if (!canUpload) {
-      document.getElementById('upload-go').disabled = true;
-    }
+    if (!canUpload) document.getElementById('upload-go').disabled = true;
   } catch (e) {
     showError(ul, 'preflight error: ' + e.message);
   }
 }
 
-// ── upload (iRODS only; whatever is in selectedPaths) ───────────────
+// ── upload ─────────────────────────────────────────────────────────────
 async function triggerUpload() {
   const message = document.getElementById('upload-msg').value.trim();
   const dryRun = document.getElementById('upload-dryrun').checked;
+  const pack = document.getElementById('upload-pack').checked;
   const log = document.getElementById('upload-log');
   if (!message) {
     log.hidden = false;
-    log.textContent = 'ERROR: upload message is required — describe what / why.';
+    log.textContent = 'ERROR: upload message is required.';
     return;
   }
   if (selectedPaths.size === 0) {
     log.hidden = false;
-    log.textContent = 'ERROR: select at least one file/folder (or the <this folder> row).';
+    log.textContent = 'ERROR: select at least one item.';
     return;
   }
-  const paths = [...selectedPaths]; // "" stays "" → whole folder
+  const paths = [...selectedPaths];
   const summary = paths.includes('')
     ? '<this folder>' + (currentDir ? ' (' + currentDir + ')' : '')
     : paths.length + ' item(s)';
-  // Skip the confirm() prompt on dry-run — no side effects to
-  // confirm. The depositor probably wants to flip the checkbox
-  // on/off rapidly to compare.
-  if (!dryRun && !confirm('Upload ' + summary + ' to iRODS with message "' + message +
-               '"? This has external side effects.')) {
-    return;
+  // Confirmation (skip on dry-run — no side effects).
+  if (!dryRun) {
+    const confirmMsg =
+      'Upload ' + summary + ' to iRODS?\n\n' +
+      'Message: ' + message + '\n' +
+      (pack ? 'Pack folders as tar.gz: YES\n' : '') +
+      '\nFiles already uploaded (with a ✓ badge) will be skipped automatically.\n' +
+      'This has external side effects.';
+    if (!confirm(confirmMsg)) return;
   }
   log.hidden = false;
   log.textContent = dryRun ? '(dry-run — no bytes will transfer)\n' : '';
-  const goBtn = document.getElementById('upload-go');
-  goBtn.disabled = true;
+  document.getElementById('upload-go').disabled = true;
   try {
     const r = await fetch('/api/upload', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paths, message, dry_run: dryRun }),
+      body: JSON.stringify({ paths, message, dry_run: dryRun, pack }),
     });
     if (!r.ok) {
-      const t = await r.text();
-      log.textContent = 'ERROR: ' + t;
+      log.textContent = 'ERROR: ' + (await r.text());
       return;
     }
     const reader = r.body.getReader();
@@ -745,11 +710,6 @@ async function triggerUpload() {
   } catch (e) {
     log.textContent += '\n\nERROR: ' + e.message;
   } finally {
-    // Re-resolve everything after an upload: the tree picks up
-    // the new ✓ badges on freshly-uploaded files, the cascade
-    // re-loads in case mus rewrote anything (it sometimes stamps
-    // eln_experiment_name etc into sidecars on first upload),
-    // and the preflight chips reflect the new state.
     refreshAll();
   }
 }

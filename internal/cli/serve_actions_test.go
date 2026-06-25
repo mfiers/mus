@@ -137,6 +137,71 @@ func TestAPIUpload_RejectsAbsolutePath(t *testing.T) {
 	}
 }
 
+// TestAPIUpload_SkipsAlreadyUploaded — when every selected file
+// has a sidecar recording irods_uploaded_at, the response should
+// be a friendly "nothing to upload" note (200), not a refusal.
+// No iron is invoked.
+func TestAPIUpload_SkipsAlreadyUploaded(t *testing.T) {
+	root := t.TempDir()
+	defer withServeRoot(t, root)()
+	// File + sidecar with an upload recorded.
+	if err := os.WriteFile(filepath.Join(root, "a.tsv"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sidecarContent := "" +
+		"sha256=abc\nsize=1\n" +
+		"irods_uploaded_at=2026-06-20T10:30:00Z\n" +
+		"irods_path=/zone/coll/a.tsv\nirods_status=uploaded\n"
+	if err := os.WriteFile(filepath.Join(root, "a.tsv.mus"),
+		[]byte(sidecarContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w := postJSON(apiUpload, map[string]any{
+		"paths": []string{"a.tsv"}, "message": "smoke",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 with friendly note; got %d; body: %s",
+			w.Code, w.Body)
+	}
+	if !strings.Contains(w.Body.String(), "nothing to upload") {
+		t.Errorf("expected 'nothing to upload' note; got: %s", w.Body)
+	}
+	if !strings.Contains(w.Body.String(), "a.tsv") {
+		t.Errorf("expected the skipped path named in the response; got: %s",
+			w.Body)
+	}
+}
+
+// TestFilterAlreadyUploaded_Unit — the pure helper, in isolation.
+func TestFilterAlreadyUploaded_Unit(t *testing.T) {
+	root := t.TempDir()
+	uploaded := filepath.Join(root, "u.tsv")
+	fresh := filepath.Join(root, "f.tsv")
+	if err := os.WriteFile(uploaded, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fresh, []byte("y"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(uploaded+".mus",
+		[]byte("sha256=a\nirods_uploaded_at=2026-06-20T10:00:00Z\n"),
+		0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A directory should always pass through (folder upload semantics).
+	dirPath := filepath.Join(root, "d")
+	if err := os.MkdirAll(dirPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	toUpload, skipped := filterAlreadyUploaded([]string{uploaded, fresh, dirPath})
+	if len(skipped) != 1 || skipped[0] != uploaded {
+		t.Errorf("expected uploaded file in skipped; got skipped=%v", skipped)
+	}
+	if len(toUpload) != 2 {
+		t.Errorf("expected fresh + dir in toUpload; got %v", toUpload)
+	}
+}
+
 // TestAPIUpload_AcceptsDryRun — schema check only: the new dry_run
 // field is accepted by the decoder + reaches the validation block
 // without 400. We can't end-to-end-test the actual `--dry-run`
@@ -193,12 +258,14 @@ func TestServeIndex_EmbeddedHTMLIsPresent(t *testing.T) {
 	}
 	s := string(serveIndexHTML)
 	// Spot-check load-bearing IDs the JS reaches for.
-	for _, id := range []string{"id=\"tree\"", "id=\"cfg-form\"",
-		"id=\"cfg-key\"", "id=\"cfg-value-host\"", "id=\"upload-go\"",
-		"id=\"upload-dryrun\"",
+	for _, id := range []string{
+		"id=\"tree\"", "id=\"filter\"", "id=\"cfg-form\"",
+		"id=\"cfg-key\"", "id=\"cfg-value-host\"",
+		"id=\"upload-go\"", "id=\"upload-dryrun\"", "id=\"upload-pack\"",
+		"id=\"eln-block\"", "id=\"eln-suggest\"",
 		"id=\"checks\"", "id=\"upload-log\"",
-		"/api/preflight", "/api/upload", "/api/known-keys",
-		"/api/config/unset", "chip-x",
+		"/api/preflight", "/api/upload", "/api/known-keys?manual=true",
+		"/api/config/unset", "/api/eln/suggest-dp", "chip-x",
 	} {
 		if !strings.Contains(s, id) {
 			t.Errorf("embedded UI missing required element / endpoint: %q", id)
