@@ -165,7 +165,12 @@ func TestMusSkill_BodyMentionsDEFlow(t *testing.T) {
 		"Catalog (S3 / anthive) uploads are intentionally",
 		"set in this folder:",
 		"inherited from cascade:",
-		"Dry-run checkbox",
+		// mus 0.2.32+ — round 2 (filter, manual-only keys,
+		// ELN-suggest, skip-uploaded, pack)
+		"Skip-already-uploaded",
+		"Pack folders as tar.gz",
+		"filtered to MANUAL keys only",
+		"Suggest",
 	}
 	for _, req := range requirements {
 		if !strings.Contains(musBody, req) {

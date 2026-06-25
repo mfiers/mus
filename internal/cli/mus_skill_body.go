@@ -288,32 +288,56 @@ fallback (` + "`~/.config/mus/secrets.age`" + `) for HPC login nodes.
   CLI-only — those need the full DE-check / h5ad-check workflow
   in front of the depositor.
 
-**Three-panel layout:**
+**Three-panel layout (mus 0.2.32+):**
 
-- **Left — folder tree.** Each non-sidecar row has a checkbox.
-  A highlighted ` + "`<this folder>`" + ` row at the top uploads the
-  current cwd as one unit (mutually exclusive with individual
-  picks). Files that already have a sidecar recording
-  ` + "`irods_uploaded_at`" + ` get a blue ✓ badge with a tooltip
-  showing when + where they landed. Folders carrying a
+- **Left — folder tree + filter.** A search box filters by
+  case-insensitive substring on file names. Each non-sidecar row
+  has a checkbox; a highlighted ` + "`<this folder>`" + ` row at the
+  top uploads the current cwd as one unit (mutually exclusive
+  with individual picks). Already-uploaded files (sidecar
+  records ` + "`irods_uploaded_at`" + `) carry a blue ✓ badge with a
+  tooltip showing when + where they landed. Folders carrying a
   ` + "`mus.cfg`" + ` get a green ` + "`cfg`" + ` badge.
-- **Middle — folder annotation.** Cascade chips split into two
-  groups: "set in this folder:" (green, with × to unset that key
-  from the LOCAL mus.cfg) and "inherited from cascade:" (grey,
-  read-only at this level). The form key dropdown lists every
-  recognised mus.cfg key; vocab-controlled keys (organism,
-  tissue, …) render their value field as a ` + "`<select>`" + ` of
-  allowed values with a "Custom value (force-set)…" escape.
-  "Custom key…" at the bottom of the key dropdown handles
-  one-offs. ELN section: link-or-disable buttons.
-- **Right — upload to iRODS.** Pre-flight chips (data_project /
-  ELN state / iron-on-PATH / data-files-present). Required
-  message input. Dry-run checkbox runs ` + "`iron --dry-run`" + ` so
-  the depositor can preview without bytes transferring; safety
-  gates (ELN-undecided, sidecar checks) still fire under
-  dry-run. Single "Upload selected" button. After upload, the
-  whole UI refreshes so ✓ badges appear on freshly-uploaded
-  files immediately.
+- **Middle — annotation + message + upload.** Cascade chips
+  split into "set in this folder:" (green, with × to unset that
+  key from the LOCAL mus.cfg) and "inherited from cascade:"
+  (grey). Annotation form is a single side-by-side row:
+  ` + "`[key + autocomplete]`" + ` ` + "`[value]`" + ` ` + "`[Save]`" + `.
+  The key input is filtered to MANUAL keys only —
+  ` + "`eln_*`" + `, ` + "`de_*`" + `, ` + "`irods_*`" + `, ` + "`h5ad_*`" + `, and
+  ` + "`data_project`" + ` are hidden because they're owned by other
+  panels or auto-stamped by mus. The value swaps to a vocab
+  ` + "`<select>`" + ` for controlled keys (Custom value (force-set)…
+  escape available). Below the form: a large message
+  ` + "`<textarea>`" + `, dry-run + pack-as-tar.gz toggles, selection
+  summary, then "Upload to iRODS". Confirm dialog before
+  non-dry-run runs spells out that already-uploaded files will
+  be skipped.
+- **Right — pre-flight + ELN.** Pre-flight chips
+  (data_project / ELN state / iron-on-PATH / data-files-present).
+  ELN block uses ` + "`<details>`" + ` that auto-collapses when ELN
+  state is decided (linked or disabled) and auto-expands when
+  undecided. Inside: experiment_id input + "Suggest" button
+  (calls /api/eln/suggest-dp which looks up the experiment in
+  eLab and pre-fills data_project via the same resolver the CLI
+  uses — cross-folder cache, then first-collaborator+year
+  heuristic). Then data_project input + Link / Disable here /
+  Re-enable buttons.
+
+**Upload safety (mus 0.2.32+):**
+
+- **Skip-already-uploaded** — selected FILES whose sidecar
+  records ` + "`irods_uploaded_at`" + ` are dropped from the batch
+  server-side before iron is invoked. If everything is already
+  uploaded, mus serve returns "nothing to upload" without
+  shelling out. Folders pass through (mus's own per-file
+  skip-if-same gate handles their contents).
+- **Pack folders as tar.gz** — opt-in checkbox passes
+  ` + "`--pack tar.gz`" + ` to ` + "`mus irods upload`" + ` so dense
+  folders get archived first. Default off.
+- **Dry-run** — runs ` + "`iron --dry-run`" + `. Safety gates
+  (ELN-undecided, sidecar check, vocab) still fire under
+  dry-run; only the byte transfer is suppressed.
 
 - Trigger this when the user says "I want a UI", "non-techie
   colleague needs to deposit", or "the CLI is too much."
