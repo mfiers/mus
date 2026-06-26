@@ -46,6 +46,7 @@ import (
 func newS3UploadCmd() *cobra.Command {
 	var message string
 	var forceH5adGate bool
+	var forceOverwrite bool
 	var staticFiles []string
 	var subfolder string
 	cmd := &cobra.Command{
@@ -112,7 +113,7 @@ func newS3UploadCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runS3Upload(cmd, args, staticFiles, cleanSub, msg, forceH5adGate)
+			return runS3Upload(cmd, args, staticFiles, cleanSub, msg, forceH5adGate, forceOverwrite)
 		},
 	}
 	cmd.Flags().StringVarP(&message, "message", "m", "",
@@ -120,6 +121,9 @@ func newS3UploadCmd() *cobra.Command {
 	_ = cmd.MarkFlagRequired("message")
 	cmd.Flags().BoolVar(&forceH5adGate, "force-h5ad-upload", false,
 		"bypass the .h5ad sanity-check gate (NOT recommended — depositor's responsibility)")
+	cmd.Flags().BoolVar(&forceOverwrite, "force", false,
+		"overwrite existing S3 objects without prompting (default: skip on identical bytes, "+
+			"prompt on differing bytes, refuse non-TTY)")
 	cmd.Flags().StringArrayVarP(&staticFiles, "static", "s", nil,
 		"additional file to upload to <data_project>/static/ (repeatable; basename is the S3 key)")
 	cmd.Flags().StringVar(&subfolder, "subfolder", "",
@@ -397,7 +401,7 @@ func validateStaticFiles(paths []string) error {
 	return nil
 }
 
-func runS3Upload(cmd *cobra.Command, args, staticFiles []string, subfolder, message string, forceH5adGate bool) error {
+func runS3Upload(cmd *cobra.Command, args, staticFiles []string, subfolder, message string, forceH5adGate, forceOverwrite bool) error {
 	stdout := cmd.OutOrStdout()
 	stderr := cmd.ErrOrStderr()
 	ctx := cmd.Context()
@@ -528,12 +532,59 @@ func runS3Upload(cmd *cobra.Command, args, staticFiles []string, subfolder, mess
 		meta := s3MetadataFromDoc(doc, message)
 
 		fmt.Fprintf(stdout, "→ s3://%s/%s\n", cfg.Bucket, dataKey)
-		result, err := client.Upload(ctx, cfg.Bucket, dataKey, ent.AbsPath, meta)
-		if err != nil {
-			fmt.Fprintf(stderr, "  ✘ upload failed for %s: %v\n", ent.AbsPath, err)
-			return err
+
+		// Pre-upload state check: HeadObject the destination. If
+		// the remote already exists AND its x-amz-meta-mus_sha256
+		// matches our local sha, skip the upload silently (refresh
+		// the sidecar to record the round-trip, but don't transfer
+		// bytes). On a sha mismatch, prompt the user — non-TTY
+		// callers refuse without --force. Mirrors the iRODS-side
+		// 0.2.27 behaviour for cross-bucket consistency.
+		state, headErr := inspectS3RemoteForUpload(ctx, client, cfg.Bucket, dataKey, doc.File.Sha256)
+		if headErr != nil {
+			// Head failed for some other reason — log and continue
+			// to the upload. Don't let a flaky head abort the deposit.
+			fmt.Fprintf(stderr,
+				"  ⚠ HeadObject probe failed: %v (proceeding with upload)\n", headErr)
 		}
-		fmt.Fprintf(stdout, "  ✓ etag=%s\n", strings.Trim(result.ETag, `"`))
+		var result *s3client.UploadResult
+		switch state {
+		case s3RemoteSameBytes:
+			fmt.Fprintf(stdout,
+				"  ✓ sha256 matches remote — skipping upload (sidecar will be refreshed)\n")
+			// Synthesize a result so the downstream sidecar refresh
+			// records the existing object's location.
+			info, _ := client.HeadObjectExtended(ctx, cfg.Bucket, dataKey)
+			result = &s3client.UploadResult{
+				Bucket: cfg.Bucket,
+				Key:    dataKey,
+				URL:    s3URLFor(cfg.Endpoint, cfg.Bucket, dataKey),
+				ETag:   info.ETag,
+			}
+		case s3RemoteDiffers:
+			if !forceOverwrite && !promptOverwrite(os.Stdin, stdout,
+				fmt.Sprintf("s3://%s/%s", cfg.Bucket, dataKey)) {
+				return fmt.Errorf(
+					"s3://%s/%s exists with different bytes — overwrite refused.\n"+
+						"  Pass --force to overwrite without prompt.",
+					cfg.Bucket, dataKey)
+			}
+			r, err := client.Upload(ctx, cfg.Bucket, dataKey, ent.AbsPath, meta)
+			if err != nil {
+				fmt.Fprintf(stderr, "  ✘ upload failed for %s: %v\n", ent.AbsPath, err)
+				return err
+			}
+			result = r
+			fmt.Fprintf(stdout, "  ✓ etag=%s\n", strings.Trim(result.ETag, `"`))
+		default: // s3RemoteAbsent (or head failed and we're treating as absent)
+			r, err := client.Upload(ctx, cfg.Bucket, dataKey, ent.AbsPath, meta)
+			if err != nil {
+				fmt.Fprintf(stderr, "  ✘ upload failed for %s: %v\n", ent.AbsPath, err)
+				return err
+			}
+			result = r
+			fmt.Fprintf(stdout, "  ✓ etag=%s\n", strings.Trim(result.ETag, `"`))
+		}
 
 		// Refresh sidecar with S3 pointer BEFORE building the
 		// collapsed .mus so the snapshot includes s3_url / s3_etag.
@@ -680,6 +731,64 @@ func checkSubcommandFor(k uploadKind) string {
 		return "de"
 	}
 	return "h5ad"
+}
+
+// s3RemoteState classifies the pre-upload relationship between
+// our local file's sha256 and whatever's at the destination S3 key.
+// Mirror of remoteUploadState on the iRODS side — different
+// transport, same UX contract.
+type s3RemoteState int
+
+const (
+	s3RemoteAbsent s3RemoteState = iota
+	s3RemoteSameBytes
+	s3RemoteDiffers
+)
+
+// inspectS3RemoteForUpload classifies the destination key relative
+// to a local file's sha256. Best-effort: any error returns
+// (s3RemoteAbsent, err) — caller can choose to log the error and
+// proceed with the upload rather than abort on a flaky head.
+//
+// Sha comparison is against the x-amz-meta-mus_sha256 metadata
+// mus stamps on every PutObject (avuFromDoc → "mus_sha256"). The
+// SDK lowercases the header name and strips the x-amz-meta- prefix
+// on read, so we look up "mus_sha256" in info.Metadata. ETag is
+// NOT a reliable sha256 source (multipart uploads use a hash-of-
+// part-etags scheme that doesn't match file sha256).
+func inspectS3RemoteForUpload(ctx context.Context, client *s3client.Client,
+	bucket, key, localSum string) (s3RemoteState, error) {
+	if localSum == "" {
+		// No local sha to compare — let the upload run. The
+		// downstream sidecar check should have caught this already.
+		return s3RemoteAbsent, nil
+	}
+	info, err := client.HeadObjectExtended(ctx, bucket, key)
+	if err != nil {
+		return s3RemoteAbsent, err
+	}
+	if !info.Exists {
+		return s3RemoteAbsent, nil
+	}
+	remoteSha := info.Metadata["mus_sha256"]
+	if remoteSha == "" {
+		// Object exists but mus didn't stamp it (uploaded outside
+		// mus, OR by an older mus version before the AVU set was
+		// stable). Treat as "differs" to force a prompt — caller
+		// decides whether to overwrite.
+		return s3RemoteDiffers, nil
+	}
+	if strings.EqualFold(remoteSha, localSum) {
+		return s3RemoteSameBytes, nil
+	}
+	return s3RemoteDiffers, nil
+}
+
+// s3URLFor reconstructs the browser URL for an S3 object. Cheap
+// stringbuild — used when we synthesise an UploadResult after a
+// skip-if-same (no real Upload happened to give us a URL).
+func s3URLFor(endpoint, bucket, key string) string {
+	return strings.TrimRight(endpoint, "/") + "/" + bucket + "/" + key
 }
 
 // s3MetadataFromDoc builds the x-amz-meta-* set for an S3 PutObject

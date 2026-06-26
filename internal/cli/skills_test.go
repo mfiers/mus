@@ -227,6 +227,10 @@ func TestDEHowtoText_CurrentBehaviours(t *testing.T) {
 		"DESeq2 default 'write.csv",
 		"de_map_gene=column0",
 		"No depositor action required",
+		// 0.2.39+ — S3 upload skip-if-same + overwrite prompt
+		"RE-UPLOADING (mus 0.2.39+)",
+		"skip-if-same",
+		"x-amz-meta-mus_sha256",
 	} {
 		if !strings.Contains(deHowtoText, req) {
 			t.Errorf("DE howto missing required phrase: %q", req)

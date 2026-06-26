@@ -303,6 +303,18 @@ The **collapsed sidecar** mirrors the h5ad path's pattern: single KEY=VALUE file
 
 Fix each, re-run. No `--force` for the DE gate — re-running `mus de check` is cheap (stat-fast cached pass).
 
+### Re-uploading (mus 0.2.39+)
+
+`mus s3 upload` is **skip-if-same**: before each PutObject mus HeadObjects the destination and reads `x-amz-meta-mus_sha256` (mus stamps this on every successful upload). Three outcomes:
+
+| Remote state | Behavior |
+|---|---|
+| Same `mus_sha256` as local | Silent skip; sidecar still refreshes |
+| Different sha | Prompt `⚠ s3://… exists with different bytes — overwrite? [y/N]`. `--force` bypasses; non-TTY refuses |
+| Absent / no `mus_sha256` (legacy / non-mus upload) | Treated as differs (prompt) — mus can't prove same-bytes without its stamp |
+
+Matches the iRODS-side `mus irods upload` contract from 0.2.27 — no more silent overwrites when re-running a deposit.
+
 ---
 
 ## 6. End-to-end examples

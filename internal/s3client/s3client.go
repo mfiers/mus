@@ -284,6 +284,53 @@ func (c *Client) HeadObject(ctx context.Context, bucket, key string) (size int64
 	return size, etag, nil
 }
 
+// HeadObjectInfo is the richer head-check result used by the
+// pre-upload "is this already there?" gate. Returns the user-
+// stamped metadata (x-amz-meta-* the SDK lowercases on read) so
+// callers can compare against mus_sha256 to decide skip-if-same.
+type HeadObjectInfo struct {
+	Exists   bool              // true when the key was found
+	Size     int64
+	ETag     string            // S3-computed; for multipart uploads this is NOT the file sha256
+	Metadata map[string]string // x-amz-meta-* (mus stamps mus_sha256 + many others)
+}
+
+// HeadObjectExtended is HeadObject with the user-metadata surface
+// the upload-loop's skip-if-same gate needs. Distinguishes "key
+// not found" (Exists=false, no error) from "head failed" (error
+// returned). Callers should treat NoSuchKey / 404 as Exists=false
+// rather than abort the upload.
+func (c *Client) HeadObjectExtended(ctx context.Context, bucket, key string) (HeadObjectInfo, error) {
+	out, err := c.s3.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		// 404 → object doesn't exist (the common case). The SDK
+		// surfaces this as a *types.NotFound; treat as Exists=false.
+		var notFound *types.NotFound
+		if errors.As(err, &notFound) {
+			return HeadObjectInfo{Exists: false}, nil
+		}
+		return HeadObjectInfo{}, err
+	}
+	info := HeadObjectInfo{
+		Exists:   true,
+		Metadata: map[string]string{},
+	}
+	if out.ContentLength != nil {
+		info.Size = *out.ContentLength
+	}
+	if out.ETag != nil {
+		info.ETag = *out.ETag
+	}
+	for k, v := range out.Metadata {
+		// SDK already lowercases the header names; preserve.
+		info.Metadata[k] = v
+	}
+	return info, nil
+}
+
 // passThroughReader exists only so unit tests can wrap an io.Reader.
 // Keeps the upload path obvious without exposing the SDK Body type.
 type passThroughReader struct{ io.Reader }

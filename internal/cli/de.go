@@ -1566,6 +1566,17 @@ validate; the catalog (anthive) accepts only files that pass it.
        mus de check FOLDER --no-catalog-check  # skip the anthive manifest cross-check
        mus s3 upload FOLDER        # gate runs again at upload time
 
+8. RE-UPLOADING (mus 0.2.39+)
+   'mus s3 upload' is now skip-if-same. Before each PutObject mus
+   HeadObjects the destination and compares its x-amz-meta-mus_sha256
+   against the local file's sha:
+       same  → silent skip (sidecar still refreshes)
+       differ → prompt 'overwrite? [y/N]' (--force bypasses;
+                non-TTY refuses)
+       absent → upload normally
+   No more silently clobbering an existing __incoming/ object with
+   different bytes. Matches the iRODS-side 0.2.27 contract.
+
 Anthive ingests from __incoming/<data_project>/de/<sub>/. Files
 without a passing .mus sidecar are refused at upload.
 `
