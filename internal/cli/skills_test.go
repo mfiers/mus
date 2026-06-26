@@ -184,3 +184,48 @@ func TestMusSkill_BodyMentionsDEFlow(t *testing.T) {
 		}
 	}
 }
+
+// TestH5adHowtoText_CurrentBehaviours pins the iRODS-upload
+// behaviours into the h5ad howto so future edits that drop the
+// new sections (path layout, skip-if-same, group ACL, etc.) fail
+// the test. The h5ad howto IS the body of the mus-h5ad-deposit
+// skill — keeping it current is the standing rule.
+func TestH5adHowtoText_CurrentBehaviours(t *testing.T) {
+	for _, req := range []string{
+		// 0.2.27+ — iRODS upload behaviours
+		"Skip-if-same",
+		"Overwrite prompt",
+		"Group ACL",
+		"UNIX_FILE_OPEN_ERR",
+		"irods_group",
+		// 0.2.33+ — path layout + per-file stickiness
+		"/projects/<YEAR>/<data_project>",
+		"Per-file path stickiness",
+		"reusing recorded location",
+	} {
+		if !strings.Contains(h5adHowtoText, req) {
+			t.Errorf("h5ad howto missing required phrase: %q", req)
+		}
+	}
+}
+
+// TestDEHowtoText_CurrentBehaviours pins the validator behaviours
+// into the DE howto. Same standing rule as TestH5adHowtoText: the
+// DE howto IS the body of the mus-de-deposit skill.
+func TestDEHowtoText_CurrentBehaviours(t *testing.T) {
+	for _, req := range []string{
+		// 0.2.28+ — catalog manifest cross-check
+		"ANTHIVE CATALOG CROSS-CHECK",
+		"--no-catalog-check",
+		// 0.2.29+ — per-format required + 0.2.30 de_method/de_map_gene
+		"de_term + de_contrast",
+		"de_map_gene",
+		"long → no default",
+		// 0.2.30+ — post-mapping column gate
+		"POST-MAPPING COLUMN GATE",
+	} {
+		if !strings.Contains(deHowtoText, req) {
+			t.Errorf("DE howto missing required phrase: %q", req)
+		}
+	}
+}

@@ -291,6 +291,42 @@ catalog (anthive) only accepts files that pass it.
        collection — .md files travel openly as data objects so a
        colleague can 'iget' them without unpacking anything.
 
+       Path layout (mus 0.2.33+):
+         <irods_home>/projects/<YEAR>/<data_project>/<exp_name>/
+
+       YEAR is derived from the 4-digit suffix of data_project
+       (not configurable). Splinters the projects/ collection to
+       avoid catalog-scan slowdown on huge collections.
+
+       Per-file path stickiness: if a file's sidecar already
+       records irods_path (any prior upload location, including
+       the legacy /project/<NAME>/ layout), mus REUSES that path
+       on re-upload. So old deposits stay where they are; only
+       new files get the new layout. Visible as a one-line
+       '↺ reusing recorded location ...' note before each affected
+       file in the upload log.
+
+       Upload behaviours (mus 0.2.27+):
+         - Skip-if-same: before invoking iron, mus runs
+           'iron checksum <remote>'. If the remote object already
+           holds bytes with the same sha256, the upload silently
+           skips — no iron call, no UNIX_FILE_OPEN_ERR when the
+           replica is owned by a different user. The sidecar
+           still refreshes with any new cascade values.
+         - Overwrite prompt: when sha256 DIFFERS and a remote
+           object exists, mus prompts '⚠ remote exists with
+           DIFFERENT bytes — overwrite? [y/N]'. Non-TTY callers
+           refuse without --force. Use --force to bypass when
+           you genuinely want to overwrite.
+         - Group ACL: after every successful upload, mus runs
+           'iron chmod own <group> <remote>'. Group from the
+           cascade key irods_group (default 'BADS'). Failure
+           WARNS but doesn't roll back the upload.
+         - Better errors: UNIX_FILE_OPEN_ERR (iRODS refuses to
+           overwrite because the existing replica is owned by
+           a different unix uid) is rewritten with the
+           'iron chmod write <user> <path>' fix-it hint.
+
        The per-folder archive holds ONLY the structured metadata:
          mus.cfg                      (folder's own config, if any)
          <basename>.mus               (one per uploaded primary)

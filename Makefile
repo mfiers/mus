@@ -163,7 +163,7 @@ bump:
 #
 # Aborts before any irreversible step if the working tree is dirty, the tag
 # already exists, or the pubkey/token is missing.
-ship:
+ship: doc-precheck
 	@if [ -n "$$(git status --porcelain)" ]; then \
 	  echo "refusing to ship: working tree is dirty"; \
 	  git status --short; exit 1; \
@@ -205,6 +205,33 @@ ship:
 	$(MAKE) publish VERSION=$(RELEASE_VERSION)
 	@echo
 	@echo "shipped v$(RELEASE_VERSION). VERSION file is now $$(cat $(VERSION_FILE))."
+
+# ---------------------------------------------------------------------------
+# doc-precheck — runs the regression-guard tests that pin
+# load-bearing phrases in the umbrella skill body, the h5ad
+# howto, and the DE howto. Fails the ship pipeline (it's a `ship`
+# dependency above) when a user-facing change drops a pinned
+# phrase, so the maintainer notices stale docs BEFORE the binary
+# is signed and pushed.
+#
+# Standing rule (per Mark): every user-facing mus change must
+# also update the skill body / howto text / doc files, AND extend
+# the regression-guard test in internal/cli/skills_test.go with
+# any new load-bearing phrase. This target is the automated
+# checkpoint that enforces it on `make ship`.
+#
+# Cheap (~50ms, no iron / S3 / network) — runs four named tests.
+# ---------------------------------------------------------------------------
+.PHONY: doc-precheck
+doc-precheck:
+	@echo "==> doc-precheck (skill text + howto)"
+	@$(GO) test ./internal/cli/... \
+	    -run 'TestBundledSkills_Registry|TestMusSkill_BodyMentionsDEFlow|TestH5adHowtoText_CurrentBehaviours|TestDEHowtoText_CurrentBehaviours' \
+	    -count=1 || \
+	  (echo ""; \
+	   echo "doc-precheck FAILED — update the skill body / howto text"; \
+	   echo "  for whatever user-facing behaviour just changed, then re-run."; \
+	   exit 1)
 
 # ---------------------------------------------------------------------------
 # Release: cross-compile, generate signed SHA256SUMS, create signed git tag.

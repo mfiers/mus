@@ -10,14 +10,46 @@ This doc assumes [01](01_install_and_setup.md), [02](02_annotation_and_vocabular
 
 ## 1. Concepts
 
+### Always required
+
 | Field | What |
 |---|---|
-| **`de_dataset_id`** | 3-char anthive code for the h5ad your DE is against (e.g. `CMR`). Preferred. |
-| **`de_dataset_h5ad`** | h5ad basename (e.g. `Single.Grafts.h5ad`). Use when the h5ad is being co-ingested in the same upload and doesn't have a catalog code yet. |
-| **`de_format`** | One of: `deseq2` / `edger` / `scanpy` / `seurat` / `glmmseq` / `glmmtmb` / `long`. Mus auto-detects from column names; `--format X` overrides. |
-| **`de_cluster`** | (per-file) For per-cluster DE: the cluster label (e.g. `microglia.DAM`). Omit for whole-dataset DE. |
-| **`de_cluster_obs_column`** | (folder-level) Which `obs` column in the target h5ad holds cluster labels (e.g. `leiden`). Enables cluster validation. |
-| **Co-ingest** | New h5ad + new DE in the SAME upload. mus links them locally by matching `de_dataset_h5ad` to a sibling file. |
+| **`data_project`** | `<NAME><YEAR>` (e.g. `Fiers2025`). Path component on S3. Same regex as elsewhere in mus. |
+| **`de_dataset_id`** OR **`de_dataset_h5ad`** | Identifies the target h5ad. `de_dataset_id` = 3-char anthive code (preferred, e.g. `CMR`). `de_dataset_h5ad` = h5ad basename (e.g. `Single.Grafts.h5ad`) — use for co-ingest when no catalog code exists yet. |
+| **`de_format`** | One of: `deseq2` / `edger` / `scanpy` / `seurat` / `glmmseq` / `glmmtmb` / `long`. Auto-detected from column names; `--format X` overrides. |
+| **`de_method`** | Auto-filled from preset for everything EXCEPT `long`. For `long` you MUST set it explicitly (e.g. `DESeq2`, `edgeR`, `custom-pipeline`). |
+
+### Required per preset (matches anthive's ingest-side `--map` flags)
+
+| Preset | Also required |
+|---|---|
+| `deseq2` / `edger` / `seurat` / `glmmseq` / `glmmtmb` | both `de_term` + `de_contrast` |
+| `scanpy` | `de_term` only (de_contrast comes from the file's `group` column at ingest) |
+| `long` | `de_map_gene=<source-column>` (TSV column holding the gene id). Other `de_map_<TARGET>` keys are optional; see §3. |
+
+### Optional but valuable (passed through to anthive)
+
+| Field | What |
+|---|---|
+| `de_description` | Required `-m` message becomes this. Like a git commit message. |
+| `de_software_version` | e.g. `"scanpy 1.10.4"` / `"DESeq2 1.42.0"` |
+| `de_reference_type` | `pairwise` / `vsrest` / `vsreference` / `vsgrandmean` |
+| `de_covariates` | CSV list, e.g. `sex,age,batch` |
+| `de_filter_criteria` | Free text describing the per-gene filter. |
+| `de_cluster` | (per-file) Cluster label for per-cluster DE (e.g. `microglia.DAM`). Omit for whole-dataset DE. |
+| `de_cluster_obs_column` | (folder-level) Which `obs` column in the target h5ad holds cluster labels (e.g. `leiden`). |
+
+### Long-format column mapping
+
+`long` reads from arbitrary TSV columns and maps them onto anthive's canonical `__de` schema. Set `de_map_<TARGET>=<source-column>` per canonical you need to translate. Acceptable TARGETs:
+
+`gene` (required), `term`, `contrast`, `log2fc`, `zeff`, `pvalue`, `padj`, `estimate`, `SE`, `ci_low`, `ci_high`
+
+Source columns that already match the canonical name don't need a map entry — only declare overrides. Missing-but-optional canonicals are auto-dropped at ingest.
+
+### Co-ingest
+
+New h5ad + new DE in the SAME upload. mus links them locally by matching `de_dataset_h5ad` to a sibling file; the anthive catalog cross-check is skipped (anthive ingests h5ads BEFORE DEs in one ingest run, so the dataset exists by the time the DE is processed).
 
 `de_*` keys live in the same cascading `mus.cfg` as everything else. No separate `de.cfg`.
 
@@ -62,6 +94,25 @@ mus will look for the h5ad locally (same dir as the DE file, or in any ancestor 
 ```bash
 mus config set data_project Fiers2025                  # mandatory, see doc 02
 mus config set de_dataset_id CMR                       # OR de_dataset_h5ad
+
+# REQUIRED per preset (anthive's ingest-side --term, --contrast flags):
+
+# deseq2 / edger / seurat / glmmseq / glmmtmb:
+mus config set de_term condition                       # model term name
+mus config set de_contrast treated_vs_control          # level identifier
+
+# scanpy: de_term only (de_contrast comes from the file's `group` column)
+mus config set de_term condition
+
+# long: needs a column map AND an explicit method
+mus config set de_method custom-pipeline               # no preset default for long
+mus config set de_map_gene gene_id                     # source TSV column for gene
+# Optional long maps (only set when source != canonical name):
+# mus config set de_map_log2fc lfc
+# mus config set de_map_pvalue pval
+# mus config set de_map_padj fdr
+# mus config set de_map_term variable
+# mus config set de_map_contrast level
 
 # Recommended (passed to anthive as-is):
 mus config set de_software_version "scanpy 1.10.4"     # e.g. "DESeq2 1.42.0"
@@ -113,10 +164,10 @@ Accepted extensions: `.tsv`, `.csv`, `.tsv.gz`, `.csv.gz`. Compressed variants a
 
 ### What it checks
 
-For each file:
+For each file, in order. A failure on any HARD step stops that file (no sidecar written).
 
 1. **Format detection** — by column-name signature (case- and separator-insensitive). The seven formats:
-   | Format | Required columns |
+   | Format | Source columns (auto-detect signature) |
    |---|---|
    | `deseq2` | baseMean, log2FoldChange, lfcSE, padj |
    | `edger` | logFC, logCPM, FDR |
@@ -126,25 +177,50 @@ For each file:
    | `glmmtmb` | Estimate, Std. Error, z value, Pr(>\|z\|) |
    | `long` | gene_id, effsize, pvalue, padj, term, contrast |
 
-   Override with `--format <name>` when mus picks the wrong one.
+   Override with `--format <name>` when mus picks the wrong one (e.g. renamed columns + `de_map_*`).
 
-2. **Row count** — refuses files with zero data rows.
+2. **Row count** (HARD) — refuses files with zero data rows.
 
 3. **For `long` format** — computes the distinct {term × contrast} set from the body and stamps it sorted+comma-joined into `de_term` / `de_contrast` on the sidecar. Set `de_term=auto` and `de_contrast=auto` in `mus.cfg` to opt in.
 
-4. **`data_project` + `de_dataset_id`/`de_dataset_h5ad`** — both must resolve from the cascade.
+4. **`data_project`** (HARD) — must resolve from the cascade. Must pass `<Name><Year>` regex.
 
-5. **Co-ingest detection** — if `de_dataset_h5ad` is set AND the file is locally present, mus reports it as a co-ingest deposit and skips the catalog cross-check.
+5. **Dataset target** (HARD) — `de_dataset_id` OR `de_dataset_h5ad` must be set.
 
-6. **Vark cross-check** (when `vark` is on PATH) — verifies the declared dataset against the live anthive catalog. Best-effort: never blocks; warns on no match (typo or first-time deposit).
+6. **Co-ingest detection** — if `de_dataset_h5ad` is set AND the file is locally present (same dir or one level up), mus reports it as a co-ingest deposit and skips the catalog cross-check (step 7).
 
-7. **Method auto-fill** — if `de_method` is unset, mus stamps the canonical name derived from `de_format` (deseq2 → `DESeq2`, edger → `edgeR`, etc).
+7. **Anthive catalog cross-check** (HARD, mus 0.2.28+) — fetches `s3://<bucket>/_catalog/manifest.json` (cached at `$XDG_CACHE_HOME/mus/anthive_catalog.json`, 5-min TTL, stale-fallback-with-warn) and validates `de_dataset_id` against it:
+   - exact match → OK with the dataset title
+   - matches data_project's `group_id` → HARD-FAIL ("S26 is the GROUP_ID of Sun2026, not a file_id. Did you mean AQB, AQN, AQP, AQR, DUN?")
+   - exists in a DIFFERENT data_project → HARD-FAIL with the foreign project named
+   - no match → HARD-FAIL with top-3 Levenshtein suggestions + full file_id list
+   - matches but `inactive=true` → SKIP warn (depositor decides)
+   - data_project not yet in catalog → SKIP "first deposit?" (no block)
 
-8. **Soft-field nudges** — explicit OK / SKIP line for every recommended field. Bottom hint: `Set soft parameters via: mus config set <NAME> <VALUE>`.
+   Pass `--no-catalog-check` to skip (offline mode, or pre-S3-creds setup). Falls back to a soft `vark` query if that CLI is on PATH.
 
-9. **Compression nudge** — suggests `gzip <file>` for plain TSV/CSV; says OK for already-gzipped.
+8. **`de_method`** (HARD for `long`) — auto-fills from preset for all formats EXCEPT `long`. For `long` you must set it explicitly.
 
-10. **Stamp the sidecar** — `<file>.mus` next to the data file, carrying the full `de_*` block + cached PASS marker.
+9. **Per-format required `de_*` fields** (HARD, mus 0.2.29+) — mirrors anthive's ingest-side `--term`, `--contrast`, and `--map gene` flags:
+   - `deseq2` / `edger` / `seurat` / `glmmseq` / `glmmtmb` → both `de_term` + `de_contrast` required
+   - `scanpy` → `de_term` required (de_contrast comes from the file's `group` column)
+   - `long` → `de_map_gene` required (other `de_map_*` keys optional)
+
+10. **Post-mapping column reachability** (HARD, mus 0.2.30+) — every required CANONICAL column must resolve to a source column actually present in the file's header. Resolution: `de_map_<canonical>` if set, else the preset's identity-default source name. Required canonicals per preset:
+    - `deseq2` / `edger` / `seurat` / `glmmseq` → gene, log2fc, pvalue, padj
+    - `scanpy` → gene, contrast, log2fc, pvalue, padj
+    - `glmmtmb` → gene, estimate, pvalue
+    - `long` → gene, term, contrast
+
+    Catches the case where `--format` is used as an override and the file's columns don't actually contain what the preset's binder expects.
+
+11. **Cluster validation** (when `de_cluster` is set) — deep validation reads the target h5ad's `obs[de_cluster_obs_column]` and verifies `de_cluster` ∈ that set. Runs only when the target h5ad is locally present (co-ingest path); SKIPs with "anthive validates at ingest" for catalog-resident datasets.
+
+12. **Soft-field nudges** — OK / SKIP line for every recommended field. Bottom hint: `Set soft parameters via: mus config set <NAME> <VALUE>`.
+
+13. **Compression nudge** — suggests `gzip <file>` for plain TSV/CSV; says OK for already-gzipped.
+
+14. **Stamp the sidecar** — `<file>.mus` next to the data file, carrying the full `de_*` block + cached PASS marker (sha256 + check version).
 
 ### Sample output
 
