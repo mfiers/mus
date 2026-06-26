@@ -580,6 +580,25 @@ func reportPostMapColumns(env *config.Env, format de.Format,
 	if len(required) == 0 {
 		return true // no canonical requirements for this format (defensive)
 	}
+
+	// Auto-resolve the R row-index convention for R-native presets.
+	// `write.csv(res, "file.csv")` in R puts gene IDs in the row
+	// index, so the file's header starts with a comma and the first
+	// column has no name. DuckDB reads that unnamed column as
+	// `column0`. If the depositor didn't set de_map_gene AND mus's
+	// auto-detect format is R-native AND the first header cell is
+	// empty, treat the first column as the gene column and stamp
+	// de_map_gene=column0 onto env so the sidecar carries the
+	// mapping that anthive's binder will follow.
+	firstColUnnamed := len(headerCols) > 0 && strings.TrimSpace(headerCols[0]) == ""
+	if firstColUnnamed && isRStyleFormat(format) && env.String("de_map_gene") == "" {
+		env.Set("de_map_gene", "column0")
+		out.ok("columns (auto-mapped)",
+			"DESeq2-style row-index convention detected — first column has no header. "+
+				"Auto-mapped gene → column0 (DuckDB's name for that column); "+
+				"anthive's binder will read it as column0.")
+	}
+
 	type miss struct {
 		canonical string
 		source    string
@@ -595,7 +614,15 @@ func reportPostMapColumns(env *config.Env, format de.Format,
 		} else {
 			source = defaults[canonical]
 		}
-		if source == "" || !de.HasColumn(headerCols, source) {
+		// Special-case the auto-mapped column0 path: mus's HasColumn
+		// won't find "column0" in headerCols literally (the header
+		// is an empty string), so accept "column0" when the first
+		// header is unnamed AND the source resolved TO column0.
+		// This matches what anthive will see at ingest because
+		// DuckDB renames the unnamed column to column0.
+		matched := de.HasColumn(headerCols, source) ||
+			(source == "column0" && firstColUnnamed)
+		if source == "" || !matched {
 			missing = append(missing, miss{canonical, source, viaMap})
 		}
 	}
@@ -604,23 +631,6 @@ func reportPostMapColumns(env *config.Env, format de.Format,
 			fmt.Sprintf("all required canonicals reachable for %s preset", format))
 		return true
 	}
-	// Detect the R-default-export pattern: first column has an
-	// empty header AND the canonical "gene" is what's missing. This
-	// is what `write.csv(res, "file.csv")` produces for DESeq2 /
-	// edgeR / Seurat — the gene IDs are in the row index, the
-	// header line starts with a comma. anthive's binder can't read
-	// it (DuckDB names unnamed columns `column0`, but anthive
-	// declares `gene` as the canonical source).
-	firstColUnnamed := len(headerCols) > 0 && strings.TrimSpace(headerCols[0]) == ""
-	missingGene := false
-	for _, m := range missing {
-		if m.canonical == "gene" && !m.viaMap {
-			missingGene = true
-			break
-		}
-	}
-	rExportHint := firstColUnnamed && missingGene && isRStyleFormat(format)
-
 	for _, m := range missing {
 		var hint string
 		if m.viaMap {
@@ -629,23 +639,6 @@ func reportPostMapColumns(env *config.Env, format de.Format,
 					"Actual columns: %s. Update `mus config set de_map_%s <correct-source>`.",
 				m.canonical, m.source, m.canonical,
 				strings.Join(headerCols, ", "), m.canonical)
-		} else if rExportHint && m.canonical == "gene" {
-			// Hyper-specific message for the most common case: an R
-			// user dropped `write.csv(res, …)` straight into the
-			// deposit folder. The fix is upstream (re-export with an
-			// explicit gene column), not via `mus config set
-			// de_map_gene` — there's nothing meaningful to map TO.
-			hint = "DESeq2-style default export detected — the first column has no header, " +
-				"so the gene IDs aren't reachable by name. anthive's binder needs an " +
-				"explicit `gene` column.\n" +
-				"   Fix in R (before depositing):\n" +
-				"     res$gene <- rownames(res)\n" +
-				"     write.table(res, 'file.tsv', sep='\\t', row.names=FALSE, quote=FALSE)\n" +
-				"   Fix in Python (pydeseq2 / pandas):\n" +
-				"     df.index.name = 'gene'\n" +
-				"     df.to_csv('file.tsv', sep='\\t')   # index goes out as a named column\n" +
-				"   Or, if you control the original write call:\n" +
-				"     write.csv(cbind(gene=rownames(res), res), 'file.csv', row.names=FALSE)"
 		} else {
 			// Always tell depositor the escape hatch (de_map_<canonical>);
 			// add a specific source-column suggestion when one is close
@@ -1255,7 +1248,28 @@ func stampDESidecar(cache *hashcache.Cache, path string, rep *de.Report,
 			doc.DE.Contrast = []string{v}
 		}
 	}
+	// Stamp every de_map_<TARGET> the cascade carries (whether the
+	// depositor set it manually OR mus auto-stamped it during the
+	// post-mapping gate, e.g. de_map_gene=column0 for R-default
+	// exports). ant-de-ingest reads these to build --map at deposit.
+	for _, canonical := range allDEMapTargets {
+		if v := env.String("de_map_" + canonical); v != "" {
+			if doc.DE.Map == nil {
+				doc.DE.Map = map[string]string{}
+			}
+			doc.DE.Map[canonical] = v
+		}
+	}
 	return sidecar.Write(scPath, doc)
+}
+
+// allDEMapTargets lists every canonical column anthive recognises
+// as a de_map_<TARGET> rename target. Mirrors the schema in
+// anthive's lib/de_presets.py (long preset's column_map keys).
+var allDEMapTargets = []string{
+	"gene", "term", "contrast",
+	"log2fc", "zeff", "pvalue", "padj",
+	"estimate", "SE", "ci_low", "ci_high",
 }
 
 // collectDEFiles walks `args` recursively, returning every .tsv /
@@ -1524,15 +1538,14 @@ validate; the catalog (anthive) accepts only files that pass it.
     edit-distance is close enough).
 
     SPECIAL CASE — DESeq2 default 'write.csv(res, "file.csv")' in R:
-    gene IDs are in the row index, so the header line starts with a
-    comma and the first column has no name. anthive's binder can't
-    bind to an unnamed column. mus detects this and surfaces the
-    R/Python re-export fix:
-        R:       res$gene <- rownames(res)
-                 write.table(res, 'file.tsv', sep='\t', row.names=FALSE, quote=FALSE)
-        Python:  df.index.name = 'gene'; df.to_csv('file.tsv', sep='\t')
-    This same trap affects edgeR / Seurat / glmmSeq / glmmTMB R
-    exports — same fix applies for all five R-native presets.
+    gene IDs are in the row index, the header line starts with a
+    comma, and the first column has no name. mus auto-detects this
+    for R-native presets (deseq2 / edger / seurat / glmmseq /
+    glmmtmb), accepts the file, and stamps de_map_gene=column0 on
+    the sidecar. DuckDB names the unnamed column 'column0' when it
+    reads the file, so the sidecar's mapping aligns with what
+    anthive's binder sees. No depositor action required — just
+    deposit and mus handles it.
 
 6. CO-INGEST (h5ad + DE in one upload)
    Layout your upload folder as:

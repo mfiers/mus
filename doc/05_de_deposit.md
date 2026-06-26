@@ -401,10 +401,17 @@ If `de_cluster_obs_column` is unset and you HAVE `de_cluster` declared per file,
 
 ## Common pitfalls
 
-- **DESeq2 default export (R)** — `write.csv(res, "file.csv")` puts gene IDs in the row index, so the file's header line begins with a comma and the first column has no name. anthive's DuckDB binder can't reach an unnamed column; mus surfaces this with a "DESeq2-style default export detected" error and the fix:
+- **DESeq2 default export (R) — handled automatically** — `write.csv(res, "file.csv")` puts gene IDs in the row index, so the file's header line begins with a comma and the first column has no name. mus 0.2.38+ auto-detects this case for R-native presets (deseq2 / edger / seurat / glmmseq / glmmtmb), accepts the file, and stamps `de_map_gene=column0` on the sidecar (the name DuckDB assigns to an unnamed column when it reads the file). No depositor action needed — just deposit. The check shows:
+
+  ```
+  OK    columns (auto-mapped)    (DESeq2-style row-index convention detected — first column
+                                  has no header. Auto-mapped gene → column0 …)
+  ```
+
+  If you'd rather have a named gene column anyway (cleaner files), the upstream re-export options are:
 
   ```r
-  # R fix (also works for edgeR / Seurat / glmmSeq / glmmTMB):
+  # R:
   res$gene <- rownames(res)
   write.table(res, "file.tsv", sep="\t", row.names=FALSE, quote=FALSE)
   ```
@@ -412,7 +419,7 @@ If `de_cluster_obs_column` is unset and you HAVE `de_cluster` declared per file,
   ```python
   # Python (pydeseq2 / pandas):
   df.index.name = "gene"
-  df.to_csv("file.tsv", sep="\t")   # the named index goes out as a column
+  df.to_csv("file.tsv", sep="\t")
   ```
 
 - **`format detection failed (saw columns: …)`** — your tool's output doesn't match any signature. Rename columns to match one of the seven formats OR pass `--format long` if the schema is anthive-native (gene_id + effsize + pvalue + padj + term + contrast).

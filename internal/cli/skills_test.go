@@ -223,9 +223,10 @@ func TestDEHowtoText_CurrentBehaviours(t *testing.T) {
 		"long → no default",
 		// 0.2.30+ — post-mapping column gate
 		"POST-MAPPING COLUMN GATE",
-		// 0.2.37+ — DESeq2 R-default-export unnamed-first-column hint
+		// 0.2.38+ — DESeq2 unnamed-first-column auto-mapped to column0
 		"DESeq2 default 'write.csv",
-		"R:       res$gene <- rownames(res)",
+		"de_map_gene=column0",
+		"No depositor action required",
 	} {
 		if !strings.Contains(deHowtoText, req) {
 			t.Errorf("DE howto missing required phrase: %q", req)

@@ -1009,15 +1009,14 @@ func TestDECheck_PostMap_LongWithCustomGeneCol(t *testing.T) {
 	}
 }
 
-// TestDECheck_DESeq2_UnnamedFirstColumn_HelpfulHint — the most
+// TestDECheck_DESeq2_UnnamedFirstColumn_AutoMapped — the most
 // common DESeq2 export pattern: `write.csv(res, "file.csv")` in
 // R puts gene IDs in the row index and writes the header line
-// starting with a comma. The first "column" has no name. Older
-// mus rejected this with the generic "set de_map_gene <…>" hint
-// which doesn't apply (there's no name to point at). Mus 0.2.37+
-// recognises the pattern and surfaces the R/Python re-export
-// fix instead.
-func TestDECheck_DESeq2_UnnamedFirstColumn_HelpfulHint(t *testing.T) {
+// starting with a comma. mus 0.2.38+ auto-detects this, accepts
+// the file, and stamps de_map_gene=column0 onto the sidecar
+// (DuckDB's name for the unnamed column) so anthive's binder
+// reads it as column0 at ingest.
+func TestDECheck_DESeq2_UnnamedFirstColumn_AutoMapped(t *testing.T) {
 	dir := t.TempDir()
 	writeMusCfg(t, dir,
 		"data_project=Fiers2025",
@@ -1029,19 +1028,27 @@ func TestDECheck_DESeq2_UnnamedFirstColumn_HelpfulHint(t *testing.T) {
 	writeDETSV(t, filepath.Join(dir, "de.csv"),
 		",baseMean,log2FoldChange,lfcSE,stat,pvalue,padj",
 		"ENSG00000000003,712.4,1.5,0.2,7.5,1e-10,1e-9")
-	_, stderr, err := runDECheckForTest(t, dir)
-	if err == nil {
-		t.Fatal("expected a failure — gene column unreachable")
+	stdout, _, err := runDECheckForTest(t, dir)
+	if err != nil {
+		t.Fatalf("R-default export should auto-pass; got: %v", err)
 	}
 	for _, want := range []string{
-		"DESeq2-style default export detected",
-		"first column has no header",
-		"res$gene <- rownames(res)",
-		"df.index.name = 'gene'",
+		"DESeq2-style row-index convention detected",
+		"Auto-mapped gene → column0",
+		"all required canonicals reachable",
 	} {
-		if !strings.Contains(stderr, want) {
-			t.Errorf("missing %q in helpful hint:\n%s", want, stderr)
+		if !strings.Contains(stdout, want) {
+			t.Errorf("missing %q in output:\n%s", want, stdout)
 		}
+	}
+	// Sidecar must carry the auto-stamped de_map_gene so anthive's
+	// binder sees the mapping.
+	sidecar, err := os.ReadFile(filepath.Join(dir, "de.csv.mus"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(sidecar), "de_map_gene=column0") {
+		t.Errorf("sidecar missing de_map_gene=column0:\n%s", sidecar)
 	}
 }
 

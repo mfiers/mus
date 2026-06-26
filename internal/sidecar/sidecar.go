@@ -224,6 +224,16 @@ type DE struct {
 	FilterCriteria     string   // de_filter_criteria: e.g. "expressed in ≥3 cells per sample"
 	Description        string   // de_description: free text
 	RowCount           int64    // de_row_count: data rows in the file at check time
+	// Map carries de_map_<TARGET>=<source-column> overrides. Read by
+	// ant-de-ingest at deposit time to build the `--map gene=src,…`
+	// flag. mus stamps this either explicitly (depositor set
+	// de_map_X in mus.cfg) or via auto-detection (the R-default
+	// `write.csv(res, …)` row-index case where mus auto-stamps
+	// de_map_gene=column0 — DuckDB's name for an unnamed first
+	// column). Keys are canonicals (gene, term, contrast, log2fc,
+	// zeff, pvalue, padj, estimate, SE, ci_low, ci_high); values
+	// are the source column names in the actual file.
+	Map map[string]string
 
 	// Cache keys — same shape as the H5ad block.
 	InspectedAt           time.Time // de_check_passed_at
@@ -516,6 +526,14 @@ func docToMap(d *Doc) map[string]any {
 		if d.DE.InspectedCheckVersion > 0 {
 			out["de_check_version"] = strconv.Itoa(d.DE.InspectedCheckVersion)
 		}
+		// One key per de_map_<TARGET>. ant-de-ingest reads these
+		// and builds --map gene=…,log2fc=…,… for the binder.
+		for canonical, sourceCol := range d.DE.Map {
+			if canonical == "" || sourceCol == "" {
+				continue
+			}
+			out["de_map_"+canonical] = sourceCol
+		}
 	}
 	return out
 }
@@ -654,6 +672,26 @@ func docFromMap(in map[string]any) (*Doc, error) {
 			InspectedAt:           parseTime(getStr(in, "de_check_passed_at")),
 			InspectedSha256:       getStr(in, "de_inspected_sha256"),
 			InspectedCheckVersion: parseInt(getStr(in, "de_check_version"), 0),
+		}
+		// Pick up every de_map_<TARGET> the depositor (or mus's
+		// auto-detection for R-default exports) recorded.
+		for k, v := range in {
+			if !strings.HasPrefix(k, "de_map_") {
+				continue
+			}
+			target := strings.TrimPrefix(k, "de_map_")
+			if target == "" {
+				continue
+			}
+			src := getStr(in, k)
+			if src == "" {
+				continue
+			}
+			if d.DE.Map == nil {
+				d.DE.Map = map[string]string{}
+			}
+			d.DE.Map[target] = src
+			_ = v // silence unused-warn if compiler flags
 		}
 	}
 	return d, nil
