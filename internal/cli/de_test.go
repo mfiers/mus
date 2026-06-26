@@ -1009,6 +1009,90 @@ func TestDECheck_PostMap_LongWithCustomGeneCol(t *testing.T) {
 	}
 }
 
+// TestDECheck_DESeq2_UnnamedFirstColumn_HelpfulHint — the most
+// common DESeq2 export pattern: `write.csv(res, "file.csv")` in
+// R puts gene IDs in the row index and writes the header line
+// starting with a comma. The first "column" has no name. Older
+// mus rejected this with the generic "set de_map_gene <…>" hint
+// which doesn't apply (there's no name to point at). Mus 0.2.37+
+// recognises the pattern and surfaces the R/Python re-export
+// fix instead.
+func TestDECheck_DESeq2_UnnamedFirstColumn_HelpfulHint(t *testing.T) {
+	dir := t.TempDir()
+	writeMusCfg(t, dir,
+		"data_project=Fiers2025",
+		"de_dataset_id=ABC",
+		"de_term=condition",
+		"de_contrast=treated_vs_control",
+	)
+	// R-default write.csv shape: leading comma, no name on first col.
+	writeDETSV(t, filepath.Join(dir, "de.csv"),
+		",baseMean,log2FoldChange,lfcSE,stat,pvalue,padj",
+		"ENSG00000000003,712.4,1.5,0.2,7.5,1e-10,1e-9")
+	_, stderr, err := runDECheckForTest(t, dir)
+	if err == nil {
+		t.Fatal("expected a failure — gene column unreachable")
+	}
+	for _, want := range []string{
+		"DESeq2-style default export detected",
+		"first column has no header",
+		"res$gene <- rownames(res)",
+		"df.index.name = 'gene'",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("missing %q in helpful hint:\n%s", want, stderr)
+		}
+	}
+}
+
+// TestDECheck_DESeq2_ExplicitGeneColumn_Passes — the fix the
+// hint above suggests must actually work.
+func TestDECheck_DESeq2_ExplicitGeneColumn_Passes(t *testing.T) {
+	dir := t.TempDir()
+	writeMusCfg(t, dir,
+		"data_project=Fiers2025",
+		"de_dataset_id=ABC",
+		"de_term=condition",
+		"de_contrast=treated_vs_control",
+	)
+	writeDETSV(t, filepath.Join(dir, "de.tsv"),
+		"gene\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj",
+		"ENSG00000000003\t712.4\t1.5\t0.2\t7.5\t1e-10\t1e-9")
+	_, _, err := runDECheckForTest(t, dir)
+	if err != nil {
+		t.Fatalf("explicit gene column should pass; got: %v", err)
+	}
+}
+
+// TestDECheck_ScanpyMissingGroup_NotRStyleHint — the R-style
+// hint should ONLY fire for R-native presets. scanpy missing
+// `names` should get the generic source-column hint, not the
+// "DESeq2-style default export" message.
+func TestDECheck_ScanpyMissingGroup_NotRStyleHint(t *testing.T) {
+	dir := t.TempDir()
+	writeMusCfg(t, dir,
+		"data_project=Fiers2025",
+		"de_dataset_h5ad=Single.Grafts.h5ad",
+		"de_term=cell_type",
+	)
+	if err := os.WriteFile(filepath.Join(dir, "Single.Grafts.h5ad"),
+		[]byte("h5ad placeholder"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// scanpy-like (signature columns present) but the leading column
+	// has no header. Should NOT match the DESeq2-style hint.
+	writeDETSV(t, filepath.Join(dir, "de.tsv"),
+		"\tgroup\tlogfoldchanges\tpvals\tpvals_adj",
+		"ENSG1\tA_vs_B\t1.0\t0.01\t0.05")
+	_, stderr, err := runDECheckForTest(t, dir)
+	if err == nil {
+		t.Fatal("expected refusal — scanpy needs a `names` column")
+	}
+	if strings.Contains(stderr, "DESeq2-style default export") {
+		t.Errorf("scanpy must not get the R-style hint:\n%s", stderr)
+	}
+}
+
 // TestNearestColumnByDistance_PicksClose — single-char typo →
 // suggest the close match. Two distant strings → "".
 func TestNearestColumnByDistance_PicksClose(t *testing.T) {

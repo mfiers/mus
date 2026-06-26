@@ -401,6 +401,20 @@ If `de_cluster_obs_column` is unset and you HAVE `de_cluster` declared per file,
 
 ## Common pitfalls
 
+- **DESeq2 default export (R)** — `write.csv(res, "file.csv")` puts gene IDs in the row index, so the file's header line begins with a comma and the first column has no name. anthive's DuckDB binder can't reach an unnamed column; mus surfaces this with a "DESeq2-style default export detected" error and the fix:
+
+  ```r
+  # R fix (also works for edgeR / Seurat / glmmSeq / glmmTMB):
+  res$gene <- rownames(res)
+  write.table(res, "file.tsv", sep="\t", row.names=FALSE, quote=FALSE)
+  ```
+
+  ```python
+  # Python (pydeseq2 / pandas):
+  df.index.name = "gene"
+  df.to_csv("file.tsv", sep="\t")   # the named index goes out as a column
+  ```
+
 - **`format detection failed (saw columns: …)`** — your tool's output doesn't match any signature. Rename columns to match one of the seven formats OR pass `--format long` if the schema is anthive-native (gene_id + effsize + pvalue + padj + term + contrast).
 - **`parquet not accepted in DE deposits`** — convert via `pandas.read_parquet().to_csv(sep="\t")`. Anthive accepts parquet on the receiving end but mus enforces tsv/csv at the deposit gate.
 - **`0 data rows after header — empty DE table is refused`** — the file has only a header. Re-run your DE tool with at least one gene passing the filter.
