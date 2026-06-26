@@ -59,15 +59,27 @@ New h5ad + new DE in the SAME upload. mus links them locally by matching `de_dat
 
 ### 2a. h5ad already in anthive
 
-You need its 3-char `dataset_id`. Look it up:
+You need its 3-char `dataset_id`. Look it up with the `vark` CLI:
 
 ```bash
-# If you have `vark` installed:
+# All datasets, dedup'd across reachable servers:
+vark db ls -o table
+
+# Filter by author / year / project:
 vark db ls -o table | grep -i your-dataset-title
 
-# Or browse the anthive web view.
-# Or ask anthive4 for the id (it lives in the file's <basename>.md frontmatter).
+# Full metadata for one (when you have the id but want to verify):
+vark db info CMR
+
+# DE studies already attached to one dataset (avoid duplicate contrasts):
+vark de CMR
+vark de CMR <STUDY> <TERM>     # specific contrasts within a study
+
+# obs columns of the target (for de_cluster_obs_column):
+vark fields CMR
 ```
+
+If `vark` isn't installed, browse the anthive web view, or ask anthive4 for the id (it lives in the file's `<basename>.md` frontmatter on iRODS).
 
 Then in your DE folder's `mus.cfg`:
 

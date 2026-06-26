@@ -73,6 +73,62 @@ If any of these surface a problem, FIX it before depositing:
   - missing S3 config → ` + "`mus s3 login`" + ` (interactive wizard)
   - ELN undecided → ` + "`mus eln link <id>`" + ` OR ` + "`mus eln disable`" + `
 
+## Use ` + "`vark`" + ` for catalog questions (when installed)
+
+` + "`vark`" + ` is the lab's read-only client for the live anthive
+catalog. When ` + "`vark`" + ` is on PATH (check with
+` + "`command -v vark`" + `), use it BEFORE asking the user
+"have you deposited this already?" or "what's the dataset_id?".
+Vark queries the live catalog directly — same source of truth
+mus's ` + "`mus de check`" + ` cross-checks against, but interactive.
+
+There's a separate ` + "`vark`" + ` skill (` + "`~/.claude/skills/vark/`" + `)
+that knows vark's full surface — when both skills are installed
+and the question is catalog-shaped, prefer the vark skill's
+detailed guidance. The shortcuts below are the minimum you need
+to answer common mus-side questions without leaving this skill.
+
+**"Is this data already deposited?"**
+
+  ` + "`vark db ls -o table | head -30`" + `
+  ` + "`vark db ls -o table | grep -i <author-name-or-year>`" + `
+
+Returns every dataset on every reachable anthive server,
+deduplicated, with: db_id (the 3-char anthive code), data_project,
+title, organism, technology, file basename, last update. Use
+this to answer "does this exist?" before suggesting a deposit
+re-run.
+
+**"What's the dataset_id for the h5ad my DE was computed from?"**
+
+  ` + "`vark db ls -o tsv | awk -F'\\t' '$2 == \"Sun2026\"'`" + `
+
+Filter by data_project (the depositor knows this from the
+folder's cascade). The db_id column is what goes in
+` + "`de_dataset_id`" + ` on the DE deposit.
+
+**"Why is mus refusing this deposit / where's the dataset that mus
+says is missing?"**
+
+  ` + "`vark db info <DB_ID>`" + `      — full metadata for one dataset
+  ` + "`vark de <DB_ID>`" + `             — list DE studies attached
+  ` + "`vark fields <DB_ID>`" + `         — list obs columns (cluster validation)
+
+**"What contrasts does this DE study already have?"**
+
+  ` + "`vark de <DB_ID> <STUDY>`" + `              — per-term breakdown
+  ` + "`vark de <DB_ID> <STUDY> <TERM>`" + `       — contrasts + n_significant per
+
+Useful when the depositor's about to upload a contrast that
+already exists in the catalog.
+
+When ` + "`vark`" + ` ISN'T installed:
+  - Fall back to ` + "`mus irods find <data_project>`" + ` for iRODS-side
+  - Use the anthive web catalog at the URL the lab uses
+  - mus's ` + "`mus de check`" + ` will still cross-check against the
+    catalog manifest at deposit time — depositor just doesn't
+    get the early reconnaissance
+
 ## Sub-workflows
 
 ### h5ad deposit (single-cell → anthive)

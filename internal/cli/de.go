@@ -1566,7 +1566,24 @@ validate; the catalog (anthive) accepts only files that pass it.
        mus de check FOLDER --no-catalog-check  # skip the anthive manifest cross-check
        mus s3 upload FOLDER        # gate runs again at upload time
 
-8. RE-UPLOADING (mus 0.2.39+)
+8. PRE-DEPOSIT RECON WITH 'vark' (when installed)
+   The 'vark' CLI queries the live anthive catalog. Use it BEFORE
+   starting a deposit to find the right de_dataset_id, check
+   whether your DE is already in the catalog, or inspect the
+   target h5ad's obs columns for de_cluster_obs_column:
+
+       vark db ls -o table                          # all datasets, dedup'd
+       vark db ls -o table | grep -i Fiers          # filter by author/year
+       vark db info CMR                              # full metadata for one
+       vark de CMR                                   # DE studies attached
+       vark de CMR <STUDY> <TERM>                    # contrasts under one term
+       vark fields CMR                               # obs columns (for cluster col)
+
+   The 3-char id from 'vark db ls' is what goes in de_dataset_id.
+   mus de check also uses the same manifest behind the scenes;
+   vark just makes it interactive.
+
+9. RE-UPLOADING (mus 0.2.39+)
    'mus s3 upload' is now skip-if-same. Before each PutObject mus
    HeadObjects the destination and compares its x-amz-meta-mus_sha256
    against the local file's sha:

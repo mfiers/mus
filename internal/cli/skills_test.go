@@ -177,6 +177,10 @@ func TestMusSkill_BodyMentionsDEFlow(t *testing.T) {
 		// mus 0.2.33+ — per-file path stickiness
 		"Per-file path stickiness",
 		"reusing recorded location",
+		// mus 0.2.40+ — vark for catalog reconnaissance
+		"Use `vark` for catalog questions",
+		"vark db ls",
+		"vark db info",
 	}
 	for _, req := range requirements {
 		if !strings.Contains(musBody, req) {
@@ -231,6 +235,9 @@ func TestDEHowtoText_CurrentBehaviours(t *testing.T) {
 		"RE-UPLOADING (mus 0.2.39+)",
 		"skip-if-same",
 		"x-amz-meta-mus_sha256",
+		// 0.2.40+ — vark for pre-deposit catalog recon
+		"PRE-DEPOSIT RECON WITH 'vark'",
+		"vark db ls -o table",
 	} {
 		if !strings.Contains(deHowtoText, req) {
 			t.Errorf("DE howto missing required phrase: %q", req)
