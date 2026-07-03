@@ -181,6 +181,10 @@ func TestMusSkill_BodyMentionsDEFlow(t *testing.T) {
 		"Use `vark` for catalog questions",
 		"vark db ls",
 		"vark db info",
+		// mus 0.2.41+ — mus eln sample / mus eln attach
+		"mus eln sample -m MSG",
+		"mus eln attach -m MSG",
+		"SAMPLESOUT",
 	}
 	for _, req := range requirements {
 		if !strings.Contains(musBody, req) {

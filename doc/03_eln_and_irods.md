@@ -47,6 +47,41 @@ If you never have eLab access:
 mus eln disable --global         # once per machine, in ~/.config/mus/mus.cfg
 ```
 
+### 1c. Register file locations as ELN samples (`mus eln sample`)
+
+For data files that live on the NAS / local disk and shouldn't be duplicated inside the notebook, register each file as a **Sample** record in eLabNext. The sample carries the file's ABSOLUTE PATH + sha256 + size in its `note` field — the data itself never leaves the disk.
+
+```bash
+mus eln sample -m "raw sequencing lanes, run 42" *.fastq.gz
+# → creates one Sample per file, links all to the current experiment
+#   via a new SAMPLESOUT section
+```
+
+Per file:
+- `name` = file basename
+- `description` = your `-m` message
+- `note` = `path=<abs>\nsha256=<hex>\nsize=<n>\nmtime=<iso>`
+
+Flags:
+- `--type NAME` — sample type name on the tenant (default `Data`); mus refuses if the tenant doesn't have it, listing what's available
+- `--section samplesout | samplesin` — SAMPLESOUT (results, outputs — default) or SAMPLESIN (inputs the experiment consumed)
+
+Idempotent — the sidecar records `eln_sample_id`, so re-runs skip already-registered files.
+
+### 1d. Attach file bytes to the ELN experiment (`mus eln attach`)
+
+For protocols, figures, small documents that belong INSIDE the notebook page, upload the file's actual bytes to a new FILE section on the current experiment:
+
+```bash
+mus eln attach -m "post-QC UMAP + supplementary methods" umap.pdf methods.docx
+```
+
+One FILE section per invocation; every file in the batch attaches to that section. Sidecar stamps `eln_attachment_journal_id`.
+
+**Which one to use:**
+- `mus eln sample` — data files that stay on the NAS; ELN just records where they live
+- `mus eln attach` — documents/figures small enough to duplicate in the notebook
+
 ---
 
 ## 2. Upload to iRODS

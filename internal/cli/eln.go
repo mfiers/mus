@@ -49,6 +49,8 @@ func newELNCmd() *cobra.Command {
 		newELNWhoamiCmd(),
 		newELNDisableCmd(),
 		newELNEnableCmd(),
+		newELNSampleCmd(),
+		newELNAttachCmd(),
 	)
 	return cmd
 }

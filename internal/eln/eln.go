@@ -8,6 +8,7 @@ package eln
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -180,6 +181,148 @@ func (c *Client) CreateFileSection(expID int64, title string) (int64, error) {
 		return 0, err
 	}
 	return journalID, nil
+}
+
+// --- samples ---------------------------------------------------------------
+
+// SampleType is one row from GET /sampleTypes. Every sample created via
+// POST /samples must reference a sampleTypeID from this list. Tenants
+// configure their own set — mus looks the depositor's chosen name (from
+// --type, default "Data") up here on each invocation, cached for the batch.
+type SampleType struct {
+	ID   int64  `json:"sampleTypeID"`
+	Name string `json:"name"`
+}
+
+// ListSampleTypes returns the tenant's configured sample types. Used by
+// FindSampleTypeByName to resolve a human-readable name to the numeric ID
+// eLabNext's create-sample endpoint requires.
+func (c *Client) ListSampleTypes() ([]SampleType, error) {
+	// eLabNext paginates; ask for the widest reasonable page. Tenants
+	// have dozens of sampleTypes at most, not thousands.
+	var out struct {
+		Data       []SampleType `json:"data"`
+		TotalRecs  int          `json:"totalRecords"`
+		MaxRecs    int          `json:"maxRecords"`
+	}
+	params := url.Values{}
+	params.Set("$pageSize", "500")
+	if err := c.get("sampleTypes", params, &out); err != nil {
+		return nil, fmt.Errorf("list sampleTypes: %w", err)
+	}
+	return out.Data, nil
+}
+
+// FindSampleTypeByName returns the sample type matching `name` (case-
+// insensitive exact match). Returns nil + error when none matches; the
+// error text lists what IS available so the depositor can pick.
+func (c *Client) FindSampleTypeByName(name string) (*SampleType, error) {
+	types, err := c.ListSampleTypes()
+	if err != nil {
+		return nil, err
+	}
+	needle := strings.ToLower(strings.TrimSpace(name))
+	for i := range types {
+		if strings.ToLower(types[i].Name) == needle {
+			return &types[i], nil
+		}
+	}
+	// Not found — surface the full list so the depositor sees what's
+	// possible without a second round-trip.
+	names := make([]string, 0, len(types))
+	for _, t := range types {
+		names = append(names, t.Name)
+	}
+	return nil, fmt.Errorf(
+		"no sample type named %q on this ELN tenant. Available: %s",
+		name, strings.Join(names, ", "))
+}
+
+// CreateSampleReq is the payload for POST /samples. Only sampleTypeID +
+// name are hard-required by eLabNext; Description and Note are used by
+// mus to record the depositor's `-m` message and the file's provenance
+// block (path / sha256 / size).
+type CreateSampleReq struct {
+	SampleTypeID int64  `json:"sampleTypeID"`
+	Name         string `json:"name"`
+	Description  string `json:"description,omitempty"`
+	Note         string `json:"note,omitempty"`
+	AltID        string `json:"altID,omitempty"`
+}
+
+// Sample is the response shape from POST /samples. Only sampleID is
+// load-bearing for mus — the rest we echo back to the depositor via the
+// summary.
+type Sample struct {
+	ID           int64  `json:"sampleID"`
+	Name         string `json:"name"`
+	Description  string `json:"description"`
+	Note         string `json:"note"`
+	SampleTypeID int64  `json:"sampleTypeID"`
+}
+
+// CreateSample creates one sample. Returns the new sampleID.
+//
+// The response body is either the sample object OR a bare integer
+// (older tenants); we handle both by trying integer-parse first.
+func (c *Client) CreateSample(req CreateSampleReq) (*Sample, error) {
+	if req.SampleTypeID == 0 {
+		return nil, errors.New("CreateSample: SampleTypeID is required")
+	}
+	if req.Name == "" {
+		return nil, errors.New("CreateSample: Name is required")
+	}
+	// Try full-object response first — that's what modern eLabNext
+	// returns.
+	var full Sample
+	if err := c.post("samples", req, &full); err == nil && full.ID != 0 {
+		return &full, nil
+	}
+	// Fallback: bare integer sampleID. Older tenants returned this.
+	var id int64
+	if err := c.post("samples", req, &id); err != nil {
+		return nil, fmt.Errorf("create sample: %w", err)
+	}
+	if id == 0 {
+		return nil, errors.New("create sample: empty response")
+	}
+	return &Sample{ID: id, Name: req.Name, SampleTypeID: req.SampleTypeID}, nil
+}
+
+// CreateExperimentSection appends a section of the given type to the
+// experiment. Common types: TEXT, FILE, COMMENT, SAMPLESIN, SAMPLESOUT.
+// Returns the section's expJournalID (used by
+// LinkSamplesToSection / UploadFile).
+//
+// This is the more general form of the existing CreateCommentSection /
+// CreateFileSection helpers — kept alongside for backward compat.
+func (c *Client) CreateExperimentSection(expID int64, sectionType, header string) (int64, error) {
+	expID = FixExperimentID(expID)
+	body := map[string]string{
+		"sectionType":   sectionType,
+		"sectionHeader": header,
+	}
+	var journalID int64
+	if err := c.post(fmt.Sprintf("experiments/%d/sections", expID), body, &journalID); err != nil {
+		return 0, fmt.Errorf("create %s section: %w", sectionType, err)
+	}
+	return journalID, nil
+}
+
+// LinkSamplesToSection attaches every sample in sampleIDs to a
+// SAMPLESIN or SAMPLESOUT experiment section. The body is a JSON array
+// of int sampleIDs — no wrapper object.
+func (c *Client) LinkSamplesToSection(expJournalID int64, sampleIDs []int64) error {
+	if len(sampleIDs) == 0 {
+		return nil
+	}
+	var ignored any
+	if err := c.post(fmt.Sprintf("experiments/sections/%d/samples", expJournalID),
+		sampleIDs, &ignored); err != nil {
+		return fmt.Errorf("link %d samples to section %d: %w",
+			len(sampleIDs), expJournalID, err)
+	}
+	return nil
 }
 
 // UploadFile uploads a local file to a FILE section. uploadName overrides the

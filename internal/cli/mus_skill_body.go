@@ -302,6 +302,18 @@ deposit that isn't an h5ad or DE.
 - ` + "`mus eln update`" + ` — refresh experiment metadata in mus.cfg from
   the server.
 - ` + "`mus eln whoami`" + ` — print the user the stored token authenticates as.
+- ` + "`mus eln sample -m MSG [--type Data] [--section samplesout] FILES...`" + `
+  — register file LOCATIONS (not bytes) as Sample records in eLabNext,
+  one per file. The path + sha256 + size land in the sample's note;
+  the ` + "`-m`" + ` message becomes the sample's description. All samples
+  in the batch get linked to the current experiment via a new
+  SAMPLESOUT (or SAMPLESIN) section. Sidecar stamps ` + "`eln_sample_id`" + `
+  so re-runs are idempotent. Use for data files that live on the NAS
+  and shouldn't be duplicated inside the notebook.
+- ` + "`mus eln attach -m MSG FILES...`" + ` — upload file BYTES as
+  attachments to a new FILE section on the current experiment. Use
+  for protocols, figures, small documents that belong inside the
+  notebook page. Sidecar stamps ` + "`eln_attachment_journal_id`" + `.
 
 (Post-upload ELN commenting is automatic on a successful
 ` + "`mus irods upload`" + ` to a linked folder; there's no standalone

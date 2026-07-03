@@ -76,6 +76,26 @@ type ELN struct {
 	ProjectID      string
 	ProjectName    string
 	JournalID      string
+
+	// Sample registration (`mus eln sample`). When the file has been
+	// registered as an eLabNext Sample record (its location + sha in
+	// the sample's note), these fields record which sample the file
+	// maps to so re-runs are idempotent — mus skips files whose
+	// SampleID is already set.
+	SampleID        string // int64 in the ELN, kept as string for wire format uniformity
+	SampleType      string // e.g. "Data"; the tenant-defined sampleType name
+	SampleCreatedAt time.Time
+	// SectionJournalID: the SAMPLESOUT / SAMPLESIN section this sample
+	// was linked into on its experiment. One section per invocation
+	// (batch); may repeat across sidecars from the same batch.
+	SampleSectionID string
+
+	// Attachment (`mus eln upload`). When the file's bytes were
+	// uploaded as an experiment attachment (FILE section), record
+	// which section carries it so future retrievals / audits know
+	// where to look.
+	AttachmentJournalID string    // FILE section journal ID
+	AttachmentUploadedAt time.Time
 }
 
 // S3 captures S3 upload state (`mus s3 upload`).
@@ -445,6 +465,16 @@ func docToMap(d *Doc) map[string]any {
 		putStr(out, "eln_project_id", d.ELN.ProjectID)
 		putStr(out, "eln_project_name", d.ELN.ProjectName)
 		putStr(out, "eln_journal_id", d.ELN.JournalID)
+		// Sample registration (mus eln sample) — stamped once per
+		// file. Presence of eln_sample_id makes re-runs idempotent.
+		putStr(out, "eln_sample_id", d.ELN.SampleID)
+		putStr(out, "eln_sample_type", d.ELN.SampleType)
+		putTime(out, "eln_sample_created_at", d.ELN.SampleCreatedAt)
+		putStr(out, "eln_sample_section_id", d.ELN.SampleSectionID)
+		// Attachment (mus eln upload) — file bytes copied to a FILE
+		// section on the experiment.
+		putStr(out, "eln_attachment_journal_id", d.ELN.AttachmentJournalID)
+		putTime(out, "eln_attachment_uploaded_at", d.ELN.AttachmentUploadedAt)
 	}
 	if d.S3 != nil {
 		putStr(out, "s3_url", d.S3.URL)
@@ -590,13 +620,19 @@ func docFromMap(in map[string]any) (*Doc, error) {
 	}
 	if hasPrefix(in, "eln_") {
 		d.ELN = &ELN{
-			ExperimentID:   getStr(in, "eln_experiment_id"),
-			ExperimentName: getStr(in, "eln_experiment_name"),
-			StudyID:        getStr(in, "eln_study_id"),
-			StudyName:      getStr(in, "eln_study_name"),
-			ProjectID:      getStr(in, "eln_project_id"),
-			ProjectName:    getStr(in, "eln_project_name"),
-			JournalID:      getStr(in, "eln_journal_id"),
+			ExperimentID:         getStr(in, "eln_experiment_id"),
+			ExperimentName:       getStr(in, "eln_experiment_name"),
+			StudyID:              getStr(in, "eln_study_id"),
+			StudyName:            getStr(in, "eln_study_name"),
+			ProjectID:            getStr(in, "eln_project_id"),
+			ProjectName:          getStr(in, "eln_project_name"),
+			JournalID:            getStr(in, "eln_journal_id"),
+			SampleID:             getStr(in, "eln_sample_id"),
+			SampleType:           getStr(in, "eln_sample_type"),
+			SampleCreatedAt:      parseTime(getStr(in, "eln_sample_created_at")),
+			SampleSectionID:      getStr(in, "eln_sample_section_id"),
+			AttachmentJournalID:  getStr(in, "eln_attachment_journal_id"),
+			AttachmentUploadedAt: parseTime(getStr(in, "eln_attachment_uploaded_at")),
 		}
 	}
 	if hasPrefix(in, "s3_") {
