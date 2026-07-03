@@ -312,12 +312,16 @@ func (c *Client) CreateExperimentSection(expID int64, sectionType, header string
 // LinkSamplesToSection attaches every sample in sampleIDs to a
 // SAMPLESIN or SAMPLESOUT experiment section. The body is a JSON array
 // of int sampleIDs — no wrapper object.
+//
+// eLabNext requires PUT (not POST) for this endpoint; POST returns
+// HTTP 405. Confirmed against the live API and the developer docs
+// (see developer.elabnext.com — samples on sections use PUT/DELETE).
 func (c *Client) LinkSamplesToSection(expJournalID int64, sampleIDs []int64) error {
 	if len(sampleIDs) == 0 {
 		return nil
 	}
 	var ignored any
-	if err := c.post(fmt.Sprintf("experiments/sections/%d/samples", expJournalID),
+	if err := c.put(fmt.Sprintf("experiments/sections/%d/samples", expJournalID),
 		sampleIDs, &ignored); err != nil {
 		return fmt.Errorf("link %d samples to section %d: %w",
 			len(sampleIDs), expJournalID, err)

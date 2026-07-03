@@ -154,8 +154,9 @@ func TestCreateExperimentSection(t *testing.T) {
 func TestLinkSamplesToSection(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/experiments/sections/999/samples", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Errorf("method %s", r.Method)
+		// eLabNext requires PUT — POST returns 405.
+		if r.Method != http.MethodPut {
+			t.Errorf("method %s, want PUT", r.Method)
 		}
 		body, _ := io.ReadAll(r.Body)
 		var got []int64

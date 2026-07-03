@@ -152,7 +152,18 @@ func runELNSample(cmd *cobra.Command, args []string, message, sampleTypeName, se
 		journalID, expID)
 
 	// One sample per file. Collect IDs so we can batch-link at the end.
-	var createdIDs []int64
+	// pendingLink is the list of sampleIDs that need the section link
+	// applied — includes freshly-created samples AND any orphans
+	// discovered on re-run (sidecar had SampleID but no
+	// SampleSectionID, meaning a previous batch's link failed).
+	type stampable struct {
+		abs      string
+		doc      *sidecar.Doc
+		sampleID int64
+		isOrphan bool
+	}
+	var pendingLink []int64
+	var toStamp []stampable
 	var skipped, failed int
 	now := time.Now().UTC().Truncate(time.Second)
 	journalStr := strconv.FormatInt(journalID, 10)
@@ -160,10 +171,29 @@ func runELNSample(cmd *cobra.Command, args []string, message, sampleTypeName, se
 	for _, path := range files {
 		abs, _ := filepath.Abs(path)
 
-		// Idempotency: skip if the sidecar already records a
-		// SampleID. Re-running is safe.
 		scPath := sidecar.SidecarPath(abs)
 		doc, _ := readMaybe(scPath)
+
+		// Orphan-recovery path: sidecar has SampleID but no
+		// SampleSectionID → a previous run created the sample but
+		// the link step failed. Re-linking the existing sample to
+		// the new section is the right recovery.
+		if doc != nil && doc.ELN != nil && doc.ELN.SampleID != "" && doc.ELN.SampleSectionID == "" {
+			id, perr := strconv.ParseInt(doc.ELN.SampleID, 10, 64)
+			if perr != nil {
+				fmt.Fprintf(stderr, "  ⚠ %s sidecar has malformed eln_sample_id=%q\n",
+					filepath.Base(abs), doc.ELN.SampleID)
+				failed++
+				continue
+			}
+			fmt.Fprintf(stdout, "  ↺ %s: re-linking orphan sample %d\n",
+				filepath.Base(abs), id)
+			pendingLink = append(pendingLink, id)
+			toStamp = append(toStamp, stampable{abs: abs, doc: doc, sampleID: id, isOrphan: true})
+			continue
+		}
+
+		// Fully-registered: skip.
 		if doc != nil && doc.ELN != nil && doc.ELN.SampleID != "" {
 			fmt.Fprintf(stdout, "  ↷ %s already registered as sample %s — skipping\n",
 				filepath.Base(abs), doc.ELN.SampleID)
@@ -201,9 +231,12 @@ func runELNSample(cmd *cobra.Command, args []string, message, sampleTypeName, se
 			continue
 		}
 		fmt.Fprintf(stdout, "  ✓ %s → sample %d\n", filepath.Base(abs), sample.ID)
-		createdIDs = append(createdIDs, sample.ID)
+		pendingLink = append(pendingLink, sample.ID)
 
-		// Stamp the sidecar so re-runs skip this file.
+		// Stamp SampleID + Type + CreatedAt now (safe — the sample
+		// exists on the server regardless of what the link step
+		// does next). SampleSectionID stays empty until the link
+		// succeeds — that's the marker for orphan detection.
 		if doc == nil {
 			doc = &sidecar.Doc{}
 		}
@@ -213,33 +246,53 @@ func runELNSample(cmd *cobra.Command, args []string, message, sampleTypeName, se
 		doc.ELN.SampleID = strconv.FormatInt(sample.ID, 10)
 		doc.ELN.SampleType = st.Name
 		doc.ELN.SampleCreatedAt = now
-		doc.ELN.SampleSectionID = journalStr
 		if err := sidecar.Write(scPath, doc); err != nil {
 			fmt.Fprintf(stderr, "  ⚠ sidecar write %s: %v (sample already created)\n",
 				scPath, err)
 		}
+		toStamp = append(toStamp, stampable{abs: abs, doc: doc, sampleID: sample.ID})
 	}
 
-	// Batch-link every newly-created sample to the section.
-	if len(createdIDs) > 0 {
-		if err := client.LinkSamplesToSection(journalID, createdIDs); err != nil {
-			// Samples exist but aren't linked to the experiment.
-			// Surface the error clearly so the depositor can retry
-			// or link manually.
+	// Batch-link every pending sample (both fresh and orphaned) to
+	// the section. Only stamp SampleSectionID on the sidecars AFTER
+	// the link succeeds — otherwise the sidecar would lie.
+	if len(pendingLink) > 0 {
+		if err := client.LinkSamplesToSection(journalID, pendingLink); err != nil {
 			fmt.Fprintf(stderr,
-				"⚠ %d sample(s) created but the section-link call failed: %v\n"+
+				"⚠ %d sample(s) touched but the section-link call failed: %v\n"+
 					"   sample IDs: %v\n"+
 					"   experiment: %d, expJournalID: %d\n"+
-					"   Re-run to retry (mus is idempotent — will skip existing).\n",
-				len(createdIDs), err, createdIDs, expID, journalID)
+					"   Re-run `mus eln sample` to retry — mus detects orphans\n"+
+					"   (sidecars with eln_sample_id but no eln_sample_section_id)\n"+
+					"   and re-links them into a fresh section.\n",
+				len(pendingLink), err, pendingLink, expID, journalID)
 			return err
 		}
+		// Success — stamp SampleSectionID on every touched sidecar.
+		for _, s := range toStamp {
+			s.doc.ELN.SampleSectionID = journalStr
+			scPath := sidecar.SidecarPath(s.abs)
+			if err := sidecar.Write(scPath, s.doc); err != nil {
+				fmt.Fprintf(stderr,
+					"  ⚠ sidecar write %s: %v (sample linked to section anyway)\n",
+					scPath, err)
+			}
+		}
 		fmt.Fprintf(stdout, "linked %d sample(s) to section %d on experiment %d\n",
-			len(createdIDs), journalID, expID)
+			len(pendingLink), journalID, expID)
 	}
 
-	fmt.Fprintf(stdout, "\nregistered %d, skipped %d, failed %d\n",
-		len(createdIDs), skipped, failed)
+	fresh := 0
+	relinked := 0
+	for _, s := range toStamp {
+		if s.isOrphan {
+			relinked++
+		} else {
+			fresh++
+		}
+	}
+	fmt.Fprintf(stdout, "\nregistered %d (fresh %d + relinked orphans %d), skipped %d, failed %d\n",
+		len(toStamp), fresh, relinked, skipped, failed)
 	if failed > 0 {
 		return fmt.Errorf("%d file(s) failed to register", failed)
 	}
