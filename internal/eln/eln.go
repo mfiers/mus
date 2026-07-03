@@ -250,15 +250,54 @@ type CreateSampleReq struct {
 	AltID        string `json:"altID,omitempty"`
 }
 
-// Sample is the response shape from POST /samples. Only sampleID is
-// load-bearing for mus — the rest we echo back to the depositor via the
-// summary.
+// Sample is the response shape from POST /samples and GET /samples/{id}.
+// Only sampleID is load-bearing for mus — the rest we echo back to the
+// depositor via the summary. Archived is populated by GetSample and
+// tells `mus eln sample` to treat a prior sidecar-recorded sample as
+// stale (create a fresh one on re-run) rather than blindly reusing it.
 type Sample struct {
 	ID           int64  `json:"sampleID"`
 	Name         string `json:"name"`
 	Description  string `json:"description"`
 	Note         string `json:"note"`
 	SampleTypeID int64  `json:"sampleTypeID"`
+	Archived     bool   `json:"archived"`
+}
+
+// GetSample fetches sample metadata by ID. Returns the sample record —
+// including the Archived flag — or an *HTTPError with StatusCode 404
+// when the sample does not exist. Used by `mus eln sample` to verify
+// that a sidecar-recorded sample is still active before skipping
+// re-registration.
+//
+// Per eLabNext docs: "Archived samples remain queryable via GET
+// /samples/{id} and the archived-aware list endpoints, but no longer
+// appear in regular listings." So this endpoint IS the right check —
+// list-based queries default to archived=false and would spuriously
+// return "not found" for archived-but-existent samples.
+func (c *Client) GetSample(id int64) (*Sample, error) {
+	var out Sample
+	if err := c.get(fmt.Sprintf("samples/%d", id), nil, &out); err != nil {
+		return nil, err
+	}
+	if out.ID == 0 {
+		// Defensive: some tenants have been observed returning 200
+		// with an empty body for missing IDs instead of 404. Treat
+		// that as not-found so the caller re-creates.
+		return nil, &HTTPError{StatusCode: 404, Body: "empty sample response"}
+	}
+	return &out, nil
+}
+
+// IsNotFound reports whether err is an *HTTPError with a 404 status.
+// Small helper for the common lookaside-cache pattern where we want to
+// re-create a resource that has disappeared from the ELN.
+func IsNotFound(err error) bool {
+	var he *HTTPError
+	if errors.As(err, &he) {
+		return he.StatusCode == 404
+	}
+	return false
 }
 
 // CreateSample creates one sample. Returns the new sampleID.
@@ -445,6 +484,18 @@ func (c *Client) put(path string, body any, out any) error {
 	return c.do(req, out)
 }
 
+// HTTPError is returned by the eLabNext client on any non-2xx response.
+// Callers that care about specific status codes (e.g. 404 for "sample
+// deleted") can errors.As on this type instead of matching error text.
+type HTTPError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("HTTP %d: %s", e.StatusCode, e.Body)
+}
+
 func (c *Client) do(req *http.Request, out any) error {
 	req.Header.Set("Authorization", c.APIKey)
 	req.Header.Set("Accept", "application/json")
@@ -458,7 +509,7 @@ func (c *Client) do(req *http.Request, out any) error {
 		return readErr
 	}
 	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		return &HTTPError{StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(raw))}
 	}
 	if out == nil {
 		return nil

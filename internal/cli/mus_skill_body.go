@@ -310,6 +310,12 @@ deposit that isn't an h5ad or DE.
   SAMPLESOUT (or SAMPLESIN) section. Sidecar stamps ` + "`eln_sample_id`" + `
   so re-runs are idempotent. Use for data files that live on the NAS
   and shouldn't be duplicated inside the notebook.
+  On re-run, mus queries each recorded sample's server-side status —
+  files whose prior sample was archived or hard-deleted are re-created
+  from scratch (marker: ` + "`↻`" + `), files with a live sample but a
+  missing section link get re-linked (marker: ` + "`↺`" + ` — orphan
+  recovery). If EVERY file is already fully registered, no section is
+  created.
 - ` + "`mus eln attach -m MSG FILES...`" + ` — upload file BYTES as
   attachments to a new FILE section on the current experiment. Use
   for protocols, figures, small documents that belong inside the

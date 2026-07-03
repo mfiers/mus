@@ -185,6 +185,9 @@ func TestMusSkill_BodyMentionsDEFlow(t *testing.T) {
 		"mus eln sample -m MSG",
 		"mus eln attach -m MSG",
 		"SAMPLESOUT",
+		// mus 0.2.43+ — archived-sample recreate + orphan recovery
+		"prior sample was archived or hard-deleted",
+		"orphan\n  recovery",
 	}
 	for _, req := range requirements {
 		if !strings.Contains(musBody, req) {

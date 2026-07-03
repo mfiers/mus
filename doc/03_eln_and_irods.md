@@ -49,38 +49,141 @@ mus eln disable --global         # once per machine, in ~/.config/mus/mus.cfg
 
 ### 1c. Register file locations as ELN samples (`mus eln sample`)
 
-For data files that live on the NAS / local disk and shouldn't be duplicated inside the notebook, register each file as a **Sample** record in eLabNext. The sample carries the file's ABSOLUTE PATH + sha256 + size in its `note` field — the data itself never leaves the disk.
+**Goal:** point the ELN at data on disk without ever duplicating the bytes. Every file becomes a Sample record whose `note` field carries `path=`/`sha256=`/`size=`/`mtime=`. All the samples in one invocation are grouped into a new SAMPLESOUT (or SAMPLESIN) section on the current experiment.
 
 ```bash
 mus eln sample -m "raw sequencing lanes, run 42" *.fastq.gz
-# → creates one Sample per file, links all to the current experiment
-#   via a new SAMPLESOUT section
 ```
 
-Per file:
-- `name` = file basename
-- `description` = your `-m` message
-- `note` = `path=<abs>\nsha256=<hex>\nsize=<n>\nmtime=<iso>`
+Output:
 
-Flags:
-- `--type NAME` — sample type name on the tenant (default `Data`); mus refuses if the tenant doesn't have it, listing what's available
-- `--section samplesout | samplesin` — SAMPLESOUT (results, outputs — default) or SAMPLESIN (inputs the experiment consumed)
+```
+sample type: Data (id=1234)
+  ✓ lane_01.fastq.gz → sample 17890001
+  ✓ lane_02.fastq.gz → sample 17890002
+  ✓ lane_03.fastq.gz → sample 17890003
+created section (expJournalID=16148199) on experiment 1955928
+linked 3 sample(s) to section 16148199 on experiment 1955928
 
-Idempotent — the sidecar records `eln_sample_id`, so re-runs skip already-registered files.
+registered 3 (fresh 3 + recreated 0 + relinked orphans 0), skipped 0, failed 0
+```
+
+**Per file, mus writes:**
+
+| Field | Value |
+| --- | --- |
+| `name` | file basename |
+| `description` | your `-m` message |
+| `note` | `path=<abs>\nsha256=<hex>\nsize=<n>\nmtime=<iso>` |
+
+**Flags:**
+
+| Flag | Purpose |
+| --- | --- |
+| `-m / --message` | REQUIRED. Sample description AND section header (first line). |
+| `--type NAME` | Sample type name on the ELN tenant. Default `Data`. Case-insensitive. Refuses with the full list of available types if the name is unknown. |
+| `--section samplesout \| samplesin` | Section kind. **SAMPLESOUT** (default) = outputs the experiment produced; **SAMPLESIN** = inputs the experiment consumed. |
+
+**Requires** `eln_experiment_id` in the mus.cfg cascade — set by `mus eln link <ID>` (see §1). The command refuses if unset.
+
+#### Idempotency: safe to re-run
+
+After a successful run the sidecar stamps four keys:
+
+```
+eln_sample_id=17890001
+eln_sample_type=Data
+eln_sample_created_at=2026-06-24T12:34:56Z
+eln_sample_section_id=16148199
+```
+
+On a re-run, mus makes ONE `GET /samples/{id}` per file to check the current server-side status and classifies each file into one of four buckets:
+
+| Situation | mus does | Output marker |
+| --- | --- | --- |
+| Sample active + section link recorded | Skip | `↷ file.tsv already registered as sample 17890001 — skipping` |
+| Sample active, section link missing | **Re-link** existing sample to a new section | `↺ file.tsv: re-linking orphan sample 17890001` |
+| Sample archived on the ELN | **Recreate** — create a fresh sample, replace the sidecar SampleID | `↻ file.tsv: prior sample 17890001 archived → new sample 17892500` |
+| Sample deleted from the ELN (404) | **Recreate** as above | `↻ file.tsv: prior sample 17890001 gone from ELN → new sample 17892500` |
+| No sidecar / no SampleID | Create fresh | `✓ file.tsv → sample 17892500` |
+
+The summary line breaks these down:
+
+```
+registered N (fresh A + recreated B + relinked orphans C), skipped D, failed E
+```
+
+If EVERY file is in the "skip" bucket, mus does not create an empty section on the experiment — it prints `nothing to do — no section created` and exits.
+
+#### Why the archived-check matters
+
+Depositors will occasionally archive samples from the ELN UI (say, after fixing a mislabeled file) and then re-run `mus eln sample` expecting a clean re-register. Without the archived-check mus would happily skip those files — the sidecar carries a `SampleID` and looks fully-registered. mus catches this by querying the sample's current state on every re-run.
+
+If you archive a sample AND want mus to recreate it, that is now automatic. If you want to force a fresh sample without archiving the old one, delete the `eln_sample_id` line from the file's `.mus` sidecar and re-run.
+
+#### Recovery from partial failures
+
+If the batch-link step fails mid-run (network glitch, HTTP error, section-creation succeeded but link didn't), mus writes:
+- `eln_sample_id` (the sample was created — that's committed on the server)
+- but NOT `eln_sample_section_id` (the link never landed)
+
+That combination is the **orphan marker**. On the next `mus eln sample` invocation mus detects it, does NOT create a new sample, and re-uses the existing sample ID in the new section's batch-link. This means a failed batch-link is fully self-healing — just run the command again.
+
+#### Troubleshooting
+
+| Symptom | Likely cause | Fix |
+| --- | --- | --- |
+| `no eln_experiment_id in cascade` | Folder not linked yet | `mus eln link <ID>` (see §1) |
+| `no sample type named "X"` | `--type` doesn't match tenant | Command lists what's available; pick one or ask an ELN admin to add "Data" |
+| `HTTP 405: … does not support http method 'POST'` | You're on mus < 0.2.42 | `mus upgrade` — the link endpoint requires PUT |
+| Section created but empty on the ELN | Everything got skipped as "already registered"; on mus ≥ 0.2.43 this is prevented by the classification pass | Upgrade; or delete the sidecar's `eln_sample_id` line and re-run |
+| `lookup sample N: HTTP 401` | ELN API key expired | `mus eln login` |
+| Repeated re-runs create new sections every time | Working as intended — each invocation carries its own message, so it becomes its own section. Group your samples per intended section. | Don't split one batch across multiple commands |
 
 ### 1d. Attach file bytes to the ELN experiment (`mus eln attach`)
 
-For protocols, figures, small documents that belong INSIDE the notebook page, upload the file's actual bytes to a new FILE section on the current experiment:
+**Goal:** copy a file INTO the notebook — the bytes are uploaded to a FILE section on the current experiment. Use this for the artefacts that belong on the notebook page itself (protocols, figures, small tables, PDFs).
 
 ```bash
 mus eln attach -m "post-QC UMAP + supplementary methods" umap.pdf methods.docx
 ```
 
-One FILE section per invocation; every file in the batch attaches to that section. Sidecar stamps `eln_attachment_journal_id`.
+Output:
 
-**Which one to use:**
-- `mus eln sample` — data files that stay on the NAS; ELN just records where they live
-- `mus eln attach` — documents/figures small enough to duplicate in the notebook
+```
+created FILE section (expJournalID=16148200) on experiment 1955928
+  → umap.pdf
+  → methods.docx
+```
+
+**Per invocation:** one new FILE section on the experiment. Every file in the batch attaches to that section. The section header is `mus eln attach: <first line of -m>`.
+
+**Requires** `eln_experiment_id` in the cascade — same as `mus eln sample`.
+
+#### Idempotency
+
+Sidecar stamps `eln_attachment_journal_id` (the section's expJournalID) after each successful upload. Re-runs skip any file already carrying that stamp:
+
+```
+  ↷ umap.pdf already attached (section 16148200) — skipping
+✓ nothing to upload — every file already has an attachment recorded
+```
+
+To force a re-upload, remove `eln_attachment_journal_id` from the sidecar. (There is currently no `--force` flag; the deliberate friction is to prevent accidental duplicates on the notebook page.)
+
+### 1e. `sample` vs `attach` — which one?
+
+|   | `mus eln sample` | `mus eln attach` |
+| --- | --- | --- |
+| Data location | Stays on disk (NAS) | Uploaded into the ELN |
+| Bytes touched | `sha256` only | Full read → HTTP upload |
+| Fits well for | Raw sequencing, h5ad, count matrices, anything > ~100 MB | Protocols, small figures, PDF reports, presentations |
+| Section type created | SAMPLESOUT or SAMPLESIN | FILE |
+| Sidecar keys stamped | `eln_sample_id`, `eln_sample_type`, `eln_sample_created_at`, `eln_sample_section_id` | `eln_attachment_journal_id`, `eln_attachment_uploaded_at` |
+| Round-trip verifiable | Yes — `sha256` in the sample note | No — ELN doesn't expose an integrity hash |
+| Right choice if… | The file will be uploaded to iRODS / stays on NAS | The file is documentation ABOUT the experiment |
+
+Rule of thumb: **data → `sample`; documentation → `attach`**. When in doubt, `sample` — the data-on-disk model is closer to how the lab actually works.
 
 ---
 

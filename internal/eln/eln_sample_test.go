@@ -184,3 +184,110 @@ func TestLinkSamplesToSection_EmptyIsNoOp(t *testing.T) {
 		t.Errorf("empty slice should be a silent no-op; got %v", err)
 	}
 }
+
+func TestGetSample_Active(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/samples/12345", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("method %s, want GET", r.Method)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"sampleID":     12345,
+			"name":         "foo.tsv",
+			"description":  "some data",
+			"sampleTypeID": 12,
+			"archived":     false,
+		})
+	})
+	srv := httptest.NewServer(authMiddleware(t, "k", mux))
+	defer srv.Close()
+
+	c := New(srv.URL, "k")
+	s, err := c.GetSample(12345)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.ID != 12345 || s.Archived {
+		t.Errorf("got %+v; want ID=12345 archived=false", s)
+	}
+}
+
+func TestGetSample_Archived(t *testing.T) {
+	// Archived samples remain queryable via GET /samples/{id}. This
+	// is the whole point of the lookaside — mus needs to know when
+	// the depositor archived a sample so it can recreate it instead
+	// of blindly reusing a dead SampleID.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/samples/99", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"sampleID":     99,
+			"name":         "foo.tsv",
+			"sampleTypeID": 12,
+			"archived":     true,
+		})
+	})
+	srv := httptest.NewServer(authMiddleware(t, "k", mux))
+	defer srv.Close()
+
+	c := New(srv.URL, "k")
+	s, err := c.GetSample(99)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.Archived {
+		t.Errorf("archived flag lost: %+v", s)
+	}
+}
+
+func TestGetSample_NotFound(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/samples/404", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"not found"}`))
+	})
+	srv := httptest.NewServer(authMiddleware(t, "k", mux))
+	defer srv.Close()
+
+	c := New(srv.URL, "k")
+	_, err := c.GetSample(404)
+	if err == nil {
+		t.Fatal("expected error for missing sample")
+	}
+	if !IsNotFound(err) {
+		t.Errorf("IsNotFound should recognise 404; got %v (%T)", err, err)
+	}
+}
+
+func TestGetSample_EmptyBodyIsNotFound(t *testing.T) {
+	// Some tenants have been observed returning 200 with an empty
+	// body for missing IDs. Treat that as not-found so callers
+	// re-create rather than skip.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/samples/12345", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		// deliberately empty body
+	})
+	srv := httptest.NewServer(authMiddleware(t, "k", mux))
+	defer srv.Close()
+
+	c := New(srv.URL, "k")
+	_, err := c.GetSample(12345)
+	if err == nil {
+		t.Fatal("expected not-found for empty body")
+	}
+	if !IsNotFound(err) {
+		t.Errorf("empty body should map to IsNotFound; got %v", err)
+	}
+}
+
+func TestIsNotFound_NonHTTPError(t *testing.T) {
+	// A plain error is NOT a 404 — mus must not misclassify network
+	// hiccups as "sample gone, please recreate".
+	if IsNotFound(errNonHTTP{}) {
+		t.Error("plain error should not be treated as 404")
+	}
+}
+
+type errNonHTTP struct{}
+
+func (errNonHTTP) Error() string { return "network broken" }
