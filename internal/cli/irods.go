@@ -232,8 +232,13 @@ func newIRODSUploadCmd() *cobra.Command {
 		"after a successful tar.gz upload, delete the local archive (default: keep + warn)")
 	cmd.Flags().Bool("no-metadata", false,
 		"skip applying mus_* AVU metadata to the uploaded iRODS object")
+	cmd.Flags().BoolVar(&noELNComment, "no-eln", false,
+		"don't touch the linked ELN experiment (skip auto-sample-registration)")
+	// Backwards-compat: --no-eln-comment used to control the (now removed)
+	// HTML COMMENT summary. Kept as an alias so old scripts still work.
 	cmd.Flags().BoolVar(&noELNComment, "no-eln-comment", false,
-		"don't post an upload summary as a COMMENT section in the linked ELN experiment")
+		"deprecated alias for --no-eln")
+	_ = cmd.Flags().MarkHidden("no-eln-comment")
 	cmd.Flags().BoolVar(&forceH5adUpload, "force-h5ad-upload", false,
 		"bypass the .h5ad sanity-check gate (NOT recommended — depositor's responsibility)")
 	cmd.Flags().BoolVar(&forceOverwrite, "force", false,
@@ -715,12 +720,12 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 		}
 	}
 
-	postUploadCommentToELN(env, uploads, opts.DryRun, postELNComment, message, cmd.ErrOrStderr())
 	// Register each uploaded item as an ELN Sample on the same
 	// experiment (SAMPLESOUT section, one section per invocation).
-	// Same opt-out flag as the HTML comment for the moment — if you
-	// want the summary comment but not the samples (or vice-versa),
-	// this is where to split them later.
+	// The samples ARE the ELN-side record of the upload — the old
+	// HTML-comment summary was dropped in favour of this structured
+	// form. Storage-unit placement uses eln_irods_sample_location
+	// (distinct from `mus eln sample`'s eln_sample_location).
 	postUploadRegisterSamplesInELN(env, uploads, opts.DryRun, postELNComment, message, cmd.ErrOrStderr())
 	return nil
 }

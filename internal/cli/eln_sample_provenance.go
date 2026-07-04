@@ -144,26 +144,38 @@ func metasForType(prov map[string]string, typeMetas []eln.SampleTypeMeta) []eln.
 	return out
 }
 
+// Config keys for sample storage-unit placement. `mus eln sample`
+// (local files) uses ELNSampleLocationKey; `mus irods upload`'s
+// auto-registration uses ELNIRODSSampleLocationKey — they're deliberately
+// distinct so a lab can send local + iRODS samples to different storage
+// units (e.g. local drafts in a working freezer, iRODS uploads in a
+// permanent-archive freezer). Both keys resolve through cascade → secret;
+// no compile-time default at either.
+const (
+	ELNSampleLocationKey      = "eln_sample_location"
+	ELNIRODSSampleLocationKey = "eln_irods_sample_location"
+)
+
 // resolveSampleLocationName picks the storage-unit NAME for mus-created
 // samples in this batch. Resolution order (first non-empty wins):
 //
-//  1. eln_sample_location in the mus.cfg cascade — per-folder override
-//     takes precedence over ~/.config/mus/mus.cfg's global setting.
-//  2. eln_sample_location in the secret store — user-level default
-//     (sits next to eln_url / eln_apikey).
+//  1. `key` in the mus.cfg cascade — per-folder override takes precedence
+//     over ~/.config/mus/mus.cfg's global setting.
+//  2. `key` in the secret store — user-level default (sits next to
+//     eln_url / eln_apikey).
 //
 // If nothing is set at either level, returns the empty string —
 // callers then create samples WITHOUT a storage-layer placement.
 // mus deliberately has no compile-time default here: labs that want
 // mus-created samples placed must opt in explicitly.
-func resolveSampleLocationName(env *config.Env, store secret.Store) string {
+func resolveSampleLocationName(env *config.Env, store secret.Store, key string) string {
 	if env != nil {
-		if v := strings.TrimSpace(env.String("eln_sample_location")); v != "" {
+		if v := strings.TrimSpace(env.String(key)); v != "" {
 			return v
 		}
 	}
 	if store != nil {
-		if v, err := store.Get("eln_sample_location"); err == nil {
+		if v, err := store.Get(key); err == nil {
 			if s := strings.TrimSpace(v); s != "" {
 				return s
 			}
@@ -178,8 +190,8 @@ func resolveSampleLocationName(env *config.Env, store secret.Store) string {
 // When a name IS configured but lookup fails, returns 0 AND warns to
 // stderr so the depositor sees the typo. Never returns an error —
 // sample creation should proceed regardless.
-func resolveSampleStorageLayerID(client *eln.Client, env *config.Env, store secret.Store, stderr io.Writer) int64 {
-	name := resolveSampleLocationName(env, store)
+func resolveSampleStorageLayerID(client *eln.Client, env *config.Env, store secret.Store, key string, stderr io.Writer) int64 {
+	name := resolveSampleLocationName(env, store, key)
 	if name == "" {
 		// Not configured anywhere → deliberate silence. mus creates
 		// samples without a placement; ELN shows them in the flat
@@ -189,8 +201,8 @@ func resolveSampleStorageLayerID(client *eln.Client, env *config.Env, store secr
 	unit, err := client.FindStorageByName(name)
 	if err != nil {
 		fmt.Fprintf(stderr,
-			"  ⚠ ELN storage unit %q not found — samples will be created without a location: %v\n",
-			name, err)
+			"  ⚠ ELN storage unit %q (from %s) not found — samples will be created without a location: %v\n",
+			name, key, err)
 		return 0
 	}
 	fmt.Fprintf(stderr, "  storage: %s (storageID=%d, root layer=%d)\n",

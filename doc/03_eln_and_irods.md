@@ -242,10 +242,11 @@ What mus does, in order:
 4. Calls `iron stat -j` to grab the iRODS catalog ID.
 5. Writes the sidecar with `irods_path`, `irods_url` (path-based browse), and `irods_purl` (persistent URL keyed on catalog ID — survives renames + moves).
 6. Stamps `mus_*` AVU metadata on the iRODS object (so it's self-describing without the local sidecar).
-7. Posts a summary COMMENT to the linked eLab experiment (who / when / list of files with PURLs).
-8. **Registers each uploaded file as a Sample record on the same experiment** (SAMPLESOUT section). Sample `path` = iRODS path (NOT local); `upload_from_path` = local abs; `purl` = persistent URL. Same idempotency + orphan-recovery rules as `mus eln sample` (see §1c). This replaces the old ad-hoc HTML table of uploads: the samples are the structured, searchable, updateable record — you'll find them under Inventory → Samples in the ELN.
+7. **Registers each uploaded file as a Sample record on the linked eLab experiment** (SAMPLESOUT section, one section per invocation — same shape as `mus eln sample`). Sample `path` meta = iRODS path (NOT local); `upload_from_path` = local abs; `purl` = persistent URL; plus the full auto-fill list from §1c. Same idempotency + orphan-recovery rules. The samples ARE the ELN-side record — mus no longer posts a separate HTML summary comment; the samples cover the same information in structured, searchable, updateable form. Find them under Inventory → Samples.
 
-Steps 7 and 8 are best-effort — a failure in either leaves the iRODS upload untouched. `--no-eln-comment` opts out of BOTH (the flag name predates the sample-registration; it's kept for backwards compatibility).
+Step 7 is best-effort — a failure leaves the iRODS upload untouched. `--no-eln` (deprecated alias: `--no-eln-comment`) opts out of the sample-registration entirely.
+
+**Storage-unit placement for iRODS-uploaded samples:** use the key `eln_irods_sample_location` (cascade > secret), separate from `eln_sample_location` which governs `mus eln sample` locations. Same "nothing configured → no placement" semantic. Distinct keys let a lab route iRODS-archived samples to a permanent-archive freezer while local drafts stay in a working freezer — set only one of the two, or set both.
 
 ### 2b. Multiple files in one shot
 

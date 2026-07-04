@@ -159,12 +159,13 @@ func runELNSample(cmd *cobra.Command, args []string, message, sampleTypeName, se
 		typeMetas = nil
 	}
 
-	// Resolve the storage-unit location (eln_sample_location — cascade
-	// > secret store > baked-in default "BADS Mango"). Zero means "no
+	// Resolve the storage-unit location. `mus eln sample` reads
+	// eln_sample_location (as distinct from eln_irods_sample_location
+	// which the iRODS auto-registration flow uses). Zero means "no
 	// placement" — samples are created without a storage layer.
 	// Non-fatal: a missing unit just falls back to zero and warns.
 	store, _ := secret.Open()
-	storageLayerID := resolveSampleStorageLayerID(client, env, store, stderr)
+	storageLayerID := resolveSampleStorageLayerID(client, env, store, ELNSampleLocationKey, stderr)
 
 	// Collect the input files (absolute paths, skipping *.mus sidecars).
 	files, err := collectSampleInputs(args)

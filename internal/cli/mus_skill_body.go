@@ -337,13 +337,17 @@ deposit that isn't an h5ad or DE.
   notebook page. Sidecar stamps ` + "`eln_attachment_journal_id`" + `.
 
 (Post-upload ELN wiring is automatic on a successful
-` + "`mus irods upload`" + ` to a linked folder: (a) a summary COMMENT
-section with the file table and PURLs, and (b) ONE Sample record per
-uploaded file on a fresh SAMPLESOUT section — path=iRODS path,
-upload_from_path=local abs, plus the full meta autofill. The samples
-are the structured record; the comment is the human-readable
-summary. Same idempotency + orphan-recovery as ` + "`mus eln sample`" + `.
-` + "`--no-eln-comment`" + ` opts out of BOTH.)
+` + "`mus irods upload`" + ` to a linked folder: ONE Sample record per
+uploaded file on a fresh SAMPLESOUT section — same shape as
+` + "`mus eln sample`" + `, path=iRODS path, upload_from_path=local abs,
+plus the full meta autofill. Same idempotency + orphan-recovery.
+mus no longer posts an HTML summary comment; the samples cover the
+same information in structured, searchable form.
+` + "`--no-eln`" + ` opts out (deprecated alias: ` + "`--no-eln-comment`" + `).
+Storage placement uses the DISTINCT key ` + "`eln_irods_sample_location`" + `
+(cascade > secret), separate from ` + "`eln_sample_location`" + ` — so
+iRODS-archived samples can live in a different storage unit than
+local drafts.)
 
 ### Vocab / config
 

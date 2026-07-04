@@ -196,19 +196,19 @@ func TestResolveSampleLocationName_CascadePrecedence(t *testing.T) {
 	// 1. Cascade wins over secret.
 	env := envFromMap(t, map[string]string{"eln_sample_location": "Project Fridge"})
 	store := &fakeSecretStore{entries: map[string]string{"eln_sample_location": "User Fridge"}}
-	if got := resolveSampleLocationName(env, store); got != "Project Fridge" {
+	if got := resolveSampleLocationName(env, store, ELNSampleLocationKey); got != "Project Fridge" {
 		t.Errorf("cascade precedence: got %q, want Project Fridge", got)
 	}
 
 	// 2. No cascade → secret wins.
 	empty := envFromMap(t, map[string]string{})
-	if got := resolveSampleLocationName(empty, store); got != "User Fridge" {
+	if got := resolveSampleLocationName(empty, store, ELNSampleLocationKey); got != "User Fridge" {
 		t.Errorf("secret precedence: got %q, want User Fridge", got)
 	}
 
 	// 3. No cascade + no secret → empty (no placement).
 	emptyStore := &fakeSecretStore{}
-	if got := resolveSampleLocationName(empty, emptyStore); got != "" {
+	if got := resolveSampleLocationName(empty, emptyStore, ELNSampleLocationKey); got != "" {
 		t.Errorf("no config: expected empty string (no placement); got %q", got)
 	}
 }
@@ -219,7 +219,7 @@ func TestResolveSampleLocationName_BlankFallsThrough(t *testing.T) {
 	// to the empty string. Mirrors the "no placement" semantic.
 	env := envFromMap(t, map[string]string{"eln_sample_location": "   "})
 	store := &fakeSecretStore{entries: map[string]string{"eln_sample_location": "\t\n"}}
-	if got := resolveSampleLocationName(env, store); got != "" {
+	if got := resolveSampleLocationName(env, store, ELNSampleLocationKey); got != "" {
 		t.Errorf("all-blank config: expected empty; got %q", got)
 	}
 }
@@ -227,8 +227,32 @@ func TestResolveSampleLocationName_BlankFallsThrough(t *testing.T) {
 func TestResolveSampleLocationName_NilEnvOrStore(t *testing.T) {
 	// Defensive: callers may pass nil for either. Should return empty
 	// (not panic).
-	if got := resolveSampleLocationName(nil, nil); got != "" {
+	if got := resolveSampleLocationName(nil, nil, ELNSampleLocationKey); got != "" {
 		t.Errorf("nil env + nil store: got %q, want empty", got)
+	}
+}
+
+func TestResolveSampleLocationName_KeysAreIndependent(t *testing.T) {
+	// The two flows (`mus eln sample` and `mus irods upload`) read
+	// different keys and do NOT cross-fall-back. This lets a lab
+	// route local samples to one storage unit and iRODS samples to
+	// another (e.g. drafts freezer vs permanent-archive freezer)
+	// without having them share values.
+	env := envFromMap(t, map[string]string{"eln_sample_location": "Drafts"})
+	store := &fakeSecretStore{entries: map[string]string{"eln_irods_sample_location": "Archive"}}
+
+	if got := resolveSampleLocationName(env, store, ELNSampleLocationKey); got != "Drafts" {
+		t.Errorf("local key: got %q, want Drafts", got)
+	}
+	if got := resolveSampleLocationName(env, store, ELNIRODSSampleLocationKey); got != "Archive" {
+		t.Errorf("iRODS key: got %q, want Archive", got)
+	}
+
+	// Setting only the local key does NOT leak to the iRODS key.
+	envLocalOnly := envFromMap(t, map[string]string{"eln_sample_location": "Drafts"})
+	emptyStore := &fakeSecretStore{}
+	if got := resolveSampleLocationName(envLocalOnly, emptyStore, ELNIRODSSampleLocationKey); got != "" {
+		t.Errorf("iRODS key should not read local key: got %q, want empty", got)
 	}
 }
 
