@@ -49,7 +49,7 @@ mus eln disable --global         # once per machine, in ~/.config/mus/mus.cfg
 
 ### 1c. Register file locations as ELN samples (`mus eln sample`)
 
-**Goal:** point the ELN at data on disk without ever duplicating the bytes. Every file becomes a Sample record whose `note` field carries `path=`/`sha256=`/`size=`/`mtime=`. All the samples in one invocation are grouped into a new SAMPLESOUT (or SAMPLESIN) section on the current experiment.
+**Goal:** point the ELN at data files on disk without ever copying the bytes. Every file becomes a Sample record; every batch invocation groups them under one fresh SAMPLESOUT (or SAMPLESIN) section on the linked experiment.
 
 ```bash
 mus eln sample -m "raw sequencing lanes, run 42" *.fastq.gz
@@ -59,6 +59,7 @@ Output:
 
 ```
 sample type: Data (id=1234)
+  storage: BADS Mango (storageID=42, root layer=1001)
   ✓ lane_01.fastq.gz → sample 17890001
   ✓ lane_02.fastq.gz → sample 17890002
   ✓ lane_03.fastq.gz → sample 17890003
@@ -68,61 +69,68 @@ linked 3 sample(s) to section 16148199 on experiment 1955928
 registered 3 (fresh 3 + recreated 0 + relinked orphans 0), skipped 0, failed 0
 ```
 
-**Per file, mus writes:**
+Each Sample carries:
 
-| Field | Value |
+| Sample field | Value written |
 | --- | --- |
 | `name` | file basename |
 | `description` | your `-m` message |
-| `note` | `path=<abs>\nsha256=<hex>\nsize=<n>\nmtime=<iso>` |
-| **`sampleMetas`** | **auto-fills any of the tenant's declared meta fields** — see below |
+| `note` | fallback provenance dump — `path=<abs>\nsha256=<hex>\nsize=<n>\nmtime=<iso>` (still written for tenants without meta-field setup — see below) |
+| `sampleMetas` | **auto-fills any of the tenant's declared meta fields** (see [meta autofill](#meta-field-autofill)) |
+| `storageLayerID` | root compartment of the configured [storage unit](#storage-location) — omitted if not configured |
 
-#### Meta-field auto-fill
-
-If the sample type has custom meta fields (managed by an ELN admin in Sample Types → Settings), mus fills any of these automatically whenever the tenant has declared them under these names (case-insensitive):
-
-| Meta key | Value mus fills |
-| --- | --- |
-| `path` | absolute local path (or iRODS path — see §2c below) |
-| `sha256sum` / `sha256` | file's sha256 hex |
-| `size_bytes` / `size` | file size in bytes |
-| `mtime` | file mtime ISO-8601 (UTC) |
-| `upload_data` / `upload_date` | upload timestamp (RFC3339 UTC) |
-| `upload_user` | OS username (from `user.Current`) |
-| `upload_from_server` | machine hostname (`os.Hostname()`) |
-| `upload_from_path` | absolute LOCAL path — same as `path` for `mus eln sample`, different for iRODS uploads |
-| `purl` | iRODS persistent URL (only set by iRODS uploads) |
-| `kind` | `file` / `folder` / `archive` |
-| `mus_version` | version of mus that made the upload |
-
-Fields the tenant hasn't declared are silently skipped — mus doesn't create ad-hoc meta fields (they'd be unsearchable in the ELN inventory per eLabNext's docs). Fields the tenant HAS declared but mus doesn't know about pass through untouched.
-
-To add these to your sample type: ELN → Sample Types → [Data] → Custom Meta → +Add Meta Field (Type TEXT, key exactly as above).
-
-#### Storage location (`eln_sample_location`)
-
-You can place every mus-created sample inside a **storage unit** (freezer / cabinet / rack) on the ELN — the samples land in the unit's root compartment, no fixed position. This is a search / discoverability aid: mus samples end up grouped in the ELN's storage browser instead of drifting rootless.
-
-Resolution order (first non-empty wins):
-
-1. `eln_sample_location=<name>` in the mus.cfg cascade (per-folder overrides `~/.config/mus/mus.cfg`).
-2. `eln_sample_location` in the secret store (sits next to `eln_url` / `eln_apikey`).
-
-**Nothing configured → nothing sent.** mus does not carry a compile-time default — samples are simply created without a placement, and the ELN shows them in the flat inventory listing. This is deliberate: labs that want the placement opt in.
-
-If a name IS configured but it doesn't match any storage unit on the tenant (typo, unit archived), mus warns once to stderr and still creates the samples — unplaced. The upload never fails on this.
-
-mus never CREATES a storage unit — the ELN admin needs to set it up in the UI once (Inventory → Storage → +New Storage). mus only looks it up by name.
+**Requires** `eln_experiment_id` in the mus.cfg cascade — set by `mus eln link <ID>` (see §1). The command refuses if unset.
 
 **Flags:**
 
 | Flag | Purpose |
 | --- | --- |
-| `-m / --message` | REQUIRED. Sample description AND section header (first line). |
+| `-m / --message` | REQUIRED. Becomes the sample description AND the section header (first line). |
 | `--type NAME` | Sample type name on the ELN tenant. Default `Data`. Case-insensitive. Refuses with the full list of available types if the name is unknown. |
 | `--section samplesout \| samplesin` | Section kind. **SAMPLESOUT** (default) = outputs the experiment produced; **SAMPLESIN** = inputs the experiment consumed. |
 
-**Requires** `eln_experiment_id` in the mus.cfg cascade — set by `mus eln link <ID>` (see §1). The command refuses if unset.
+Multiple files → one invocation → one section, all sharing the same `-m` message. Every file gets its own sample record.
+
+#### Meta-field auto-fill
+
+If the sample type on your tenant has custom meta fields (managed by an ELN admin in Sample Types → Settings), mus fills any it recognises automatically — case-insensitive match against the tenant's declared keys.
+
+For `mus eln sample` (local-file flow), the values are:
+
+| Meta key | Value mus fills |
+| --- | --- |
+| `path` | absolute local path |
+| `upload_from_path` | absolute local path (same as `path` for this flow — see §2a for the iRODS flow, where they differ) |
+| `sha256sum` / `sha256` | file's sha256 hex |
+| `size_bytes` / `size` | file size in bytes |
+| `mtime` | file mtime ISO-8601 (UTC) |
+| `upload_data` / `upload_date` | invocation timestamp (RFC3339 UTC) |
+| `upload_user` | OS username |
+| `upload_from_server` | machine hostname |
+| `kind` | always `file` for this flow |
+| `mus_version` | version of mus that ran the invocation |
+| `purl` | **not set** for `mus eln sample` — only populated by the iRODS flow |
+
+Fields the tenant hasn't declared are silently skipped. mus never creates ad-hoc meta fields (they'd be unsearchable in the ELN inventory per eLabNext's docs). Fields the tenant HAS declared but mus doesn't know about pass through untouched.
+
+To add these to your sample type: ELN → Sample Types → [Data] → Custom Meta → +Add Meta Field (Type TEXT, key exactly as above). One-time admin setup.
+
+#### Storage location
+
+You can place every mus-created sample inside a named **storage unit** (freezer / cabinet / rack) on the ELN — the samples land in the unit's root compartment; no fixed position. Aid for discoverability: mus samples end up grouped in the ELN's storage browser instead of drifting rootless.
+
+`mus eln sample` reads the key `eln_sample_location`. Resolution order (first non-empty wins):
+
+1. `eln_sample_location=<name>` in the mus.cfg cascade (per-folder overrides `~/.config/mus/mus.cfg`).
+2. `eln_sample_location` in the secret store (sits next to `eln_url` / `eln_apikey`).
+
+**Nothing configured → nothing sent.** No compile-time default — samples are created without a placement, and the ELN shows them in the flat inventory listing. Labs that want the placement opt in explicitly.
+
+If a name IS configured but doesn't match any storage unit on the tenant (typo, unit archived), mus prints one stderr warning and creates the samples anyway — unplaced. The command never fails on this.
+
+mus never CREATES a storage unit — an ELN admin needs to set it up in the UI once (Inventory → Storage → +New Storage). mus only looks it up by name.
+
+> **iRODS uploads use a DIFFERENT key** — `eln_irods_sample_location` — so a lab can route iRODS-archived samples to a permanent-archive freezer while local samples stay elsewhere. See §2a.
 
 #### Idempotency: safe to re-run
 
@@ -135,7 +143,7 @@ eln_sample_created_at=2026-06-24T12:34:56Z
 eln_sample_section_id=16148199
 ```
 
-On a re-run, mus makes ONE `GET /samples/{id}` per file to check the current server-side status and classifies each file into one of four buckets:
+On a re-run, mus makes ONE `GET /samples/{id}` per file to check the current server-side status and classifies each file into one of five buckets:
 
 | Situation | mus does | Output marker |
 | --- | --- | --- |
@@ -157,7 +165,7 @@ If EVERY file is in the "skip" bucket, mus does not create an empty section on t
 
 Depositors will occasionally archive samples from the ELN UI (say, after fixing a mislabeled file) and then re-run `mus eln sample` expecting a clean re-register. Without the archived-check mus would happily skip those files — the sidecar carries a `SampleID` and looks fully-registered. mus catches this by querying the sample's current state on every re-run.
 
-If you archive a sample AND want mus to recreate it, that is now automatic. If you want to force a fresh sample without archiving the old one, delete the `eln_sample_id` line from the file's `.mus` sidecar and re-run.
+If you archive a sample AND want mus to recreate it, that's now automatic. If you want to force a fresh sample without archiving the old one, delete the `eln_sample_id` line from the file's `.mus` sidecar and re-run.
 
 #### Recovery from partial failures
 
@@ -165,7 +173,7 @@ If the batch-link step fails mid-run (network glitch, HTTP error, section-creati
 - `eln_sample_id` (the sample was created — that's committed on the server)
 - but NOT `eln_sample_section_id` (the link never landed)
 
-That combination is the **orphan marker**. On the next `mus eln sample` invocation mus detects it, does NOT create a new sample, and re-uses the existing sample ID in the new section's batch-link. This means a failed batch-link is fully self-healing — just run the command again.
+That combination is the **orphan marker**. On the next `mus eln sample` invocation mus detects it, does NOT create a new sample, and re-uses the existing sample ID in the new section's batch-link. Failed batch-links are fully self-healing — just run the command again.
 
 #### Troubleshooting
 
@@ -173,9 +181,11 @@ That combination is the **orphan marker**. On the next `mus eln sample` invocati
 | --- | --- | --- |
 | `no eln_experiment_id in cascade` | Folder not linked yet | `mus eln link <ID>` (see §1) |
 | `no sample type named "X"` | `--type` doesn't match tenant | Command lists what's available; pick one or ask an ELN admin to add "Data" |
-| `HTTP 405: … does not support http method 'POST'` | You're on mus < 0.2.42 | `mus upgrade` — the link endpoint requires PUT |
-| Section created but empty on the ELN | Everything got skipped as "already registered"; on mus ≥ 0.2.43 this is prevented by the classification pass | Upgrade; or delete the sidecar's `eln_sample_id` line and re-run |
+| `HTTP 405: … does not support http method 'POST'` | Binary is mus < 0.2.42 | `mus upgrade` — the link endpoint requires PUT |
+| Duplicate sample records in Inventory → Samples | Binary is mus < 0.2.41 (double-POST bug on non-object response shapes) | `mus upgrade`. The duplicates left behind are orphan samples with no experiment link — safe to bulk-archive from the ELN UI. |
+| Section created but empty on the ELN | Everything got skipped as "already registered"; from 0.2.41 the classification pass prevents this by NOT creating a section when there's nothing to link | Upgrade; or delete the sidecar's `eln_sample_id` line and re-run |
 | `lookup sample N: HTTP 401` | ELN API key expired | `mus eln login` |
+| `⚠ ELN storage unit "…" not found` | Typo in `eln_sample_location`, or the unit was archived | `mus secret set eln_sample_location "<exact name>"` — check spelling; ELN unit names are case-sensitive on lookup |
 | Repeated re-runs create new sections every time | Working as intended — each invocation carries its own message, so it becomes its own section. Group your samples per intended section. | Don't split one batch across multiple commands |
 
 ### 1d. Attach file bytes to the ELN experiment (`mus eln attach`)
@@ -227,7 +237,7 @@ Rule of thumb: **data → `sample`; documentation → `attach`**. When in doubt,
 
 ## 2. Upload to iRODS
 
-Every upload needs a `-m / --message` describing what / why. Like a git commit message — stamped on the sidecar, on the iRODS object as a `mus_upload_message` AVU, and prepended to the auto-comment on the eLab experiment.
+Every upload needs a `-m / --message` describing what / why. Like a git commit message — stamped on the sidecar, on the iRODS object as a `mus_upload_message` AVU, and carried into the auto-created ELN sample records as the sample description + SAMPLESOUT section header.
 
 ### 2a. Single file
 
@@ -236,17 +246,36 @@ mus irods upload -m "raw fastq from VIB seq core" raw/sample01.fastq.gz
 ```
 
 What mus does, in order:
+
 1. Reads / refreshes `<file>.mus` sidecar (computes sha256 if new or stale).
 2. Builds the remote path: `<irods_home>/project/<data_project>/<safe_experiment_name>/<basename>`.
 3. Calls `iron upload --verify-checksum` (transport-integrity check).
 4. Calls `iron stat -j` to grab the iRODS catalog ID.
 5. Writes the sidecar with `irods_path`, `irods_url` (path-based browse), and `irods_purl` (persistent URL keyed on catalog ID — survives renames + moves).
 6. Stamps `mus_*` AVU metadata on the iRODS object (so it's self-describing without the local sidecar).
-7. **Registers each uploaded file as a Sample record on the linked eLab experiment** (SAMPLESOUT section, one section per invocation — same shape as `mus eln sample`). Sample `path` meta = iRODS path (NOT local); `upload_from_path` = local abs; `purl` = persistent URL; plus the full auto-fill list from §1c. Same idempotency + orphan-recovery rules. The samples ARE the ELN-side record — mus no longer posts a separate HTML summary comment; the samples cover the same information in structured, searchable, updateable form. Find them under Inventory → Samples.
+7. **Registers each uploaded file as a Sample record on the linked eLab experiment** — one fresh SAMPLESOUT section per invocation, one sample per file. Same shape and same command output as `mus eln sample` (§1c) — same idempotency, orphan-recovery, archived-detection, and empty-section suppression.
 
-Step 7 is best-effort — a failure leaves the iRODS upload untouched. `--no-eln` (deprecated alias: `--no-eln-comment`) opts out of the sample-registration entirely.
+The **only differences** between the two flows land in the sample's meta fields:
 
-**Storage-unit placement for iRODS-uploaded samples:** use the key `eln_irods_sample_location` (cascade > secret), separate from `eln_sample_location` which governs `mus eln sample` locations. Same "nothing configured → no placement" semantic. Distinct keys let a lab route iRODS-archived samples to a permanent-archive freezer while local drafts stay in a working freezer — set only one of the two, or set both.
+| Meta key | `mus eln sample` | `mus irods upload` |
+| --- | --- | --- |
+| `path` | absolute local path | **iRODS path** — the archived copy is the authoritative location |
+| `upload_from_path` | absolute local path (same as `path`) | absolute local path (the source, distinct from `path`) |
+| `purl` | not set | **iRODS persistent URL** (survives moves on Mango) |
+| `kind` | always `file` | `file` / `folder` / `archive` — matches what actually landed on iRODS |
+| everything else | (see §1c meta-autofill table) | same as `mus eln sample` |
+
+Step 7 is best-effort — a failure leaves the iRODS upload untouched (data is safe; the sample record is what didn't happen). Re-run to retry; mus's orphan-recovery picks up mid-batch failures automatically.
+
+`--no-eln` (deprecated alias: `--no-eln-comment`) opts out of the sample-registration entirely.
+
+**Storage-unit placement:** iRODS-uploaded samples use the key `eln_irods_sample_location` — **distinct from** `eln_sample_location`. Same cascade > secret resolution, same "nothing configured → no placement" semantic. The two keys do NOT cross-fall-back: a lab can route iRODS-archived samples to a permanent-archive freezer while local samples stay in a working freezer — set only one of the two, or set both.
+
+```sh
+# Recommended: set both to the same value if you want unified placement
+mus secret set eln_irods_sample_location "BADS Mango"
+mus secret set eln_sample_location       "BADS Mango"
+```
 
 ### 2b. Multiple files in one shot
 
@@ -255,7 +284,7 @@ mus irods upload -m "raw fastq drop" \
     raw/sample01.fastq.gz raw/sample02.fastq.gz raw/sample03.fastq.gz
 ```
 
-One message, one ELN comment, three uploads. Each gets its own sidecar.
+One message, three uploads, one SAMPLESOUT section on the experiment with three sample records. Each file gets its own sidecar; each sample carries the file's individual iRODS path + sha256 in its meta fields.
 
 ### 2c. Folder upload
 
@@ -298,7 +327,7 @@ If you packed, the local `scripts.tar.gz` is **kept by default** so a re-upload 
 mus irods upload -m "initial deposit" scripts/ raw/ final/data.h5ad
 ```
 
-One message applies to all three; one ELN comment lists everything.
+One message applies to all items; one SAMPLESOUT section on the experiment lists every uploaded file as its own sample record. Folder / archive uploads become individual samples too, with the `kind` meta field set to `folder` or `archive` so they're distinguishable in the ELN inventory.
 
 ---
 
