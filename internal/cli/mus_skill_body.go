@@ -326,6 +326,11 @@ deposit that isn't an h5ad or DE.
   ` + "`kind`" + `, ` + "`mus_version`" + `. Fields the tenant hasn't declared
   are silently skipped. Ad-hoc fields are NOT created (they'd be
   unsearchable in the ELN inventory).
+  Storage location: samples are placed inside a named storage unit
+  (freezer / cabinet). Resolution: ` + "`eln_sample_location`" + ` in the
+  mus.cfg cascade > secret store > compile-time default (` + "`BADS Mango`" + `
+  for the stock build). Not-found or typo → warn once, sample is still
+  created but without a placement.
 - ` + "`mus eln attach -m MSG FILES...`" + ` — upload file BYTES as
   attachments to a new FILE section on the current experiment. Use
   for protocols, figures, small documents that belong inside the

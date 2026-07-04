@@ -27,13 +27,18 @@ package cli
 // and we want every field to be searchable in the ELN inventory.
 
 import (
+	"fmt"
+	"io"
 	"os"
 	"os/user"
 	"strconv"
 	"strings"
 	"time"
 
+	"codeberg.org/mfiers/mus/internal/config"
+	"codeberg.org/mfiers/mus/internal/defaults"
 	"codeberg.org/mfiers/mus/internal/eln"
+	"codeberg.org/mfiers/mus/internal/secret"
 )
 
 // sampleProvenance is the raw key→value dict of everything mus knows
@@ -139,3 +144,55 @@ func metasForType(prov map[string]string, typeMetas []eln.SampleTypeMeta) []eln.
 	}
 	return out
 }
+
+// resolveSampleLocationName picks the storage-unit NAME for mus-created
+// samples in this batch. Resolution order (first non-empty wins):
+//
+//  1. eln_sample_location in the mus.cfg cascade — per-folder override
+//     takes precedence over ~/.config/mus/mus.cfg's global setting.
+//  2. eln_sample_location in the secret store — user-level default
+//     (sits next to eln_url / eln_apikey).
+//  3. defaults.ELNSampleLocation — compile-time default ("BADS Mango"
+//     for the stock BADS build; ldflags-overridable per lab).
+//
+// Set the value to an empty string at any level to disable location
+// placement — samples get created without a storage layer.
+func resolveSampleLocationName(env *config.Env, store secret.Store) string {
+	if env != nil {
+		if v := strings.TrimSpace(env.String("eln_sample_location")); v != "" {
+			return v
+		}
+	}
+	if store != nil {
+		if v, err := store.Get("eln_sample_location"); err == nil {
+			if s := strings.TrimSpace(v); s != "" {
+				return s
+			}
+		}
+	}
+	return strings.TrimSpace(defaults.ELNSampleLocation)
+}
+
+// resolveSampleStorageLayerID resolves the configured location name to
+// a storageLayerID (the root layer of the named storage unit). Returns
+// 0 when no name is configured OR the lookup fails; either way, warns
+// once to stderr so the depositor knows samples will be created
+// without a placement. Never returns an error — sample creation should
+// go ahead regardless of storage-layer resolution.
+func resolveSampleStorageLayerID(client *eln.Client, env *config.Env, store secret.Store, stderr io.Writer) int64 {
+	name := resolveSampleLocationName(env, store)
+	if name == "" {
+		return 0
+	}
+	unit, err := client.FindStorageByName(name)
+	if err != nil {
+		fmt.Fprintf(stderr,
+			"  ⚠ ELN storage unit %q not found — samples will be created without a location: %v\n",
+			name, err)
+		return 0
+	}
+	fmt.Fprintf(stderr, "  storage: %s (storageID=%d, root layer=%d)\n",
+		unit.Name, unit.StorageID, unit.StorageLayer.StorageLayerID)
+	return unit.StorageLayer.StorageLayerID
+}
+

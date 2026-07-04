@@ -366,6 +366,150 @@ func TestCreateSample_WithMetas(t *testing.T) {
 	}
 }
 
+func TestFindStorageByName(t *testing.T) {
+	// GET /storage returns a list; mus expects each entry to carry
+	// the expanded storageLayer.storageLayerID (root layer of the
+	// unit). Case-insensitive match; EQUIPMENT rows are filtered.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/storage", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("$expand") != "storageLayer" {
+			t.Errorf("expected $expand=storageLayer; got %q", r.URL.RawQuery)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{
+					"storageID":  10,
+					"name":       "BADS Mango",
+					"deviceType": "STORAGE",
+					"storageLayer": map[string]any{
+						"storageLayerID": 1001,
+					},
+				},
+				{
+					"storageID":  11,
+					"name":       "Centrifuge X",
+					"deviceType": "EQUIPMENT",
+					"storageLayer": map[string]any{
+						"storageLayerID": 1002,
+					},
+				},
+				{
+					"storageID":  12,
+					"name":       "Other Freezer",
+					"deviceType": "STORAGE",
+					"storageLayer": map[string]any{
+						"storageLayerID": 1003,
+					},
+				},
+			},
+		})
+	})
+	srv := httptest.NewServer(authMiddleware(t, "k", mux))
+	defer srv.Close()
+
+	c := New(srv.URL, "k")
+
+	// Exact case-insensitive match resolves the root layer.
+	got, err := c.FindStorageByName("bads mango")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.StorageID != 10 || got.StorageLayer.StorageLayerID != 1001 {
+		t.Errorf("unexpected match: %+v", got)
+	}
+
+	// EQUIPMENT rows are filtered — matching by name should miss.
+	if _, err := c.FindStorageByName("Centrifuge X"); err == nil {
+		t.Error("EQUIPMENT rows should not be matched as storage units")
+	}
+
+	// Unknown name — error should list ONLY the STORAGE-typed
+	// available units (Centrifuge X must be omitted).
+	_, err = c.FindStorageByName("nonexistent")
+	if err == nil {
+		t.Fatal("expected error for missing storage unit")
+	}
+	if !strings.Contains(err.Error(), "BADS Mango") ||
+		!strings.Contains(err.Error(), "Other Freezer") {
+		t.Errorf("error should list available STORAGE names; got %q", err.Error())
+	}
+	if strings.Contains(err.Error(), "Centrifuge X") {
+		t.Errorf("EQUIPMENT rows leaked into 'available' list: %q", err.Error())
+	}
+}
+
+func TestFindStorageByName_ZeroLayerReturnsError(t *testing.T) {
+	// A storage unit found by name but missing the root
+	// storageLayerID (e.g. the $expand wasn't honored) is unusable —
+	// mus can't place a sample against layer 0. Return an actionable
+	// error instead of silently pretending success.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/storage", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"storageID": 10, "name": "BADS Mango", "deviceType": "STORAGE"},
+			},
+		})
+	})
+	srv := httptest.NewServer(authMiddleware(t, "k", mux))
+	defer srv.Close()
+
+	c := New(srv.URL, "k")
+	_, err := c.FindStorageByName("BADS Mango")
+	if err == nil {
+		t.Fatal("expected error when root storageLayerID is missing")
+	}
+	if !strings.Contains(err.Error(), "storageLayer") {
+		t.Errorf("error should mention the missing storageLayer; got %q", err.Error())
+	}
+}
+
+func TestCreateSample_WithStorageLayerID(t *testing.T) {
+	// storageLayerID must round-trip verbatim to POST /samples.
+	// Zero (unset) must not appear in the body — the omitempty tag
+	// on the struct guarantees this; the test pins the behaviour so
+	// future refactors don't accidentally send storageLayerID=0.
+	var seenBodyWithID, seenBodyWithoutID []byte
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/samples", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(body), `"storageLayerID"`) {
+			seenBodyWithID = body
+		} else {
+			seenBodyWithoutID = body
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"sampleID": 55})
+	})
+	srv := httptest.NewServer(authMiddleware(t, "k", mux))
+	defer srv.Close()
+
+	c := New(srv.URL, "k")
+
+	// With ID → body carries it.
+	if _, err := c.CreateSample(CreateSampleReq{
+		SampleTypeID: 12, Name: "foo.tsv", StorageLayerID: 999,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if seenBodyWithID == nil {
+		t.Error("body with storageLayerID never seen")
+	}
+
+	// Without (zero) → body must omit the key.
+	if _, err := c.CreateSample(CreateSampleReq{
+		SampleTypeID: 12, Name: "foo.tsv",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if seenBodyWithoutID == nil {
+		t.Error("second request should have arrived without storageLayerID")
+	}
+	if strings.Contains(string(seenBodyWithoutID), "storageLayerID") {
+		t.Errorf("zero storageLayerID leaked into wire: %s", seenBodyWithoutID)
+	}
+}
+
 func TestIsNotFound_NonHTTPError(t *testing.T) {
 	// A plain error is NOT a 404 — mus must not misclassify network
 	// hiccups as "sample gone, please recreate".

@@ -238,18 +238,91 @@ func (c *Client) FindSampleTypeByName(name string) (*SampleType, error) {
 		name, strings.Join(names, ", "))
 }
 
+// Storage is one entry from GET /storage — a storage unit (freezer,
+// cabinet, rack) or an equipment record. mus uses it to resolve the
+// depositor's configured `eln_sample_location` name to the underlying
+// storageLayerID (the root compartment of the unit) that POST /samples
+// needs on the wire.
+//
+// Only StorageID + Name + StorageLayer.StorageLayerID are load-bearing
+// for mus; DeviceType lets us filter EQUIPMENT rows out of the match
+// (mus samples don't belong on centrifuges).
+type Storage struct {
+	StorageID    int64  `json:"storageID"`
+	Name         string `json:"name"`
+	DeviceType   string `json:"deviceType"` // "STORAGE" or "EQUIPMENT"
+	StorageLayer struct {
+		StorageLayerID int64 `json:"storageLayerID"`
+	} `json:"storageLayer"`
+}
+
+// ListStorage returns the tenant's storage units + equipment records.
+// The `$expand=storageLayer` query surfaces the root storageLayerID
+// inline so FindStorageByName can return the layer ID in one call.
+func (c *Client) ListStorage() ([]Storage, error) {
+	// Tenants have dozens of storage units at most; ask for a generous
+	// page and don't paginate. If a lab ever crosses 500 storage
+	// records this will need a real pager.
+	var out struct {
+		Data []Storage `json:"data"`
+	}
+	params := url.Values{}
+	params.Set("$records", "500")
+	params.Set("$expand", "storageLayer")
+	if err := c.get("storage", params, &out); err != nil {
+		return nil, fmt.Errorf("list storage: %w", err)
+	}
+	return out.Data, nil
+}
+
+// FindStorageByName returns the STORAGE-typed unit whose Name matches
+// `name` (case-insensitive exact match). EQUIPMENT records are
+// filtered out — samples don't belong on equipment. Returns nil + a
+// descriptive error listing the available STORAGE names when no unit
+// matches.
+func (c *Client) FindStorageByName(name string) (*Storage, error) {
+	units, err := c.ListStorage()
+	if err != nil {
+		return nil, err
+	}
+	needle := strings.ToLower(strings.TrimSpace(name))
+	var available []string
+	for i := range units {
+		if strings.ToUpper(units[i].DeviceType) == "EQUIPMENT" {
+			continue
+		}
+		available = append(available, units[i].Name)
+		if strings.ToLower(units[i].Name) == needle {
+			if units[i].StorageLayer.StorageLayerID == 0 {
+				return nil, fmt.Errorf(
+					"storage unit %q found but has no root storageLayerID — try `$expand=storageLayer` or re-check the unit in the ELN UI",
+					units[i].Name)
+			}
+			return &units[i], nil
+		}
+	}
+	return nil, fmt.Errorf(
+		"no storage unit named %q on this ELN tenant. Available: %s",
+		name, strings.Join(available, ", "))
+}
+
 // CreateSampleReq is the payload for POST /samples. Only sampleTypeID +
 // name are hard-required by eLabNext; Description and Note are used by
 // mus to record the depositor's `-m` message and the file's provenance
 // block (path / sha256 / size). SampleMetas populates any declared
 // sample-type meta fields at create time (see SampleMetaNew).
+// StorageLayerID places the sample inside a storage compartment — mus
+// sets this to the root layer of the configured `eln_sample_location`
+// storage unit; leaving it as zero creates the sample without a
+// location.
 type CreateSampleReq struct {
-	SampleTypeID int64            `json:"sampleTypeID"`
-	Name         string           `json:"name"`
-	Description  string           `json:"description,omitempty"`
-	Note         string           `json:"note,omitempty"`
-	AltID        string           `json:"altID,omitempty"`
-	SampleMetas  []SampleMetaNew  `json:"sampleMetas,omitempty"`
+	SampleTypeID   int64           `json:"sampleTypeID"`
+	Name           string          `json:"name"`
+	Description    string          `json:"description,omitempty"`
+	Note           string          `json:"note,omitempty"`
+	AltID          string          `json:"altID,omitempty"`
+	SampleMetas    []SampleMetaNew `json:"sampleMetas,omitempty"`
+	StorageLayerID int64           `json:"storageLayerID,omitempty"`
 }
 
 // SampleMetaNew is one entry in the POST /samples `sampleMetas` array.

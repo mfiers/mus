@@ -25,6 +25,7 @@ import (
 	"codeberg.org/mfiers/mus/internal/config"
 	"codeberg.org/mfiers/mus/internal/eln"
 	"codeberg.org/mfiers/mus/internal/folder"
+	"codeberg.org/mfiers/mus/internal/secret"
 	"codeberg.org/mfiers/mus/internal/sidecar"
 )
 
@@ -185,6 +186,11 @@ func postUploadRegisterSamplesInELN(env *config.Env, items []uploadedItem,
 		typeMetas = nil
 	}
 
+	// Same location resolution as `mus eln sample`. Non-fatal — a
+	// missing unit falls back to zero and samples land unplaced.
+	store, _ := secret.Open()
+	storageLayerID := resolveSampleStorageLayerID(client, env, store, stderr)
+
 	// --- classify each uploaded item -------------------------------
 	// Same buckets as runELNSample. The classifier lives inline here
 	// rather than sharing with eln_sample.go because the two flows
@@ -326,10 +332,11 @@ func postUploadRegisterSamplesInELN(env *config.Env, items []uploadedItem,
 		metas := metasForType(provDict, typeMetas)
 
 		sample, err := client.CreateSample(eln.CreateSampleReq{
-			SampleTypeID: st.ID,
-			Name:         filepath.Base(it.RemotePath),
-			Description:  message,
-			SampleMetas:  metas,
+			SampleTypeID:   st.ID,
+			Name:           filepath.Base(it.RemotePath),
+			Description:    message,
+			SampleMetas:    metas,
+			StorageLayerID: storageLayerID,
 		})
 		if err != nil {
 			fmt.Fprintf(stderr,

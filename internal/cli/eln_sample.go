@@ -37,6 +37,7 @@ import (
 	"codeberg.org/mfiers/mus/internal/config"
 	"codeberg.org/mfiers/mus/internal/eln"
 	"codeberg.org/mfiers/mus/internal/hashcache"
+	"codeberg.org/mfiers/mus/internal/secret"
 	"codeberg.org/mfiers/mus/internal/sidecar"
 )
 
@@ -157,6 +158,13 @@ func runELNSample(cmd *cobra.Command, args []string, message, sampleTypeName, se
 		fmt.Fprintf(stderr, "  ⚠ could not fetch sample-type meta fields: %v — auto-fill disabled for this batch\n", err)
 		typeMetas = nil
 	}
+
+	// Resolve the storage-unit location (eln_sample_location — cascade
+	// > secret store > baked-in default "BADS Mango"). Zero means "no
+	// placement" — samples are created without a storage layer.
+	// Non-fatal: a missing unit just falls back to zero and warns.
+	store, _ := secret.Open()
+	storageLayerID := resolveSampleStorageLayerID(client, env, store, stderr)
 
 	// Collect the input files (absolute paths, skipping *.mus sidecars).
 	files, err := collectSampleInputs(args)
@@ -329,11 +337,12 @@ func runELNSample(cmd *cobra.Command, args []string, message, sampleTypeName, se
 		sampleMetas := metasForType(prov, typeMetas)
 
 		sample, err := client.CreateSample(eln.CreateSampleReq{
-			SampleTypeID: st.ID,
-			Name:         filepath.Base(w.abs),
-			Description:  message,
-			Note:         note,
-			SampleMetas:  sampleMetas,
+			SampleTypeID:   st.ID,
+			Name:           filepath.Base(w.abs),
+			Description:    message,
+			Note:           note,
+			SampleMetas:    sampleMetas,
+			StorageLayerID: storageLayerID,
 		})
 		if err != nil {
 			fmt.Fprintf(stderr, "  ✘ create sample %s: %v\n", filepath.Base(w.abs), err)

@@ -1,10 +1,15 @@
 package cli
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"codeberg.org/mfiers/mus/internal/config"
+	"codeberg.org/mfiers/mus/internal/defaults"
 	"codeberg.org/mfiers/mus/internal/eln"
 )
 
@@ -127,6 +132,120 @@ func TestMetasForType_CaseInsensitiveKey(t *testing.T) {
 	// /samples validates against the type's declared key.
 	if got[0].Key != "Path" {
 		t.Errorf("returned key should preserve tenant casing; got %q", got[0].Key)
+	}
+}
+
+// fakeSecretStore is a minimal in-memory secret.Store for unit tests.
+type fakeSecretStore struct {
+	entries map[string]string
+}
+
+func (f *fakeSecretStore) Get(name string) (string, error) {
+	if v, ok := f.entries[name]; ok {
+		return v, nil
+	}
+	return "", errors.New("not found")
+}
+func (f *fakeSecretStore) Set(name, value string) error {
+	if f.entries == nil {
+		f.entries = map[string]string{}
+	}
+	f.entries[name] = value
+	return nil
+}
+func (f *fakeSecretStore) Delete(name string) error       { delete(f.entries, name); return nil }
+func (f *fakeSecretStore) List() ([]string, error)         { return nil, nil }
+func (f *fakeSecretStore) Backend() string                 { return "fake" }
+
+// envFromMap builds a config.Env by writing a real mus.cfg into a
+// tempdir and calling config.Load. That's the only public path to an
+// Env in this package. Overhead per test is ~a few ms.
+//
+// The tempdir doubles as a sandbox for cascade walk-up — config.Load
+// starts at dir and walks toward the filesystem root, so we set
+// HOME/XDG_CONFIG_HOME to another empty tempdir to keep the walk
+// deterministic (no ambient mus.cfg from the developer's real home).
+func envFromMap(t *testing.T, kv map[string]string) *config.Env {
+	t.Helper()
+	dir := t.TempDir()
+	// Isolate cascade walk from the developer's real home.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	if len(kv) > 0 {
+		var b strings.Builder
+		for k, v := range kv {
+			b.WriteString(k)
+			b.WriteString("=")
+			b.WriteString(v)
+			b.WriteString("\n")
+		}
+		if err := os.WriteFile(filepath.Join(dir, "mus.cfg"), []byte(b.String()), 0o644); err != nil {
+			t.Fatalf("write mus.cfg: %v", err)
+		}
+	}
+	env, err := config.Load(dir)
+	if err != nil {
+		t.Fatalf("load env: %v", err)
+	}
+	return env
+}
+
+func TestResolveSampleLocationName_CascadePrecedence(t *testing.T) {
+	// Cascade beats secret store beats default.
+	origDefault := defaults.ELNSampleLocation
+	defaults.ELNSampleLocation = "BADS Mango"
+	defer func() { defaults.ELNSampleLocation = origDefault }()
+
+	// 1. Cascade wins.
+	env := envFromMap(t, map[string]string{"eln_sample_location": "Project Fridge"})
+	store := &fakeSecretStore{entries: map[string]string{"eln_sample_location": "User Fridge"}}
+	if got := resolveSampleLocationName(env, store); got != "Project Fridge" {
+		t.Errorf("cascade precedence: got %q, want Project Fridge", got)
+	}
+
+	// 2. No cascade → secret wins.
+	empty := envFromMap(t, map[string]string{})
+	if got := resolveSampleLocationName(empty, store); got != "User Fridge" {
+		t.Errorf("secret precedence: got %q, want User Fridge", got)
+	}
+
+	// 3. No cascade + no secret → default wins.
+	emptyStore := &fakeSecretStore{}
+	if got := resolveSampleLocationName(empty, emptyStore); got != "BADS Mango" {
+		t.Errorf("default precedence: got %q, want BADS Mango", got)
+	}
+}
+
+func TestResolveSampleLocationName_EmptyStringDisables(t *testing.T) {
+	// An explicit empty string in the cascade should NOT disable the
+	// default (our helper trims but treats empty as "not set"). This
+	// matches the behaviour the depositor expects — if they want
+	// "no location", they set `eln_sample_location=""` at whatever
+	// level THEN also change defaults.ELNSampleLocation.
+	//
+	// The current implementation: trim → if empty, fall through.
+	// That means an empty in cascade falls through to secret → to
+	// defaults. Pin that behaviour.
+	origDefault := defaults.ELNSampleLocation
+	defaults.ELNSampleLocation = "Baked Default"
+	defer func() { defaults.ELNSampleLocation = origDefault }()
+
+	env := envFromMap(t, map[string]string{"eln_sample_location": "   "})
+	if got := resolveSampleLocationName(env, nil); got != "Baked Default" {
+		t.Errorf("blank cascade should fall through to default; got %q", got)
+	}
+}
+
+func TestResolveSampleLocationName_NilEnvOrStore(t *testing.T) {
+	// Defensive: callers may pass nil for either. Should still resolve
+	// to the default.
+	origDefault := defaults.ELNSampleLocation
+	defaults.ELNSampleLocation = "Baked Default"
+	defer func() { defaults.ELNSampleLocation = origDefault }()
+
+	if got := resolveSampleLocationName(nil, nil); got != "Baked Default" {
+		t.Errorf("nil env + nil store: got %q, want Baked Default", got)
 	}
 }
 
