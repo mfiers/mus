@@ -114,6 +114,68 @@ func TestCreateSample(t *testing.T) {
 	}
 }
 
+func TestCreateSample_BareIntegerResponse_NoDoublePost(t *testing.T) {
+	// Regression: some eLabNext tenants return the new sampleID as a
+	// bare JSON integer (`17872336`) instead of the full sample
+	// object. Before the fix, CreateSample would issue a SECOND POST
+	// to /samples as a fallback — and eLabNext, having no idempotency
+	// key, would create ANOTHER sample. Depositors saw duplicates.
+	//
+	// This test asserts exactly ONE POST reaches the server and the
+	// bare-int response is decoded correctly.
+	var postCount int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/samples", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method %s", r.Method)
+		}
+		postCount++
+		_, _ = w.Write([]byte("17872336"))
+	})
+	srv := httptest.NewServer(authMiddleware(t, "k", mux))
+	defer srv.Close()
+
+	c := New(srv.URL, "k")
+	got, err := c.CreateSample(CreateSampleReq{
+		SampleTypeID: 12, Name: "foo.tsv", Description: "test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != 17872336 {
+		t.Errorf("ID: got %d, want 17872336", got.ID)
+	}
+	if postCount != 1 {
+		t.Fatalf("expected exactly ONE POST /samples; got %d — duplicates on the wire", postCount)
+	}
+}
+
+func TestCreateSample_EmptyBodyErrors(t *testing.T) {
+	// If the server returns 2xx with an empty body, mus can't know
+	// the sample ID — retrying would duplicate.  Return a specific,
+	// actionable error instead.
+	var postCount int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/samples", func(w http.ResponseWriter, r *http.Request) {
+		postCount++
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewServer(authMiddleware(t, "k", mux))
+	defer srv.Close()
+
+	c := New(srv.URL, "k")
+	_, err := c.CreateSample(CreateSampleReq{SampleTypeID: 12, Name: "foo.tsv"})
+	if err == nil {
+		t.Fatal("empty body should error")
+	}
+	if !strings.Contains(err.Error(), "empty response") {
+		t.Errorf("error should mention empty response; got %v", err)
+	}
+	if postCount != 1 {
+		t.Errorf("expected exactly ONE POST on empty-body path; got %d", postCount)
+	}
+}
+
 func TestCreateSample_RejectsEmptyName(t *testing.T) {
 	c := New("http://ignored", "k")
 	if _, err := c.CreateSample(CreateSampleReq{SampleTypeID: 12}); err == nil {

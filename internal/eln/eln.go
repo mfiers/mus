@@ -417,7 +417,9 @@ func IsNotFound(err error) bool {
 // CreateSample creates one sample. Returns the new sampleID.
 //
 // The response body is either the sample object OR a bare integer
-// (older tenants); we handle both by trying integer-parse first.
+// (older tenants). Both parse attempts run against the SAME response
+// body from a SINGLE POST — retrying would create a duplicate sample
+// on the server side, since POST /samples has no idempotency key.
 func (c *Client) CreateSample(req CreateSampleReq) (*Sample, error) {
 	if req.SampleTypeID == 0 {
 		return nil, errors.New("CreateSample: SampleTypeID is required")
@@ -425,21 +427,32 @@ func (c *Client) CreateSample(req CreateSampleReq) (*Sample, error) {
 	if req.Name == "" {
 		return nil, errors.New("CreateSample: Name is required")
 	}
-	// Try full-object response first — that's what modern eLabNext
-	// returns.
-	var full Sample
-	if err := c.post("samples", req, &full); err == nil && full.ID != 0 {
-		return &full, nil
-	}
-	// Fallback: bare integer sampleID. Older tenants returned this.
-	var id int64
-	if err := c.post("samples", req, &id); err != nil {
+	// One POST → raw body → try both shapes locally.
+	var raw json.RawMessage
+	if err := c.post("samples", req, &raw); err != nil {
 		return nil, fmt.Errorf("create sample: %w", err)
 	}
-	if id == 0 {
-		return nil, errors.New("create sample: empty response")
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		// 2xx with empty body — eLabNext DID create the sample but
+		// didn't tell us the ID. We can't safely retry (that would
+		// duplicate) and we can't link an unknown ID.  Surface a
+		// specific error the depositor can act on.
+		return nil, errors.New("create sample: empty response body (sample may have been created but ID is unknown — check the ELN inventory)")
 	}
-	return &Sample{ID: id, Name: req.Name, SampleTypeID: req.SampleTypeID}, nil
+	// Bare integer? Try this first — it's the more compact response
+	// shape and json.Unmarshal for the object shape happens to
+	// tolerate weird inputs unpredictably.
+	var id int64
+	if err := json.Unmarshal(trimmed, &id); err == nil && id > 0 {
+		return &Sample{ID: id, Name: req.Name, SampleTypeID: req.SampleTypeID}, nil
+	}
+	// Full object shape.
+	var full Sample
+	if err := json.Unmarshal(trimmed, &full); err == nil && full.ID != 0 {
+		return &full, nil
+	}
+	return nil, fmt.Errorf("create sample: could not parse response as sampleID or Sample object: %s", trimmed)
 }
 
 // CreateExperimentSection appends a section of the given type to the
