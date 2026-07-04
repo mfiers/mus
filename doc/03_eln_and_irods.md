@@ -75,6 +75,29 @@ registered 3 (fresh 3 + recreated 0 + relinked orphans 0), skipped 0, failed 0
 | `name` | file basename |
 | `description` | your `-m` message |
 | `note` | `path=<abs>\nsha256=<hex>\nsize=<n>\nmtime=<iso>` |
+| **`sampleMetas`** | **auto-fills any of the tenant's declared meta fields** — see below |
+
+#### Meta-field auto-fill
+
+If the sample type has custom meta fields (managed by an ELN admin in Sample Types → Settings), mus fills any of these automatically whenever the tenant has declared them under these names (case-insensitive):
+
+| Meta key | Value mus fills |
+| --- | --- |
+| `path` | absolute local path (or iRODS path — see §2c below) |
+| `sha256sum` / `sha256` | file's sha256 hex |
+| `size_bytes` / `size` | file size in bytes |
+| `mtime` | file mtime ISO-8601 (UTC) |
+| `upload_data` / `upload_date` | upload timestamp (RFC3339 UTC) |
+| `upload_user` | OS username (from `user.Current`) |
+| `upload_from_server` | machine hostname (`os.Hostname()`) |
+| `upload_from_path` | absolute LOCAL path — same as `path` for `mus eln sample`, different for iRODS uploads |
+| `purl` | iRODS persistent URL (only set by iRODS uploads) |
+| `kind` | `file` / `folder` / `archive` |
+| `mus_version` | version of mus that made the upload |
+
+Fields the tenant hasn't declared are silently skipped — mus doesn't create ad-hoc meta fields (they'd be unsearchable in the ELN inventory per eLabNext's docs). Fields the tenant HAS declared but mus doesn't know about pass through untouched.
+
+To add these to your sample type: ELN → Sample Types → [Data] → Custom Meta → +Add Meta Field (Type TEXT, key exactly as above).
 
 **Flags:**
 
@@ -204,7 +227,10 @@ What mus does, in order:
 4. Calls `iron stat -j` to grab the iRODS catalog ID.
 5. Writes the sidecar with `irods_path`, `irods_url` (path-based browse), and `irods_purl` (persistent URL keyed on catalog ID — survives renames + moves).
 6. Stamps `mus_*` AVU metadata on the iRODS object (so it's self-describing without the local sidecar).
-7. Posts a one-line comment to the linked eLab experiment with the persistent URL.
+7. Posts a summary COMMENT to the linked eLab experiment (who / when / list of files with PURLs).
+8. **Registers each uploaded file as a Sample record on the same experiment** (SAMPLESOUT section). Sample `path` = iRODS path (NOT local); `upload_from_path` = local abs; `purl` = persistent URL. Same idempotency + orphan-recovery rules as `mus eln sample` (see §1c). This replaces the old ad-hoc HTML table of uploads: the samples are the structured, searchable, updateable record — you'll find them under Inventory → Samples in the ELN.
+
+Steps 7 and 8 are best-effort — a failure in either leaves the iRODS upload untouched. `--no-eln-comment` opts out of BOTH (the flag name predates the sample-registration; it's kept for backwards compatibility).
 
 ### 2b. Multiple files in one shot
 

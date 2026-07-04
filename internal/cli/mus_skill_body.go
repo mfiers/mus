@@ -310,21 +310,35 @@ deposit that isn't an h5ad or DE.
   SAMPLESOUT (or SAMPLESIN) section. Sidecar stamps ` + "`eln_sample_id`" + `
   so re-runs are idempotent. Use for data files that live on the NAS
   and shouldn't be duplicated inside the notebook.
+  Multiple files with one message — ` + "`mus eln sample -m MSG a b c`" + ` —
+  all land in the same section with the same description.
   On re-run, mus queries each recorded sample's server-side status —
   files whose prior sample was archived or hard-deleted are re-created
   from scratch (marker: ` + "`↻`" + `), files with a live sample but a
   missing section link get re-linked (marker: ` + "`↺`" + ` — orphan
   recovery). If EVERY file is already fully registered, no section is
   created.
+  Meta autofill: mus populates any of these fields the tenant has
+  declared on the sample type — ` + "`path`" + `, ` + "`sha256sum`" + ` /
+  ` + "`sha256`" + `, ` + "`size_bytes`" + ` / ` + "`size`" + `, ` + "`mtime`" + `,
+  ` + "`upload_data`" + ` / ` + "`upload_date`" + `, ` + "`upload_user`" + `,
+  ` + "`upload_from_server`" + `, ` + "`upload_from_path`" + `, ` + "`purl`" + `,
+  ` + "`kind`" + `, ` + "`mus_version`" + `. Fields the tenant hasn't declared
+  are silently skipped. Ad-hoc fields are NOT created (they'd be
+  unsearchable in the ELN inventory).
 - ` + "`mus eln attach -m MSG FILES...`" + ` — upload file BYTES as
   attachments to a new FILE section on the current experiment. Use
   for protocols, figures, small documents that belong inside the
   notebook page. Sidecar stamps ` + "`eln_attachment_journal_id`" + `.
 
-(Post-upload ELN commenting is automatic on a successful
-` + "`mus irods upload`" + ` to a linked folder; there's no standalone
-` + "`mus eln upload`" + ` command — attachments and comments piggyback
-on the upload + tag flows.)
+(Post-upload ELN wiring is automatic on a successful
+` + "`mus irods upload`" + ` to a linked folder: (a) a summary COMMENT
+section with the file table and PURLs, and (b) ONE Sample record per
+uploaded file on a fresh SAMPLESOUT section — path=iRODS path,
+upload_from_path=local abs, plus the full meta autofill. The samples
+are the structured record; the comment is the human-readable
+summary. Same idempotency + orphan-recovery as ` + "`mus eln sample`" + `.
+` + "`--no-eln-comment`" + ` opts out of BOTH.)
 
 ### Vocab / config
 

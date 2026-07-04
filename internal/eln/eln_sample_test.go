@@ -280,6 +280,92 @@ func TestGetSample_EmptyBodyIsNotFound(t *testing.T) {
 	}
 }
 
+func TestListSampleTypeMetas(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/sampleTypes/42/meta", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("method %s, want GET", r.Method)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"sampleTypeMetaID": 100, "key": "path", "sampleDataType": "TEXT"},
+				{"sampleTypeMetaID": 101, "key": "sha256sum", "sampleDataType": "TEXT"},
+				{"sampleTypeMetaID": 102, "key": "size_bytes", "sampleDataType": "NUMERIC"},
+			},
+		})
+	})
+	srv := httptest.NewServer(authMiddleware(t, "k", mux))
+	defer srv.Close()
+
+	c := New(srv.URL, "k")
+	metas, err := c.ListSampleTypeMetas(42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(metas) != 3 {
+		t.Fatalf("got %d metas, want 3", len(metas))
+	}
+	if metas[0].SampleTypeMetaID != 100 || metas[0].Key != "path" || metas[0].SampleDataType != "TEXT" {
+		t.Errorf("first meta: %+v", metas[0])
+	}
+	if metas[2].SampleDataType != "NUMERIC" {
+		t.Errorf("third meta datatype: got %q, want NUMERIC", metas[2].SampleDataType)
+	}
+}
+
+func TestCreateSample_WithMetas(t *testing.T) {
+	// The sampleMetas array must round-trip verbatim to POST /samples.
+	// eLabNext validates the keys against the sample type's declared
+	// fields, so mus must send the exact key the tenant configured
+	// (case preserved by metasForType).
+	mux := http.NewServeMux()
+	mux.HandleFunc("/samples", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			SampleTypeID int64 `json:"sampleTypeID"`
+			Name         string
+			SampleMetas  []map[string]string `json:"sampleMetas"`
+		}
+		_ = json.Unmarshal(body, &req)
+		if len(req.SampleMetas) != 2 {
+			t.Fatalf("sampleMetas count: got %d, want 2 — body was %s",
+				len(req.SampleMetas), body)
+		}
+		byKey := map[string]map[string]string{}
+		for _, m := range req.SampleMetas {
+			byKey[m["key"]] = m
+		}
+		if byKey["path"]["value"] != "/local/foo.tsv" {
+			t.Errorf("path meta: %+v", byKey["path"])
+		}
+		if byKey["path"]["sampleDataType"] != "TEXT" {
+			t.Errorf("path dataType: %q", byKey["path"]["sampleDataType"])
+		}
+		if byKey["sha256sum"]["value"] != "abc123" {
+			t.Errorf("sha256sum meta: %+v", byKey["sha256sum"])
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"sampleID": 55})
+	})
+	srv := httptest.NewServer(authMiddleware(t, "k", mux))
+	defer srv.Close()
+
+	c := New(srv.URL, "k")
+	s, err := c.CreateSample(CreateSampleReq{
+		SampleTypeID: 12,
+		Name:         "foo.tsv",
+		SampleMetas: []SampleMetaNew{
+			{Key: "path", SampleDataType: "TEXT", Value: "/local/foo.tsv"},
+			{Key: "sha256sum", SampleDataType: "TEXT", Value: "abc123"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.ID != 55 {
+		t.Errorf("sampleID: %d", s.ID)
+	}
+}
+
 func TestIsNotFound_NonHTTPError(t *testing.T) {
 	// A plain error is NOT a 404 — mus must not misclassify network
 	// hiccups as "sample gone, please recreate".

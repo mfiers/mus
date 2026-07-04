@@ -188,6 +188,14 @@ func TestMusSkill_BodyMentionsDEFlow(t *testing.T) {
 		// mus 0.2.43+ — archived-sample recreate + orphan recovery
 		"prior sample was archived or hard-deleted",
 		"orphan\n  recovery",
+		// mus 0.2.43+ — meta autofill on sample records
+		"Meta autofill",
+		"upload_from_path",
+		"upload_from_server",
+		"mus_version",
+		// mus 0.2.43+ — auto-sample on irods upload
+		"ONE Sample record per\nuploaded file",
+		"path=iRODS path",
 	}
 	for _, req := range requirements {
 		if !strings.Contains(musBody, req) {

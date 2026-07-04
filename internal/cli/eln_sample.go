@@ -139,12 +139,24 @@ func runELNSample(cmd *cobra.Command, args []string, message, sampleTypeName, se
 		return err
 	}
 
-	// Resolve the sampleType once for the batch.
+	// Resolve the sampleType once for the batch, and fetch its meta
+	// definitions so we know which auto-fill fields the tenant has
+	// declared (path / sha256sum / size_bytes / mtime / upload_* /
+	// mus_version — see eln_sample_provenance.go for the full list).
+	// Only the ones the tenant declared get populated on POST /samples.
 	st, err := client.FindSampleTypeByName(sampleTypeName)
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(stdout, "sample type: %s (id=%d)\n", st.Name, st.ID)
+	typeMetas, err := client.ListSampleTypeMetas(st.ID)
+	if err != nil {
+		// Non-fatal — a tenant without meta definitions is still
+		// usable; mus just skips the auto-fill and falls back to
+		// note-only. Warn once so the depositor knows.
+		fmt.Fprintf(stderr, "  ⚠ could not fetch sample-type meta fields: %v — auto-fill disabled for this batch\n", err)
+		typeMetas = nil
+	}
 
 	// Collect the input files (absolute paths, skipping *.mus sidecars).
 	files, err := collectSampleInputs(args)
@@ -301,11 +313,27 @@ func runELNSample(cmd *cobra.Command, args []string, message, sampleTypeName, se
 			"size=" + strconv.FormatInt(fi.Size(), 10) + "\n" +
 			"mtime=" + fi.ModTime().UTC().Format(time.RFC3339)
 
+		// Auto-fill the tenant's declared sample-type meta fields.
+		// For `mus eln sample` the sample's `path` = local abs and
+		// `upload_from_path` = local abs (they're the same); iRODS
+		// uploads differ (see postUploadRegisterSamplesInELN).
+		prov := buildProvenanceDict(sampleProvenance{
+			path:           w.abs,
+			uploadFromPath: w.abs,
+			sha256:         sha,
+			sizeBytes:      fi.Size(),
+			mtime:          fi.ModTime(),
+			uploadTime:     now,
+			kind:           "file",
+		})
+		sampleMetas := metasForType(prov, typeMetas)
+
 		sample, err := client.CreateSample(eln.CreateSampleReq{
 			SampleTypeID: st.ID,
 			Name:         filepath.Base(w.abs),
 			Description:  message,
 			Note:         note,
+			SampleMetas:  sampleMetas,
 		})
 		if err != nil {
 			fmt.Fprintf(stderr, "  ✘ create sample %s: %v\n", filepath.Base(w.abs), err)

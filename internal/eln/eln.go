@@ -241,13 +241,54 @@ func (c *Client) FindSampleTypeByName(name string) (*SampleType, error) {
 // CreateSampleReq is the payload for POST /samples. Only sampleTypeID +
 // name are hard-required by eLabNext; Description and Note are used by
 // mus to record the depositor's `-m` message and the file's provenance
-// block (path / sha256 / size).
+// block (path / sha256 / size). SampleMetas populates any declared
+// sample-type meta fields at create time (see SampleMetaNew).
 type CreateSampleReq struct {
-	SampleTypeID int64  `json:"sampleTypeID"`
-	Name         string `json:"name"`
-	Description  string `json:"description,omitempty"`
-	Note         string `json:"note,omitempty"`
-	AltID        string `json:"altID,omitempty"`
+	SampleTypeID int64            `json:"sampleTypeID"`
+	Name         string           `json:"name"`
+	Description  string           `json:"description,omitempty"`
+	Note         string           `json:"note,omitempty"`
+	AltID        string           `json:"altID,omitempty"`
+	SampleMetas  []SampleMetaNew  `json:"sampleMetas,omitempty"`
+}
+
+// SampleMetaNew is one entry in the POST /samples `sampleMetas` array.
+// Key + SampleDataType are required; Value carries the string
+// representation for TEXT/TEXTAREA/NUMERIC/DATE/DATETIME fields. Keys
+// must exist on the sample type (POST /samples rejects unknown ones).
+type SampleMetaNew struct {
+	Key            string `json:"key"`
+	SampleDataType string `json:"sampleDataType"`
+	Value          string `json:"value,omitempty"`
+}
+
+// SampleTypeMeta is one meta-field definition on a sample type,
+// returned by GET /sampleTypes/{id}/meta. mus uses it to discover
+// which of its known auto-fill fields (path, sha256sum, size_bytes,
+// mtime, upload_*, mus_version) the current tenant has declared —
+// unknown-to-mus fields are ignored, mus-known-but-undeclared fields
+// are silently skipped.
+type SampleTypeMeta struct {
+	SampleTypeMetaID int64  `json:"sampleTypeMetaID"`
+	Key              string `json:"key"`
+	SampleDataType   string `json:"sampleDataType"`
+}
+
+// ListSampleTypeMetas returns the meta-field definitions on the given
+// sample type. Empty result is a valid answer (a tenant may configure
+// the type without any custom fields — mus falls back to name + note).
+func (c *Client) ListSampleTypeMetas(sampleTypeID int64) ([]SampleTypeMeta, error) {
+	// The endpoint paginates like /samples but tenants rarely have
+	// more than ~20 fields on one type; ask for a generous cap.
+	var out struct {
+		Data []SampleTypeMeta `json:"data"`
+	}
+	params := url.Values{}
+	params.Set("$records", "500")
+	if err := c.get(fmt.Sprintf("sampleTypes/%d/meta", sampleTypeID), params, &out); err != nil {
+		return nil, fmt.Errorf("list meta for sampleType %d: %w", sampleTypeID, err)
+	}
+	return out.Data, nil
 }
 
 // Sample is the response shape from POST /samples and GET /samples/{id}.

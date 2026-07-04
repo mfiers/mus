@@ -716,6 +716,12 @@ func runIRODSUpload(cmd *cobra.Command, args []string, opts iron.UploadOpts, ove
 	}
 
 	postUploadCommentToELN(env, uploads, opts.DryRun, postELNComment, message, cmd.ErrOrStderr())
+	// Register each uploaded item as an ELN Sample on the same
+	// experiment (SAMPLESOUT section, one section per invocation).
+	// Same opt-out flag as the HTML comment for the moment — if you
+	// want the summary comment but not the samples (or vice-versa),
+	// this is where to split them later.
+	postUploadRegisterSamplesInELN(env, uploads, opts.DryRun, postELNComment, message, cmd.ErrOrStderr())
 	return nil
 }
 
