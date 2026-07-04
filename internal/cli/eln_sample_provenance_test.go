@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"codeberg.org/mfiers/mus/internal/config"
-	"codeberg.org/mfiers/mus/internal/defaults"
 	"codeberg.org/mfiers/mus/internal/eln"
 )
 
@@ -192,12 +191,9 @@ func envFromMap(t *testing.T, kv map[string]string) *config.Env {
 }
 
 func TestResolveSampleLocationName_CascadePrecedence(t *testing.T) {
-	// Cascade beats secret store beats default.
-	origDefault := defaults.ELNSampleLocation
-	defaults.ELNSampleLocation = "BADS Mango"
-	defer func() { defaults.ELNSampleLocation = origDefault }()
+	// Cascade beats secret store; nothing set → empty.
 
-	// 1. Cascade wins.
+	// 1. Cascade wins over secret.
 	env := envFromMap(t, map[string]string{"eln_sample_location": "Project Fridge"})
 	store := &fakeSecretStore{entries: map[string]string{"eln_sample_location": "User Fridge"}}
 	if got := resolveSampleLocationName(env, store); got != "Project Fridge" {
@@ -210,42 +206,29 @@ func TestResolveSampleLocationName_CascadePrecedence(t *testing.T) {
 		t.Errorf("secret precedence: got %q, want User Fridge", got)
 	}
 
-	// 3. No cascade + no secret → default wins.
+	// 3. No cascade + no secret → empty (no placement).
 	emptyStore := &fakeSecretStore{}
-	if got := resolveSampleLocationName(empty, emptyStore); got != "BADS Mango" {
-		t.Errorf("default precedence: got %q, want BADS Mango", got)
+	if got := resolveSampleLocationName(empty, emptyStore); got != "" {
+		t.Errorf("no config: expected empty string (no placement); got %q", got)
 	}
 }
 
-func TestResolveSampleLocationName_EmptyStringDisables(t *testing.T) {
-	// An explicit empty string in the cascade should NOT disable the
-	// default (our helper trims but treats empty as "not set"). This
-	// matches the behaviour the depositor expects — if they want
-	// "no location", they set `eln_sample_location=""` at whatever
-	// level THEN also change defaults.ELNSampleLocation.
-	//
-	// The current implementation: trim → if empty, fall through.
-	// That means an empty in cascade falls through to secret → to
-	// defaults. Pin that behaviour.
-	origDefault := defaults.ELNSampleLocation
-	defaults.ELNSampleLocation = "Baked Default"
-	defer func() { defaults.ELNSampleLocation = origDefault }()
-
+func TestResolveSampleLocationName_BlankFallsThrough(t *testing.T) {
+	// A blank / whitespace-only value at ANY level should fall
+	// through to the next level, and if nothing else is set, resolve
+	// to the empty string. Mirrors the "no placement" semantic.
 	env := envFromMap(t, map[string]string{"eln_sample_location": "   "})
-	if got := resolveSampleLocationName(env, nil); got != "Baked Default" {
-		t.Errorf("blank cascade should fall through to default; got %q", got)
+	store := &fakeSecretStore{entries: map[string]string{"eln_sample_location": "\t\n"}}
+	if got := resolveSampleLocationName(env, store); got != "" {
+		t.Errorf("all-blank config: expected empty; got %q", got)
 	}
 }
 
 func TestResolveSampleLocationName_NilEnvOrStore(t *testing.T) {
-	// Defensive: callers may pass nil for either. Should still resolve
-	// to the default.
-	origDefault := defaults.ELNSampleLocation
-	defaults.ELNSampleLocation = "Baked Default"
-	defer func() { defaults.ELNSampleLocation = origDefault }()
-
-	if got := resolveSampleLocationName(nil, nil); got != "Baked Default" {
-		t.Errorf("nil env + nil store: got %q, want Baked Default", got)
+	// Defensive: callers may pass nil for either. Should return empty
+	// (not panic).
+	if got := resolveSampleLocationName(nil, nil); got != "" {
+		t.Errorf("nil env + nil store: got %q, want empty", got)
 	}
 }
 

@@ -101,17 +101,18 @@ To add these to your sample type: ELN → Sample Types → [Data] → Custom Met
 
 #### Storage location (`eln_sample_location`)
 
-mus places every created sample inside a **storage unit** on the ELN (freezer / cabinet / rack level — samples land in the unit's root compartment, no fixed position). This makes them easy to find in the ELN's storage browser instead of drifting rootless.
+You can place every mus-created sample inside a **storage unit** (freezer / cabinet / rack) on the ELN — the samples land in the unit's root compartment, no fixed position. This is a search / discoverability aid: mus samples end up grouped in the ELN's storage browser instead of drifting rootless.
 
 Resolution order (first non-empty wins):
 
-1. `eln_sample_location=<name>` in the mus.cfg cascade (per-folder overrides `~/.config/mus/mus.cfg` global).
-2. `eln_sample_location` in the secret store (`mus config set --secret eln_sample_location <name>` — or right next to `eln_url` / `eln_apikey`).
-3. Compile-time default — `BADS Mango` for the stock BADS build; other labs override via `-ldflags="-X ...defaults.ELNSampleLocation=<name>"`.
+1. `eln_sample_location=<name>` in the mus.cfg cascade (per-folder overrides `~/.config/mus/mus.cfg`).
+2. `eln_sample_location` in the secret store (sits next to `eln_url` / `eln_apikey`).
 
-Set the value to a name that isn't declared on your tenant, or an unrecognised typo: mus warns once to stderr and creates samples **without a placement** — the upload still succeeds. Set the cascade value to an empty string only if you want to disable placement entirely (which also requires an empty value at every level above — the resolver falls through blanks).
+**Nothing configured → nothing sent.** mus does not carry a compile-time default — samples are simply created without a placement, and the ELN shows them in the flat inventory listing. This is deliberate: labs that want the placement opt in.
 
-`mus` never CREATES a storage unit — the ELN admin needs to have set it up in the UI once (Inventory → Storage → +New Storage). mus only looks it up by name.
+If a name IS configured but it doesn't match any storage unit on the tenant (typo, unit archived), mus warns once to stderr and still creates the samples — unplaced. The upload never fails on this.
+
+mus never CREATES a storage unit — the ELN admin needs to set it up in the UI once (Inventory → Storage → +New Storage). mus only looks it up by name.
 
 **Flags:**
 

@@ -47,19 +47,4 @@ var (
 	// default ACL iRODS gives them — usually owner-only).
 	IRODSGroup = "BADS"
 
-	// ELNSampleLocation is the default eLabNext storage unit name that
-	// mus-created samples (from `mus eln sample` and the auto-register
-	// on `mus irods upload`) are placed into. Override via cascade
-	// (`eln_sample_location=<name>` in mus.cfg — per-folder OR
-	// ~/.config/mus/mus.cfg) or via the secret store
-	// (`eln_sample_location`, next to eln_url). Empty string means "no
-	// location" — samples are created without a storage placement.
-	//
-	// The value is a storage UNIT name (a freezer / cabinet / rack) as
-	// visible in the ELN's Storage browser. mus resolves it to that
-	// unit's root storageLayerID via GET /storage at batch start; every
-	// sample ends up at that root compartment. If the named unit doesn't
-	// exist on the tenant, mus warns once and continues WITHOUT a
-	// location — the samples are still created, just unplaced.
-	ELNSampleLocation = "BADS Mango"
 )

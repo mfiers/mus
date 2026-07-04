@@ -36,7 +36,6 @@ import (
 	"time"
 
 	"codeberg.org/mfiers/mus/internal/config"
-	"codeberg.org/mfiers/mus/internal/defaults"
 	"codeberg.org/mfiers/mus/internal/eln"
 	"codeberg.org/mfiers/mus/internal/secret"
 )
@@ -152,11 +151,11 @@ func metasForType(prov map[string]string, typeMetas []eln.SampleTypeMeta) []eln.
 //     takes precedence over ~/.config/mus/mus.cfg's global setting.
 //  2. eln_sample_location in the secret store — user-level default
 //     (sits next to eln_url / eln_apikey).
-//  3. defaults.ELNSampleLocation — compile-time default ("BADS Mango"
-//     for the stock BADS build; ldflags-overridable per lab).
 //
-// Set the value to an empty string at any level to disable location
-// placement — samples get created without a storage layer.
+// If nothing is set at either level, returns the empty string —
+// callers then create samples WITHOUT a storage-layer placement.
+// mus deliberately has no compile-time default here: labs that want
+// mus-created samples placed must opt in explicitly.
 func resolveSampleLocationName(env *config.Env, store secret.Store) string {
 	if env != nil {
 		if v := strings.TrimSpace(env.String("eln_sample_location")); v != "" {
@@ -170,18 +169,21 @@ func resolveSampleLocationName(env *config.Env, store secret.Store) string {
 			}
 		}
 	}
-	return strings.TrimSpace(defaults.ELNSampleLocation)
+	return ""
 }
 
 // resolveSampleStorageLayerID resolves the configured location name to
-// a storageLayerID (the root layer of the named storage unit). Returns
-// 0 when no name is configured OR the lookup fails; either way, warns
-// once to stderr so the depositor knows samples will be created
-// without a placement. Never returns an error — sample creation should
-// go ahead regardless of storage-layer resolution.
+// a storageLayerID (the root layer of the named storage unit). When
+// nothing is configured, returns 0 silently — no lookup, no warning.
+// When a name IS configured but lookup fails, returns 0 AND warns to
+// stderr so the depositor sees the typo. Never returns an error —
+// sample creation should proceed regardless.
 func resolveSampleStorageLayerID(client *eln.Client, env *config.Env, store secret.Store, stderr io.Writer) int64 {
 	name := resolveSampleLocationName(env, store)
 	if name == "" {
+		// Not configured anywhere → deliberate silence. mus creates
+		// samples without a placement; ELN shows them in the flat
+		// inventory listing.
 		return 0
 	}
 	unit, err := client.FindStorageByName(name)

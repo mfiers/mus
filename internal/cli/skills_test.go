@@ -196,10 +196,10 @@ func TestMusSkill_BodyMentionsDEFlow(t *testing.T) {
 		// mus 0.2.43+ — auto-sample on irods upload
 		"ONE Sample record per\nuploaded file",
 		"path=iRODS path",
-		// mus 0.2.43+ — sample storage-unit placement
+		// mus 0.2.43+ — sample storage-unit placement (opt-in, no default)
 		"Storage location",
 		"eln_sample_location",
-		"BADS Mango",
+		"Nothing configured →\n  nothing sent",
 	}
 	for _, req := range requirements {
 		if !strings.Contains(musBody, req) {
