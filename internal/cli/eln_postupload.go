@@ -78,18 +78,27 @@ func postUploadRegisterSamplesInELN(env *config.Env, items []uploadedItem,
 	}
 	expIDStr := env.String("eln_experiment_id")
 	if expIDStr == "" {
+		// Folder isn't ELN-linked. Not a bug — some folders are
+		// intentionally offline. Say so once so the depositor
+		// isn't left wondering where the samples went.
+		fmt.Fprintln(stderr, "  ELN sample-register skipped: no eln_experiment_id in cascade (`mus eln link <ID>` to enable)")
 		return
 	}
 	expID, err := strconv.ParseInt(expIDStr, 10, 64)
 	if err != nil {
-		fmt.Fprintf(stderr, "  eln sample-register skipped: invalid eln_experiment_id %q\n", expIDStr)
+		fmt.Fprintf(stderr, "  ⚠ ELN sample-register skipped: invalid eln_experiment_id %q\n", expIDStr)
 		return
 	}
 	client, err := openELN()
 	if err != nil {
-		// No token — folder may be ELN-linked but this operator
-		// isn't authenticated. Silent skip; same policy as the
-		// comment poster.
+		// No token stored on this machine. This is the most common
+		// silent-skip cause when a depositor sets up mus on a new
+		// server — the folder IS ELN-linked (cascade carries
+		// eln_experiment_id) but they haven't run `mus eln login`
+		// on this box. Surface it loudly so they know.
+		fmt.Fprintf(stderr,
+			"  ⚠ ELN sample-register skipped: %v — run `mus eln login` on this machine to enable auto-sample-registration\n",
+			err)
 		return
 	}
 
@@ -308,7 +317,14 @@ func postUploadRegisterSamplesInELN(env *config.Env, items []uploadedItem,
 	}
 
 	if len(pendingLink) == 0 {
-		// All items failed; nothing to link.
+		// All items failed to create — nothing to link. This is
+		// distinct from "nothing needed doing" (that case exits
+		// earlier at `pending == 0`). Say so loudly so the
+		// depositor knows they need to look at the per-item
+		// warnings above.
+		fmt.Fprintf(stderr,
+			"  ⚠ ELN sample-register: 0 samples created (%d failed) — no section linked. See per-file errors above.\n",
+			failed)
 		return
 	}
 	if err := client.LinkSamplesToSection(journalID, pendingLink); err != nil {
