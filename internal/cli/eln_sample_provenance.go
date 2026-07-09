@@ -17,7 +17,9 @@ package cli
 //   upload_from_server  os.Hostname()
 //   upload_from_path    absolute LOCAL path (== path for eln sample,
 //                       distinct from path for irods upload)
-//   purl                iRODS PURL (only populated when known)
+//   purl, mango_purl    iRODS PURL (only populated when known — both keys
+//                       fill the same value; mango_purl is the naming
+//                       convention on the BADS Mango tenant)
 //   kind                "file" / "folder" / "archive"
 //   mus_version         cli.Version at upload time
 //
@@ -100,6 +102,7 @@ func buildProvenanceDict(p sampleProvenance) map[string]string {
 		"upload_user":        who,
 		"upload_from_server": host,
 		"purl":               p.purl,
+		"mango_purl":         p.purl,
 		"kind":               kind,
 		"mus_version":        Version,
 	}

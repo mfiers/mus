@@ -12,6 +12,26 @@ import (
 	"codeberg.org/mfiers/mus/internal/eln"
 )
 
+func TestBuildProvenanceDict_MangoPURLAlias(t *testing.T) {
+	// mango_purl is an alias for purl — same value, different key.
+	// Tenants that named the field mango_purl on their sample type
+	// (the BADS convention) get it filled without needing to rename.
+	prov := sampleProvenance{purl: "https://mango.kuleuven.be/PID/gbiomed/12345/"}
+	d := buildProvenanceDict(prov)
+	if d["purl"] != prov.purl {
+		t.Errorf("purl: got %q, want %q", d["purl"], prov.purl)
+	}
+	if d["mango_purl"] != prov.purl {
+		t.Errorf("mango_purl alias: got %q, want %q", d["mango_purl"], prov.purl)
+	}
+	// Empty PURL → both keys empty; metasForType then drops them
+	// from the outbound POST /samples payload.
+	dEmpty := buildProvenanceDict(sampleProvenance{})
+	if dEmpty["purl"] != "" || dEmpty["mango_purl"] != "" {
+		t.Errorf("empty PURL should propagate as empty on both keys: %+v", dEmpty)
+	}
+}
+
 func TestBuildProvenanceDict_FilledFields(t *testing.T) {
 	upload := time.Date(2026, 7, 3, 12, 30, 0, 0, time.UTC)
 	mtime := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)

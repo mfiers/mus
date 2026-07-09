@@ -322,7 +322,8 @@ deposit that isn't an h5ad or DE.
   declared on the sample type — ` + "`path`" + `, ` + "`sha256sum`" + ` /
   ` + "`sha256`" + `, ` + "`size_bytes`" + ` / ` + "`size`" + `, ` + "`mtime`" + `,
   ` + "`upload_data`" + ` / ` + "`upload_date`" + `, ` + "`upload_user`" + `,
-  ` + "`upload_from_server`" + `, ` + "`upload_from_path`" + `, ` + "`purl`" + `,
+  ` + "`upload_from_server`" + `, ` + "`upload_from_path`" + `,
+  ` + "`purl`" + ` / ` + "`mango_purl`" + ` (aliases — same PURL value),
   ` + "`kind`" + `, ` + "`mus_version`" + `. Fields the tenant hasn't declared
   are silently skipped. Ad-hoc fields are NOT created (they'd be
   unsearchable in the ELN inventory).

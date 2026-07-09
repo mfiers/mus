@@ -204,6 +204,8 @@ func TestMusSkill_BodyMentionsDEFlow(t *testing.T) {
 		"Nothing configured →\n  nothing sent",
 		// mus 0.2.43+ — distinct location key for irods samples
 		"eln_irods_sample_location",
+		// mus 0.2.43+ — mango_purl alias for purl
+		"mango_purl",
 	}
 	for _, req := range requirements {
 		if !strings.Contains(musBody, req) {

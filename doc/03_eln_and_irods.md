@@ -109,7 +109,7 @@ For `mus eln sample` (local-file flow), the values are:
 | `upload_from_server` | machine hostname |
 | `kind` | always `file` for this flow |
 | `mus_version` | version of mus that ran the invocation |
-| `purl` | **not set** for `mus eln sample` — only populated by the iRODS flow |
+| `purl` / `mango_purl` | **not set** for `mus eln sample` — only populated by the iRODS flow (both keys accept the same value) |
 
 Fields the tenant hasn't declared are silently skipped. mus never creates ad-hoc meta fields (they'd be unsearchable in the ELN inventory per eLabNext's docs). Fields the tenant HAS declared but mus doesn't know about pass through untouched.
 
@@ -261,7 +261,7 @@ The **only differences** between the two flows land in the sample's meta fields:
 | --- | --- | --- |
 | `path` | absolute local path | **iRODS path** — the archived copy is the authoritative location |
 | `upload_from_path` | absolute local path (same as `path`) | absolute local path (the source, distinct from `path`) |
-| `purl` | not set | **iRODS persistent URL** (survives moves on Mango) |
+| `purl` / `mango_purl` | not set | **iRODS persistent URL** (survives moves on Mango) — both keys accept the same value; use `mango_purl` on BADS Mango, `purl` is the generic alias |
 | `kind` | always `file` | `file` / `folder` / `archive` — matches what actually landed on iRODS |
 | everything else | (see §1c meta-autofill table) | same as `mus eln sample` |
 
