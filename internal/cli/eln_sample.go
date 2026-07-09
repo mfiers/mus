@@ -224,6 +224,17 @@ func runELNSample(cmd *cobra.Command, args []string, message, sampleTypeName, se
 				priorID: id, priorReason: "archived",
 			})
 		case doc.ELN.SampleSectionID == "":
+			// Sidecar never got a section-link stamp → orphan
+			// from a prior failed batch-link.
+			work = append(work, sampleWork{
+				abs: abs, doc: doc, action: sampleOrphan, priorID: id,
+			})
+		case !remote.LinkedToExperiment(expID):
+			// Sidecar CLAIMS the sample is linked (SampleSectionID
+			// present) but the server disagrees — the section was
+			// manually deleted, the sample was removed from it, or
+			// some other unlink happened. Treat as orphan and
+			// re-link into a fresh section.
 			work = append(work, sampleWork{
 				abs: abs, doc: doc, action: sampleOrphan, priorID: id,
 			})

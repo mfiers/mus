@@ -201,6 +201,15 @@ func postUploadRegisterSamplesInELN(env *config.Env, items []uploadedItem,
 				priorID: id, priorReason: "archived",
 			})
 		case doc.ELN.SampleSectionID == "":
+			// Sidecar never got a section-link stamp → orphan
+			// from a prior failed batch-link.
+			jobs = append(jobs, job{
+				item: it, act: actOrphan, doc: doc, scPath: scPath, priorID: id,
+			})
+		case !remote.LinkedToExperiment(expID):
+			// Sidecar says linked, server says not. Section was
+			// deleted or the sample was unlinked from it — re-link
+			// into a fresh section on this experiment.
 			jobs = append(jobs, job{
 				item: it, act: actOrphan, doc: doc, scPath: scPath, priorID: id,
 			})

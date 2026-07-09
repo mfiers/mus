@@ -369,20 +369,59 @@ func (c *Client) ListSampleTypeMetas(sampleTypeID int64) ([]SampleTypeMeta, erro
 // depositor via the summary. Archived is populated by GetSample and
 // tells `mus eln sample` to treat a prior sidecar-recorded sample as
 // stale (create a fresh one on re-run) rather than blindly reusing it.
+//
+// ExperimentData / OutputExperimentData are populated by
+// GetSample (which passes ?$expand=experiments). Each carries the
+// list of experiments the sample is currently linked to via
+// SAMPLESIN / SAMPLESOUT sections respectively. mus uses this to
+// verify a sample's link is still live before deciding to skip it
+// on re-run — if the target experiment isn't in either list, the
+// sample was unlinked (section deleted, manual removal) and mus
+// re-links it into a fresh section.
 type Sample struct {
-	ID           int64  `json:"sampleID"`
-	Name         string `json:"name"`
-	Description  string `json:"description"`
-	Note         string `json:"note"`
-	SampleTypeID int64  `json:"sampleTypeID"`
-	Archived     bool   `json:"archived"`
+	ID                   int64             `json:"sampleID"`
+	Name                 string            `json:"name"`
+	Description          string            `json:"description"`
+	Note                 string            `json:"note"`
+	SampleTypeID         int64             `json:"sampleTypeID"`
+	Archived             bool              `json:"archived"`
+	ExperimentData       []SampleExpLink   `json:"experimentData,omitempty"`
+	OutputExperimentData []SampleExpLink   `json:"outputExperimentData,omitempty"`
+}
+
+// SampleExpLink is one entry from a sample's expanded experiments
+// list. Only experimentID is load-bearing — mus uses it to check
+// whether the sample is still linked to the target experiment.
+type SampleExpLink struct {
+	ExperimentID   int64  `json:"experimentID"`
+	ExperimentName string `json:"experimentName,omitempty"`
+}
+
+// LinkedToExperiment reports whether the sample carries a link
+// to the given experiment via any SAMPLESIN or SAMPLESOUT section.
+// Callers who fetched a bare (no-$expand) Sample get a false
+// result — the two arrays are only populated by GetSample.
+func (s *Sample) LinkedToExperiment(expID int64) bool {
+	for _, e := range s.ExperimentData {
+		if e.ExperimentID == expID {
+			return true
+		}
+	}
+	for _, e := range s.OutputExperimentData {
+		if e.ExperimentID == expID {
+			return true
+		}
+	}
+	return false
 }
 
 // GetSample fetches sample metadata by ID. Returns the sample record —
-// including the Archived flag — or an *HTTPError with StatusCode 404
-// when the sample does not exist. Used by `mus eln sample` to verify
-// that a sidecar-recorded sample is still active before skipping
-// re-registration.
+// including the Archived flag AND the ExperimentData /
+// OutputExperimentData arrays (populated via ?$expand=experiments) —
+// or an *HTTPError with StatusCode 404 when the sample does not
+// exist. Used by `mus eln sample` and the iRODS auto-registration to
+// verify that a sidecar-recorded sample is still active AND still
+// linked to the target experiment before skipping re-registration.
 //
 // Per eLabNext docs: "Archived samples remain queryable via GET
 // /samples/{id} and the archived-aware list endpoints, but no longer
@@ -390,8 +429,10 @@ type Sample struct {
 // list-based queries default to archived=false and would spuriously
 // return "not found" for archived-but-existent samples.
 func (c *Client) GetSample(id int64) (*Sample, error) {
+	params := url.Values{}
+	params.Set("$expand", "experiments")
 	var out Sample
-	if err := c.get(fmt.Sprintf("samples/%d", id), nil, &out); err != nil {
+	if err := c.get(fmt.Sprintf("samples/%d", id), params, &out); err != nil {
 		return nil, err
 	}
 	if out.ID == 0 {

@@ -253,6 +253,11 @@ func TestGetSample_Active(t *testing.T) {
 		if r.Method != http.MethodGet {
 			t.Errorf("method %s, want GET", r.Method)
 		}
+		// mus asks for the experiments expand so it can verify
+		// server-side linkage on re-runs. Pin the query param.
+		if r.URL.Query().Get("$expand") != "experiments" {
+			t.Errorf("expected $expand=experiments; got %q", r.URL.RawQuery)
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"sampleID":     12345,
 			"name":         "foo.tsv",
@@ -271,6 +276,73 @@ func TestGetSample_Active(t *testing.T) {
 	}
 	if s.ID != 12345 || s.Archived {
 		t.Errorf("got %+v; want ID=12345 archived=false", s)
+	}
+}
+
+func TestSample_LinkedToExperiment(t *testing.T) {
+	// Sample linked to experiment 1955928 via a SAMPLESOUT section
+	// (populated on outputExperimentData) AND experiment 42 via
+	// a SAMPLESIN section (populated on experimentData). Any hit
+	// on either array counts.
+	s := &Sample{
+		ID: 100,
+		ExperimentData: []SampleExpLink{
+			{ExperimentID: 42, ExperimentName: "input-only expt"},
+		},
+		OutputExperimentData: []SampleExpLink{
+			{ExperimentID: 1955928, ExperimentName: "output-linked expt"},
+		},
+	}
+	if !s.LinkedToExperiment(1955928) {
+		t.Error("SAMPLESOUT link not detected")
+	}
+	if !s.LinkedToExperiment(42) {
+		t.Error("SAMPLESIN link not detected")
+	}
+	if s.LinkedToExperiment(9999) {
+		t.Error("false positive on unrelated experiment ID")
+	}
+	// A sample fetched WITHOUT $expand=experiments has both
+	// arrays empty — every LinkedToExperiment call must return
+	// false. Guards against a caller reading the flag off a
+	// bare sample.
+	bare := &Sample{ID: 100}
+	if bare.LinkedToExperiment(42) {
+		t.Error("bare sample (no expand) should return false, not panic or match")
+	}
+}
+
+func TestGetSample_ExperimentsExpand(t *testing.T) {
+	// The $expand=experiments response carries two arrays: samples
+	// linked as inputs (experimentData) and samples linked as
+	// outputs (outputExperimentData). Both round-trip through
+	// GetSample.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/samples/500", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"sampleID": 500,
+			"archived": false,
+			"outputExperimentData": []map[string]any{
+				{"experimentID": 1955928, "experimentName": "microglia pilot"},
+			},
+			"experimentData": []map[string]any{
+				{"experimentID": 42, "experimentName": "input expt"},
+			},
+		})
+	})
+	srv := httptest.NewServer(authMiddleware(t, "k", mux))
+	defer srv.Close()
+
+	c := New(srv.URL, "k")
+	s, err := c.GetSample(500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.LinkedToExperiment(1955928) {
+		t.Errorf("SAMPLESOUT link not round-tripped: %+v", s)
+	}
+	if !s.LinkedToExperiment(42) {
+		t.Errorf("SAMPLESIN link not round-tripped: %+v", s)
 	}
 }
 

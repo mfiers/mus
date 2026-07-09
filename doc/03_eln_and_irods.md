@@ -147,11 +147,14 @@ On a re-run, mus makes ONE `GET /samples/{id}` per file to check the current ser
 
 | Situation | mus does | Output marker |
 | --- | --- | --- |
-| Sample active + section link recorded | Skip | `↷ file.tsv already registered as sample 17890001 — skipping` |
-| Sample active, section link missing | **Re-link** existing sample to a new section | `↺ file.tsv: re-linking orphan sample 17890001` |
+| Sample active + still linked to this experiment | Skip | `↷ file.tsv already registered as sample 17890001 — skipping` |
+| Sample active, sidecar has no section-link stamp | **Re-link** existing sample to a new section | `↺ file.tsv: re-linking orphan sample 17890001` |
+| Sample active, sidecar CLAIMS linked but server disagrees (section deleted, sample manually unlinked) | **Re-link** existing sample to a new section | `↺ file.tsv: re-linking orphan sample 17890001` |
 | Sample archived on the ELN | **Recreate** — create a fresh sample, replace the sidecar SampleID | `↻ file.tsv: prior sample 17890001 archived → new sample 17892500` |
 | Sample deleted from the ELN (404) | **Recreate** as above | `↻ file.tsv: prior sample 17890001 gone from ELN → new sample 17892500` |
 | No sidecar / no SampleID | Create fresh | `✓ file.tsv → sample 17892500` |
+
+The `GET /samples/{id}?$expand=experiments` on every re-run tells mus which experiments each sample is currently attached to — so if you deleted a SAMPLESOUT section from an experiment (or removed the sample from it manually), mus notices and re-links on the next `mus eln sample` or `mus irods upload`.
 
 The summary line breaks these down:
 
