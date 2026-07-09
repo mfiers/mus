@@ -206,6 +206,10 @@ func TestMusSkill_BodyMentionsDEFlow(t *testing.T) {
 		"eln_irods_sample_location",
 		// mus 0.2.43+ — mango_purl alias for purl
 		"mango_purl",
+		// mus 0.2.43+ — [A] / [X] pack prompts + cleanup-source flag
+		"--cleanup-archive",
+		"--cleanup-source",
+		"capital-only",
 	}
 	for _, req := range requirements {
 		if !strings.Contains(musBody, req) {

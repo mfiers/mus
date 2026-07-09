@@ -304,25 +304,38 @@ scripts/ — 47 files, total 84 KB, median 1.2 KB
   density check: 0.4 (need ≥ 10) — too many small files
   → too many small files for direct upload; pick:
     [a] archive: pack as tar.gz and upload the archive
+    [A] archive + clean: pack, upload, then delete the local .tar.gz
+    [X] excise: [A] + also delete the source folder (sidecar → tombstone)
     [u] unarchived: upload the folder as-is anyway
     [c] cancel
-  Choice [a/u/c]:
+  Choice [a/A/X/u/c]:
 ```
 
-- **`a`** (archive) — mus tar+gzips locally to `scripts.tar.gz`, uploads the archive. Recommended for many small files; iRODS per-object overhead dominates for tiny things.
-- **`u`** (unarchived) — uploads as a collection. The directory tree is browsable in the Mango web UI. Use for a small number of larger files.
+| Letter | Packing | Local .tar.gz after | Source folder after |
+|:-:|---|---|---|
+| `a` | tar.gz | **kept** | kept |
+| `A` | tar.gz | deleted | kept |
+| `X` | tar.gz | deleted | **deleted** — sidecar becomes a tombstone (`irods_status=local_deleted`) |
+| `u` | none (as collection) | n/a | kept |
+| `c` | — | — | — |
 
-Force either non-interactively:
+The destructive letters are **upper-case-only** (`A`, `X`) — reduces the chance of a stray keystroke wiping local data. Lowercase `x` is treated as invalid.
+
+Force any of these non-interactively:
 
 ```bash
-mus irods upload --pack tar.gz -m "..." scripts/    # always archive
-mus irods upload --pack none   -m "..." scripts/    # always upload as collection
-mus irods upload -A            -m "..." scripts/    # short flag for --pack tar.gz
+mus irods upload --pack tar.gz -m "..." scripts/                                     # = [a]
+mus irods upload --pack tar.gz --cleanup-archive -m "..." scripts/                   # = [A]
+mus irods upload --pack tar.gz --cleanup-archive --cleanup-source -m "..." scripts/  # = [X]
+mus irods upload --pack none   -m "..." scripts/                                     # = [u]
+mus irods upload -A            -m "..." scripts/                                     # short flag for --pack tar.gz
 ```
 
-After a folder upload, ONE sidecar at `scripts.mus` (sibling of the folder, NOT inside). Carries a Merkle hash so `mus check scripts.mus` later can detect any drift in the source.
+`--cleanup-source` also works with `--pack none` — the source folder is deleted after the direct upload succeeds. `--cleanup-archive` combined with `--pack none` prints a warning (no archive to clean) and continues.
 
-If you packed, the local `scripts.tar.gz` is **kept by default** so a re-upload doesn't need to re-pack. Pass `--cleanup-archive` to delete it after.
+After a folder upload, ONE sidecar at `scripts.mus` (sibling of the folder, NOT inside). Carries a Merkle hash so `mus check scripts.mus` later can detect any drift in the source. When `--cleanup-source` runs, the sidecar's `irods_status` flips to `local_deleted` — same tombstone semantic as `mus rm`, so `mus irods get scripts.mus` can later restore.
+
+If you didn't pass `--cleanup-archive` and used tar.gz mode, the local `scripts.tar.gz` is kept so a re-upload doesn't need to re-pack — mus warns on stderr so you don't accidentally leak archives across many uploads.
 
 ### 2d. Whole project at once
 

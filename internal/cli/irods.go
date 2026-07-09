@@ -230,6 +230,10 @@ func newIRODSUploadCmd() *cobra.Command {
 			"shorthand for --pack tar.gz; skips the density check + prompt")
 	cmd.Flags().Bool("cleanup-archive", false,
 		"after a successful tar.gz upload, delete the local archive (default: keep + warn)")
+	cmd.Flags().Bool("cleanup-source", false,
+		"after a successful upload, delete the source folder — sidecar becomes a "+
+			"tombstone (irods_status=local_deleted). Combine with --cleanup-archive "+
+			"for the equivalent of the interactive [X] letter.")
 	cmd.Flags().Bool("no-metadata", false,
 		"skip applying mus_* AVU metadata to the uploaded iRODS object")
 	cmd.Flags().BoolVar(&noELNComment, "no-eln", false,

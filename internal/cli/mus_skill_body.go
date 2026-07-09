@@ -459,7 +459,14 @@ fallback (` + "`~/.config/mus/secrets.age`" + `) for HPC login nodes.
   skip-if-same gate handles their contents).
 - **Pack folders as tar.gz** — opt-in checkbox passes
   ` + "`--pack tar.gz`" + ` to ` + "`mus irods upload`" + ` so dense
-  folders get archived first. Default off.
+  folders get archived first. Default off. Two extra cleanup
+  flags: ` + "`--cleanup-archive`" + ` (delete the local .tar.gz
+  after upload) and ` + "`--cleanup-source`" + ` (delete the source
+  folder — sidecar becomes a tombstone with
+  ` + "`irods_status=local_deleted`" + `). Interactive prompt
+  offers ` + "`[a]`" + ` / ` + "`[A]`" + ` (clean archive) /
+  ` + "`[X]`" + ` (clean archive + source) letters — capital-only
+  for the destructive variants.
 - **Dry-run** — runs ` + "`iron --dry-run`" + `. Safety gates
   (ELN-undecided, sidecar check, vocab) still fire under
   dry-run; only the byte transfer is suppressed.

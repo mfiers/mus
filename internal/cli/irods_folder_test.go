@@ -8,85 +8,113 @@ import (
 
 func TestPromptPackChoice_ShortcutLetters(t *testing.T) {
 	cases := []struct {
-		name  string
-		input string
-		want  packMode
+		name        string
+		input       string
+		wantMode    packMode
+		wantCleanup postUploadCleanup
 	}{
-		{"archive shortcut", "a\n", packTarGz},
-		{"unarchived shortcut", "u\n", packNone},
-		{"cancel shortcut", "c\n", "cancel"},
-		{"archive uppercase", "A\n", packTarGz},
-		{"unarchived uppercase", "U\n", packNone},
-		{"empty defaults to cancel", "\n", "cancel"},
+		{"[a] archive, keep everything", "a\n", packTarGz, postUploadCleanup{}},
+		{"[A] archive + clean archive", "A\n", packTarGz, postUploadCleanup{archive: true}},
+		{"[X] archive + clean archive + clean source", "X\n", packTarGz, postUploadCleanup{archive: true, source: true}},
+		{"[u] unarchived", "u\n", packNone, postUploadCleanup{}},
+		{"[c] cancel", "c\n", "cancel", postUploadCleanup{}},
+		{"unarchived uppercase falls through to lowercase", "U\n", packNone, postUploadCleanup{}},
+		{"empty defaults to cancel", "\n", "cancel", postUploadCleanup{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var out bytes.Buffer
-			got, err := promptPackChoice(strings.NewReader(tc.input), &out)
+			mode, cleanup, err := promptPackChoice(strings.NewReader(tc.input), &out)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if got != tc.want {
-				t.Errorf("got %q, want %q (out=%q)", got, tc.want, out.String())
+			if mode != tc.wantMode {
+				t.Errorf("mode: got %q, want %q (out=%q)", mode, tc.wantMode, out.String())
+			}
+			if cleanup != tc.wantCleanup {
+				t.Errorf("cleanup: got %+v, want %+v", cleanup, tc.wantCleanup)
 			}
 		})
+	}
+}
+
+func TestPromptPackChoice_LowerCaseXIsInvalid(t *testing.T) {
+	// The destructive [X] letter is deliberately upper-case-only to
+	// reduce the risk of a stray keystroke wiping local data. `x`
+	// must NOT be treated as a valid choice — falls through to the
+	// invalid-choice loop.
+	var out bytes.Buffer
+	// Feed x + 2 more invalid → 3 invalids total → error.
+	_, _, err := promptPackChoice(strings.NewReader("x\nz\nz\n"), &out)
+	if err == nil {
+		t.Error("expected lowercase x to be treated as invalid")
+	}
+	if !strings.Contains(out.String(), "invalid choice") {
+		t.Errorf("expected 'invalid choice' feedback; got:\n%s", out.String())
 	}
 }
 
 func TestPromptPackChoice_WordAliases(t *testing.T) {
 	// Word-form aliases keep working (helpful for non-interactive
 	// callers piping `archive\n` etc.) but the displayed shortcuts
-	// are the single-letter forms.
+	// are the single-letter forms. Word aliases carry NO cleanup —
+	// they map to the "keep everything" variant.
 	cases := []struct {
-		input string
-		want  packMode
+		input       string
+		wantMode    packMode
+		wantCleanup postUploadCleanup
 	}{
-		{"archive\n", packTarGz},
-		{"tar\n", packTarGz},
-		{"tar.gz\n", packTarGz},
-		{"targz\n", packTarGz},
-		{"unarchived\n", packNone},
-		{"as-is\n", packNone},
-		{"asis\n", packNone},
-		{"cancel\n", "cancel"},
+		{"archive\n", packTarGz, postUploadCleanup{}},
+		{"tar\n", packTarGz, postUploadCleanup{}},
+		{"tar.gz\n", packTarGz, postUploadCleanup{}},
+		{"targz\n", packTarGz, postUploadCleanup{}},
+		{"unarchived\n", packNone, postUploadCleanup{}},
+		{"as-is\n", packNone, postUploadCleanup{}},
+		{"asis\n", packNone, postUploadCleanup{}},
+		{"cancel\n", "cancel", postUploadCleanup{}},
 	}
 	for _, tc := range cases {
 		var out bytes.Buffer
-		got, err := promptPackChoice(strings.NewReader(tc.input), &out)
+		mode, cleanup, err := promptPackChoice(strings.NewReader(tc.input), &out)
 		if err != nil {
 			t.Fatalf("input %q: %v", tc.input, err)
 		}
-		if got != tc.want {
-			t.Errorf("input %q: got %q, want %q", tc.input, got, tc.want)
+		if mode != tc.wantMode {
+			t.Errorf("input %q: mode got %q, want %q", tc.input, mode, tc.wantMode)
+		}
+		if cleanup != tc.wantCleanup {
+			t.Errorf("input %q: cleanup got %+v, want %+v", tc.input, cleanup, tc.wantCleanup)
 		}
 	}
 }
 
-func TestPromptPackChoice_PromptMentionsNewLetters(t *testing.T) {
-	// First pass with garbage input → loop reprints the prompt.
-	// The displayed letters MUST be the new a/u/c set.
+func TestPromptPackChoice_PromptMentionsAllFiveLetters(t *testing.T) {
+	// First pass with a valid input still prints the prompt once.
+	// The displayed letters MUST include the new destructive [A]
+	// and [X] variants alongside [a] / [u] / [c].
 	var out bytes.Buffer
-	got, err := promptPackChoice(strings.NewReader("a\n"), &out)
+	mode, _, err := promptPackChoice(strings.NewReader("a\n"), &out)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != packTarGz {
-		t.Fatalf("setup failed: %q", got)
+	if mode != packTarGz {
+		t.Fatalf("setup failed: %q", mode)
 	}
 	prompt := out.String()
 	for _, want := range []string{
 		"[a] archive",
+		"[A] archive + clean",
+		"[X] excise",
 		"[u] unarchived",
 		"[c] cancel",
-		"Choice [a/u/c]",
+		"Choice [a/A/X/u/c]",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt missing %q:\n%s", want, prompt)
 		}
 	}
-	// The old "[t]" and the old "[a] upload as-is" wording must NOT
-	// appear — regression guard against a partial revert.
-	for _, banned := range []string{"[t] pack", "[a] upload as-is", "[t/a/c]"} {
+	// The old wording must NOT appear — regression guard.
+	for _, banned := range []string{"[t] pack", "[a] upload as-is", "[t/a/c]", "[a/u/c]"} {
 		if strings.Contains(prompt, banned) {
 			t.Errorf("prompt still contains old wording %q:\n%s", banned, prompt)
 		}
@@ -95,7 +123,7 @@ func TestPromptPackChoice_PromptMentionsNewLetters(t *testing.T) {
 
 func TestPromptPackChoice_GivesUpAfterRepeatedInvalid(t *testing.T) {
 	var out bytes.Buffer
-	_, err := promptPackChoice(strings.NewReader("z\nz\nz\n"), &out)
+	_, _, err := promptPackChoice(strings.NewReader("z\nz\nz\n"), &out)
 	if err == nil {
 		t.Error("expected an error after 3 invalid choices")
 	}

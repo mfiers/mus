@@ -52,6 +52,20 @@ const (
 	packPrompt packMode = "prompt" // alias for auto, kept for clarity in tests
 )
 
+// postUploadCleanup carries the depositor's choice of what to delete
+// locally after a successful upload. Both flags default to false —
+// the depositor must opt in either via CLI flag or the interactive
+// prompt's [A] / [X] letters.
+//
+//   archive → delete the local <name>.tar.gz after tar.gz upload
+//   source  → delete the source folder tree and mark the sidecar as a
+//             tombstone (irods_status=local_deleted); works with both
+//             packTarGz and packNone.
+type postUploadCleanup struct {
+	archive bool
+	source  bool
+}
+
 // resolvePackMode parses the user's --pack value into the canonical packMode.
 func resolvePackMode(raw string) (packMode, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
@@ -157,6 +171,12 @@ func runIRODSUploadFolder(
 		fmt.Fprintf(stdout, "  %s\n", densityErr)
 	}
 
+	// Cleanup options come from CLI flags by default. The interactive
+	// prompt below may override them if the depositor picks [A] or [X].
+	cleanup := postUploadCleanup{}
+	cleanup.archive, _ = cmd.Flags().GetBool("cleanup-archive")
+	cleanup.source, _ = cmd.Flags().GetBool("cleanup-source")
+
 	// Decide packing strategy.
 	chosen := mode
 	if chosen == packAuto {
@@ -167,14 +187,16 @@ func runIRODSUploadFolder(
 			return fmt.Errorf(
 				"density check failed and no TTY available for prompt.\n"+
 					"  Re-run with one of:\n"+
-					"    --pack tar.gz   (bundle into <name>.tar.gz and upload)\n"+
-					"    --pack none     (upload as-is regardless of density)\n"+
+					"    --pack tar.gz                        (bundle into <name>.tar.gz and upload)\n"+
+					"    --pack tar.gz --cleanup-archive      (as above, delete the .tar.gz after upload)\n"+
+					"    --pack tar.gz --cleanup-archive --cleanup-source  (as above, also delete source)\n"+
+					"    --pack none                          (upload as-is regardless of density)\n"+
 					"  Profile: %d files, median %s, density=%.4f (need ≥ %.0f)",
 				prof.FileCount,
 				folder.FormatHumanBytes(prof.MedianSize),
 				prof.Density, minDensity)
 		default:
-			c, err := promptPackChoice(stdin, stdout)
+			c, promptCleanup, err := promptPackChoice(stdin, stdout)
 			if err != nil {
 				return err
 			}
@@ -182,59 +204,90 @@ func runIRODSUploadFolder(
 			if chosen == "cancel" {
 				return errors.New("upload cancelled")
 			}
+			// Prompt overrides flags — the depositor picked
+			// explicitly at the terminal. This lets them add
+			// cleanup on the fly without re-invoking with
+			// --cleanup-*.
+			cleanup = promptCleanup
 		}
 	}
 
-	cleanup, _ := cmd.Flags().GetBool("cleanup-archive")
+	// Sanity: --cleanup-archive is meaningful only with packTarGz.
+	// Warn (not error) so the depositor can see the config mismatch
+	// but the upload still proceeds.
+	if cleanup.archive && chosen != packTarGz {
+		fmt.Fprintf(stderr,
+			"  NOTE: --cleanup-archive has no effect with --pack %s (no archive to clean)\n",
+			chosen)
+	}
+
 	switch chosen {
 	case packTarGz:
 		return uploadFolderArchived(cmd, srcAbs, remoteCollection, opts, env, prof, cleanup, message, uploads)
 	case packNone:
-		return uploadFolderDirect(cmd, srcAbs, remoteCollection, opts, env, prof, message, uploads)
+		return uploadFolderDirect(cmd, srcAbs, remoteCollection, opts, env, prof, cleanup, message, uploads)
 	}
-	_ = stderr
 	return fmt.Errorf("unknown pack mode %q", chosen)
 }
 
-// promptPackChoice prompts the user to choose between archiving
-// (tar.gz), uploading unarchived, or cancelling. Loops up to 3
-// times on invalid input.
+// promptPackChoice prompts the user to choose the packing strategy
+// AND any post-upload cleanup. Loops up to 3 times on invalid input.
 //
-// Shortcut letters:
+// Shortcut letters (case-sensitive on capital letters):
 //
-//	a → archive (pack into <name>.tar.gz)
-//	u → unarchived (upload the source folder as-is)
+//	a → archive: pack into <name>.tar.gz, upload, keep everything local
+//	A → archive + clean: as [a], then delete the local .tar.gz
+//	X → archive + clean + excise: as [A], then also delete the source
+//	    folder tree; the sidecar is left as a tombstone (irods_status
+//	    flips to local_deleted) so `mus irods get <sidecar>` can later
+//	    restore.
+//	u → unarchived: upload the source folder as a collection, keep source
 //	c → cancel
+//
+// Returns the resolved pack mode, the cleanup selection, and an
+// error. When the depositor picks "cancel", mode is the sentinel
+// string "cancel" and callers must treat it as an abort.
 //
 // Legacy letters `t` (for "tar") and the old `a` meaning "as-is"
 // were ambiguous — `a` semantically suggests "archive", not the
-// opposite. The new letters disambiguate. We still accept the
-// older spellings as hidden aliases (`tar`, `tar.gz`, `targz`,
-// `as-is`, `asis`) so muscle-memory or tooling that types out the
-// full word keeps working; only the LETTER `a` flipped meaning.
-func promptPackChoice(stdin io.Reader, stdout io.Writer) (packMode, error) {
+// opposite. Older spellings (`tar`, `tar.gz`, `targz`, `as-is`,
+// `asis`) are still accepted as hidden aliases so muscle-memory
+// keeps working.
+func promptPackChoice(stdin io.Reader, stdout io.Writer) (packMode, postUploadCleanup, error) {
 	r := bufio.NewReader(stdin)
 	for attempts := 0; attempts < 3; attempts++ {
 		fmt.Fprintf(stdout, "  → too many small files for direct upload; pick:\n")
 		fmt.Fprintf(stdout, "    [a] archive: pack as tar.gz and upload the archive\n")
+		fmt.Fprintf(stdout, "    [A] archive + clean: pack, upload, then delete the local .tar.gz\n")
+		fmt.Fprintf(stdout, "    [X] excise: [A] + also delete the source folder (sidecar → tombstone)\n")
 		fmt.Fprintf(stdout, "    [u] unarchived: upload the folder as-is anyway\n")
 		fmt.Fprintf(stdout, "    [c] cancel\n")
-		fmt.Fprintf(stdout, "  Choice [a/u/c]: ")
+		fmt.Fprintf(stdout, "  Choice [a/A/X/u/c]: ")
 		line, err := r.ReadString('\n')
 		if err != nil && err != io.EOF {
-			return "", err
+			return "", postUploadCleanup{}, err
 		}
-		switch strings.ToLower(strings.TrimSpace(line)) {
+		trimmed := strings.TrimSpace(line)
+		// Capital-sensitive letters first (A, X) — these are
+		// deliberately upper-case for the destructive variants.
+		switch trimmed {
+		case "A":
+			return packTarGz, postUploadCleanup{archive: true}, nil
+		case "X":
+			return packTarGz, postUploadCleanup{archive: true, source: true}, nil
+		}
+		// Everything else: lowercase / alias match.
+		switch strings.ToLower(trimmed) {
 		case "a", "archive", "tar", "tar.gz", "targz":
-			return packTarGz, nil
+			return packTarGz, postUploadCleanup{}, nil
 		case "u", "unarchived", "as-is", "asis":
-			return packNone, nil
+			return packNone, postUploadCleanup{}, nil
 		case "c", "cancel", "":
-			return "cancel", nil
+			return "cancel", postUploadCleanup{}, nil
 		}
 		fmt.Fprintln(stdout, "  invalid choice")
 	}
-	return "", errors.New("too many invalid choices")
+	return "", postUploadCleanup{}, errors.New("too many invalid choices")
 }
 
 // promptOverwriteArchive asks whether to overwrite an existing tar.gz from a
@@ -263,16 +316,21 @@ func promptOverwriteArchive(stdin io.Reader, stdout io.Writer, path string, size
 }
 
 // uploadFolderDirect uploads the source folder tree as a collection on
-// iRODS, then writes one folder-level sidecar.
+// iRODS, writes one folder-level sidecar, then optionally deletes the
+// source tree (marking the sidecar as a tombstone).
 func uploadFolderDirect(
 	cmd *cobra.Command,
 	srcAbs, remoteCollection string,
 	opts iron.UploadOpts,
 	env *config.Env,
 	prof *folder.Profile,
+	cleanup postUploadCleanup,
 	message string,
 	uploads *[]uploadedItem,
 ) error {
+	stdout := cmd.OutOrStdout()
+	stderr := cmd.ErrOrStderr()
+
 	client, err := iron.New()
 	if err != nil {
 		return err
@@ -286,7 +344,7 @@ func uploadFolderDirect(
 	// → creates /remote/dst/scripts/. We use that form.
 	remoteTarget := remoteCollection + "/"
 	remotePath := remoteCollection + "/" + remoteBase
-	fmt.Fprintf(cmd.OutOrStdout(), "→ %s/\n", remotePath)
+	fmt.Fprintf(stdout, "→ %s/\n", remotePath)
 	if err := client.Mkdir(ctx, remoteCollection); err != nil {
 		return fmt.Errorf("imkdir %s: %w", remoteCollection, err)
 	}
@@ -303,19 +361,26 @@ func uploadFolderDirect(
 	if err := client.Upload(ctx, srcAbs, remoteTarget, folderOpts); err != nil {
 		return err
 	}
-	return finalizeFolderSidecar(cmd, srcAbs, remotePath, env, prof, nil, client, ctx, uploads, "folder", message)
+	if err := finalizeFolderSidecar(cmd, srcAbs, remotePath, env, prof, nil, client, ctx, uploads, "folder", message); err != nil {
+		return err
+	}
+	if cleanup.source {
+		return cleanupSourceFolder(srcAbs, stdout, stderr)
+	}
+	return nil
 }
 
-// uploadFolderArchived builds <basename>.tar.gz, uploads the archive, and
+// uploadFolderArchived builds <basename>.tar.gz, uploads the archive,
 // writes one folder-level sidecar describing both the source folder
-// (recursive_sha256, file_count, …) and the archive object on iRODS.
+// (recursive_sha256, file_count, …) and the archive object on iRODS,
+// then optionally deletes the local archive and/or source folder.
 func uploadFolderArchived(
 	cmd *cobra.Command,
 	srcAbs, remoteCollection string,
 	opts iron.UploadOpts,
 	env *config.Env,
 	prof *folder.Profile,
-	cleanupAfter bool,
+	cleanup postUploadCleanup,
 	message string,
 	uploads *[]uploadedItem,
 ) error {
@@ -380,8 +445,18 @@ func uploadFolderArchived(
 		return err
 	}
 
-	// Cleanup or warn — the archive is local cruft after a successful upload.
-	if cleanupAfter {
+	// Cleanup step. Order matters — clean source first (updates the
+	// sidecar to tombstone), then the archive. If either fails, we
+	// warn but continue; the upload itself is already committed.
+	if cleanup.source {
+		if err := cleanupSourceFolder(srcAbs, stdout, stderr); err != nil {
+			// Non-fatal — surface the error, keep the archive
+			// around as a safety net.
+			fmt.Fprintf(stderr, "  WARNING: source cleanup failed: %v — leaving archive in place\n", err)
+			return nil
+		}
+	}
+	if cleanup.archive {
 		if err := os.Remove(archiveLocal); err != nil {
 			fmt.Fprintf(stderr, "  WARNING: could not remove %s: %v\n", archiveLocal, err)
 		} else {
@@ -394,6 +469,41 @@ func uploadFolderArchived(
 		fmt.Fprintf(stderr,
 			"     delete it manually or re-run with --cleanup-archive next time.\n\n")
 	}
+	return nil
+}
+
+// cleanupSourceFolder removes the source folder tree from disk and
+// flips the sidebar's irods_status to "local_deleted" — same
+// tombstone semantic as `mus rm`. Called only after a successful
+// upload + sidecar-write. Order: rewrite sidecar first (small,
+// atomic), then rm the folder. If the rm fails, the tombstone
+// still describes the truth (folder is in a weird half-state, but
+// the sidecar isn't lying about what happened).
+//
+// Sidecar is at srcAbs+".mus" — sibling of the folder, so removing
+// srcAbs doesn't touch it.
+func cleanupSourceFolder(srcAbs string, stdout, stderr io.Writer) error {
+	scPath := srcAbs + sidecar.Suffix
+	// Tombstone update — read → set status → write. If the sidecar
+	// doesn't exist (unusual — finalize just wrote it), skip the
+	// update and go straight to rm.
+	doc, err := readMaybe(scPath)
+	if err != nil {
+		return fmt.Errorf("read sidecar %s: %w", scPath, err)
+	}
+	if doc != nil {
+		if doc.IRODS == nil {
+			doc.IRODS = &sidecar.IRODS{}
+		}
+		doc.IRODS.Status = "local_deleted"
+		if err := sidecar.Write(scPath, doc); err != nil {
+			return fmt.Errorf("write tombstone sidecar %s: %w", scPath, err)
+		}
+	}
+	if err := os.RemoveAll(srcAbs); err != nil {
+		return fmt.Errorf("remove source %s: %w", srcAbs, err)
+	}
+	fmt.Fprintf(stdout, "  removed local source %s (sidecar → tombstone)\n", srcAbs)
 	return nil
 }
 
