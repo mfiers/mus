@@ -2,8 +2,11 @@ package eln
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -172,6 +175,64 @@ func TestFullNameFallsBackToEmail(t *testing.T) {
 	u := &UserInfo{Email: "x@y"}
 	if u.FullName() != "x@y" {
 		t.Errorf("FullName = %q", u.FullName())
+	}
+}
+
+func TestUploadFile_RawBody_NotMultipart(t *testing.T) {
+	// Regression: the eLabNext endpoint expects RAW binary body,
+	// NOT multipart/form-data. Wrapping in multipart used to cause
+	// HTTP 500 with an empty response body (server refuses the
+	// wrapper without a diagnostic). This test pins the wire
+	// format so future refactors can't silently reintroduce it.
+	tmp := t.TempDir()
+	fpath := filepath.Join(tmp, "hello.txt")
+	payload := []byte("hello world\n")
+	if err := os.WriteFile(fpath, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var seenCT string
+	var seenBody []byte
+	var seenFileName string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/experiments/sections/16152172/files", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method %s, want POST", r.Method)
+		}
+		seenCT = r.Header.Get("Content-Type")
+		seenFileName = r.URL.Query().Get("fileName")
+		var err error
+		seenBody, err = io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewServer(authMiddleware(t, "k", mux))
+	defer srv.Close()
+
+	c := New(srv.URL, "k")
+	if err := c.UploadFile(16152172, fpath, "hello.txt"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Body must be verbatim file contents — NOT wrapped in a
+	// multipart envelope (multipart bodies begin with `--<boundary>`
+	// and include Content-Disposition headers).
+	if string(seenBody) != string(payload) {
+		t.Errorf("body: got %q, want %q", seenBody, payload)
+	}
+	if strings.HasPrefix(string(seenBody), "--") {
+		t.Errorf("body appears to be multipart-wrapped: %q", seenBody[:min(64, len(seenBody))])
+	}
+	if strings.Contains(seenCT, "multipart") {
+		t.Errorf("Content-Type must not be multipart; got %q", seenCT)
+	}
+	if seenCT != "application/octet-stream" {
+		t.Errorf("Content-Type: got %q, want application/octet-stream", seenCT)
+	}
+	if seenFileName != "hello.txt" {
+		t.Errorf("fileName query param: got %q, want hello.txt", seenFileName)
 	}
 }
 

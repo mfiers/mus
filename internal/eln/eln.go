@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
@@ -538,6 +537,17 @@ func (c *Client) LinkSamplesToSection(expJournalID int64, sampleIDs []int64) err
 
 // UploadFile uploads a local file to a FILE section. uploadName overrides the
 // remote name; if empty, the base name of `path` is used.
+//
+// Per eLabNext's "API file upload" docs, the body MUST be the raw binary
+// bytes of the file — NOT multipart/form-data. Wrapping the file in a
+// multipart envelope causes the endpoint to return HTTP 500 with an
+// empty body (server refuses the wrapper without a diagnostic).
+// Content-Type=application/octet-stream, Content-Length set explicitly
+// so the server knows the size upfront.
+//
+// eLabNext caps uploads at 150 MB per file — larger files return an
+// error from the server; mus doesn't pre-check the size (yet), we
+// surface the server response as-is.
 func (c *Client) UploadFile(journalID int64, path, uploadName string) error {
 	if uploadName == "" {
 		uploadName = filepath.Base(path)
@@ -548,35 +558,26 @@ func (c *Client) UploadFile(journalID int64, path, uploadName string) error {
 	}
 	defer f.Close()
 
-	pipeReader, pipeWriter := io.Pipe()
-	mw := multipart.NewWriter(pipeWriter)
-	errCh := make(chan error, 1)
-	go func() {
-		defer pipeWriter.Close()
-		part, err := mw.CreateFormFile("file", uploadName)
-		if err != nil {
-			errCh <- err
-			return
-		}
-		if _, err := io.Copy(part, f); err != nil {
-			errCh <- err
-			return
-		}
-		errCh <- mw.Close()
-	}()
+	// Content-Length lets the server pre-allocate and lets us fail
+	// fast on unreadable files without buffering the whole thing.
+	fi, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", path, err)
+	}
 
 	u, err := c.buildURL(fmt.Sprintf("experiments/sections/%d/files", journalID),
 		url.Values{"fileName": {uploadName}})
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest("POST", u, pipeReader)
+	req, err := http.NewRequest("POST", u, f)
 	if err != nil {
 		return err
 	}
+	req.ContentLength = fi.Size()
 	req.Header.Set("Authorization", c.APIKey)
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Content-Type", "application/octet-stream")
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
@@ -586,9 +587,6 @@ func (c *Client) UploadFile(journalID int64, path, uploadName string) error {
 	if resp.StatusCode/100 != 2 {
 		raw, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("upload %s: HTTP %d: %s", path, resp.StatusCode, strings.TrimSpace(string(raw)))
-	}
-	if err := <-errCh; err != nil {
-		return err
 	}
 	return nil
 }
