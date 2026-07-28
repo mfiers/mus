@@ -37,6 +37,10 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
+
+	"codeberg.org/mfiers/mus/internal/config"
+	"codeberg.org/mfiers/mus/internal/secret"
 )
 
 //go:embed ui/index.html
@@ -139,6 +143,13 @@ func runServe(ctx context.Context, opt serveOptions, stdout, stderr interface {
 	// banner with the exact `iron auth ...` command to run.
 	probeIRODSAuth(ctx, stdout)
 
+	// If iRODS auth was missing AND we have a stored u-number AND
+	// stdin is a TTY, try to run `iron auth` now so the depositor
+	// doesn't have to open a second terminal. Iron will prompt for
+	// password / SSO in this terminal; when it returns, we re-probe
+	// so the browser banner clears automatically on next poll.
+	autoIronAuthIfConfigured(ctx, stdout)
+
 	// Start the server in a goroutine so we can block on a signal.
 	serverErr := make(chan error, 1)
 	go func() {
@@ -195,7 +206,9 @@ func probeIRODSAuth(ctx context.Context, stdout interface {
 	if _, err := exec.LookPath("iron"); err != nil {
 		authState.iRODSAuthed = false
 		authState.iRODSErrText = "iron CLI not on PATH — install from https://rdm-docs.icts.kuleuven.be/mango/clients/iron.html"
-		fmt.Fprintln(stdout, "  ⚠ iRODS: iron CLI not found on PATH")
+		if stdout != nil {
+			fmt.Fprintln(stdout, "  ⚠ iRODS: iron CLI not found on PATH")
+		}
 	} else {
 		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
@@ -204,11 +217,17 @@ func probeIRODSAuth(ctx context.Context, stdout interface {
 			authState.iRODSAuthed = false
 			authState.iRODSErrText = "not authenticated against iRODS"
 			authState.iRODSHint = IronAuthHint
-			fmt.Fprintln(stdout, "  ⚠ iRODS: not authenticated (upload will fail until you run `"+IronAuthHint+"`)")
+			if stdout != nil {
+				fmt.Fprintln(stdout, "  ⚠ iRODS: not authenticated (upload will fail until you run `"+IronAuthHint+"`)")
+			}
 		} else {
 			authState.iRODSAuthed = true
 			authState.iRODSPwd = strings.TrimSpace(string(out))
-			fmt.Fprintf(stdout, "  ✓ iRODS: authenticated (iron pwd = %s)\n", authState.iRODSPwd)
+			authState.iRODSErrText = ""
+			authState.iRODSHint = ""
+			if stdout != nil {
+				fmt.Fprintf(stdout, "  ✓ iRODS: authenticated (iron pwd = %s)\n", authState.iRODSPwd)
+			}
 		}
 	}
 
@@ -218,16 +237,112 @@ func probeIRODSAuth(ctx context.Context, stdout interface {
 		if u, uerr := client.CurrentUser(); uerr == nil {
 			authState.elnAuthed = true
 			authState.elnUser = u.FullName()
-			fmt.Fprintf(stdout, "  ✓ ELN: authenticated as %s\n", authState.elnUser)
+			if stdout != nil {
+				fmt.Fprintf(stdout, "  ✓ ELN: authenticated as %s\n", authState.elnUser)
+			}
 		} else {
 			authState.elnAuthed = false
-			fmt.Fprintf(stdout, "  ⚠ ELN: token stored but verification failed: %v\n", uerr)
+			if stdout != nil {
+				fmt.Fprintf(stdout, "  ⚠ ELN: token stored but verification failed: %v\n", uerr)
+			}
 		}
 	} else {
 		authState.elnAuthed = false
-		fmt.Fprintln(stdout, "  ⚠ ELN: no token stored — `mus eln login` to enable ELN linking")
+		if stdout != nil {
+			fmt.Fprintln(stdout, "  ⚠ ELN: no token stored — `mus eln login` to enable ELN linking")
+		}
 	}
-	fmt.Fprintln(stdout)
+	if stdout != nil {
+		fmt.Fprintln(stdout)
+	}
+}
+
+// autoIronAuthIfConfigured tries to run `iron auth <u> gbiomed
+// gbiomed.irods.icts.kuleuven.be` at startup when:
+//
+//   - the earlier probe reported iRODS-unauthed
+//   - stdin is a TTY (interactive terminal — iron auth prompts for
+//     password / SSO here; on non-TTY launches like Explorer / Finder
+//     right-click, there's no way for the prompt to reach the user,
+//     so we skip)
+//   - a u-number is stored in the secret store as `irods_username`
+//     OR in the global mus.cfg cascade
+//
+// On success (iron auth completes + iron pwd works), the probe is
+// re-run and authState updated. On any failure, the banner stays up
+// and the depositor is told what to do.
+//
+// Returns silently when any precondition is missing.
+func autoIronAuthIfConfigured(ctx context.Context, stdout interface {
+	Write([]byte) (int, error)
+}) {
+	if authState.iRODSAuthed {
+		return
+	}
+	if !stdinIsATerminal() {
+		if stdout != nil {
+			fmt.Fprintln(stdout, "  ↷ skipping auto-`iron auth`: stdin is not a TTY (probably launched from a file manager)")
+		}
+		return
+	}
+	u := lookupIRODSUsername()
+	if u == "" {
+		if stdout != nil {
+			fmt.Fprintln(stdout, "  ↷ skipping auto-`iron auth`: no irods_username stored (set via `mus secret set irods_username uNNNNNNN` to enable)")
+		}
+		return
+	}
+	if stdout != nil {
+		fmt.Fprintf(stdout, "  → running: iron auth %s gbiomed gbiomed.irods.icts.kuleuven.be\n", u)
+		fmt.Fprintln(stdout, "    (iron will prompt for your KU Leuven password / SSO in this terminal)")
+		fmt.Fprintln(stdout)
+	}
+	// Inherit stdin/stdout/stderr so iron's interactive prompt works.
+	cmd := exec.CommandContext(ctx, "iron", "auth", u,
+		"gbiomed", "gbiomed.irods.icts.kuleuven.be")
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		if stdout != nil {
+			fmt.Fprintf(stdout, "  ⚠ `iron auth` failed (%v) — banner will stay up until you re-run it manually\n\n", err)
+		}
+		return
+	}
+	// Re-probe so authState reflects post-auth reality.
+	probeIRODSAuth(ctx, stdout)
+}
+
+// lookupIRODSUsername reads the depositor's KU Leuven u-number from:
+//   1. secret store key `irods_username`
+//   2. global + folder-cascade mus.cfg key `irods_username`
+// Returns "" when neither is set.
+func lookupIRODSUsername() string {
+	if store, err := secret.Open(); err == nil {
+		if v, gerr := store.Get("irods_username"); gerr == nil {
+			if s := strings.TrimSpace(v); s != "" {
+				return s
+			}
+		}
+	}
+	// Cascade fallback — reuses config.Load on cwd so a project
+	// folder can pin it via mus.cfg if a lab prefers.
+	cwd, err := os.Getwd()
+	if err == nil {
+		if env, cerr := config.Load(cwd); cerr == nil {
+			if v := strings.TrimSpace(env.String("irods_username")); v != "" {
+				return v
+			}
+		}
+	}
+	return ""
+}
+
+// stdinIsATerminal reports whether os.Stdin is a TTY. `iron auth`
+// prompts for password / SSO on stdin — auto-run only works when
+// there's a real terminal underneath the server process.
+func stdinIsATerminal() bool {
+	return term.IsTerminal(int(os.Stdin.Fd()))
 }
 
 // generateToken returns 32 cryptographically-random bytes

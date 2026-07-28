@@ -115,15 +115,33 @@
     margin-left: auto; padding: 0.3em 0.7em; font-size: 0.9em;
   }
 
-  /* ── main 3-column layout ────────────────────────────────────────── */
+  /* ── main 3-column layout with draggable dividers ────────────────── */
+  /* Three equal panels by default; the two vertical dividers between
+     them can be dragged to reallocate width. Widths are stored in
+     localStorage so a depositor's preference persists. */
   main {
     display: grid;
-    grid-template-columns: 340px 1fr 400px;
+    grid-template-columns: 1fr 6px 1fr 6px 1fr;
     gap: 0;
     height: calc(100vh - var(--header-height));
   }
-  .panel { padding: 1.1em 1.2em; overflow-y: auto; background: var(--color-panel); }
-  .panel + .panel { border-left: 1px solid var(--color-border); }
+  .panel { padding: 1.1em 1.2em; overflow-y: auto; background: var(--color-panel); min-width: 0; }
+  .divider {
+    background: var(--color-border);
+    cursor: col-resize;
+    user-select: none;
+    position: relative;
+    transition: background 0.1s;
+  }
+  .divider:hover, .divider.dragging {
+    background: var(--color-primary);
+  }
+  /* Widen the hit area beyond the visible track for easier grabbing. */
+  .divider::before {
+    content: '';
+    position: absolute;
+    top: 0; bottom: 0; left: -4px; right: -4px;
+  }
   .panel h2 {
     font-size: var(--font-size-h2); margin: 0 0 0.8em 0;
     color: var(--color-fg); font-weight: 600;
@@ -325,7 +343,7 @@
   <button type="button" id="auth-banner-recheck" class="ghost">Check again</button>
 </div>
 
-<main>
+<main id="main-grid">
   <!-- LEFT: annotation / metadata -->
   <section class="panel">
     <h2>Metadata</h2>
@@ -346,6 +364,8 @@
     </form>
   </section>
 
+  <div class="divider" data-idx="0" aria-hidden="true"></div>
+
   <!-- CENTER: file selection -->
   <section class="panel">
     <h2>Folder &amp; files</h2>
@@ -353,6 +373,8 @@
     <input class="filter" id="filter" type="search" placeholder="filter by name…">
     <div id="tree"></div>
   </section>
+
+  <div class="divider" data-idx="1" aria-hidden="true"></div>
 
   <!-- RIGHT: upload -->
   <section class="panel">
@@ -418,9 +440,19 @@ function showNotice(div, msg) { div.innerHTML = ''; div.appendChild(el('div', { 
 function clearStatus(div)     { div.innerHTML = ''; }
 
 // ── auth banner + header badges ────────────────────────────────────────
-async function refreshAuth() {
+// refreshAuth pulls the current auth state. When forceProbe is true,
+// hits POST /api/auth-refresh which re-runs `iron pwd` + ELN token
+// verification server-side; when false, hits GET /api/auth-status
+// which returns the cached state. UI schedules the forced version
+// frequently while the banner is up (so a mid-session `iron auth`
+// clears without a manual click).
+async function refreshAuth(forceProbe) {
   try {
-    authStatus = await api('/api/auth-status');
+    if (forceProbe) {
+      authStatus = await apiPost('/api/auth-refresh', {});
+    } else {
+      authStatus = await api('/api/auth-status');
+    }
   } catch (e) {
     authStatus = null;
     return;
@@ -478,12 +510,7 @@ async function refreshAuth() {
   }
 }
 
-document.getElementById('auth-banner-recheck').addEventListener('click', async () => {
-  try {
-    authStatus = await apiPost('/api/auth-refresh', {});
-  } catch (e) {}
-  await refreshAuth();
-});
+document.getElementById('auth-banner-recheck').addEventListener('click', () => refreshAuth(true));
 
 // ── boot ───────────────────────────────────────────────────────────────
 async function boot() {
@@ -494,11 +521,37 @@ async function boot() {
     rootEl.textContent = serverRoot;
     rootEl.title = serverRoot;
   } catch (e) { /* leave header blank */ }
-  await refreshAuth();
+  await refreshAuth(true);
   await refreshAll();
-  // Poll auth periodically so a mid-session `iron auth` becomes visible
-  // without the depositor having to click "Check again".
-  setInterval(refreshAuth, 30000);
+  scheduleAuthPoll();
+  restorePanelWidths();
+  installDividers();
+  // Re-probe on tab focus — depositors typically Alt-Tab to a
+  // terminal, run `iron auth`, then come back. Detecting the tab-
+  // visible transition means the banner clears within one poll of
+  // the depositor's return without them having to click anything.
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) refreshAuth(true);
+  });
+  window.addEventListener('focus', () => refreshAuth(true));
+}
+
+// scheduleAuthPoll picks a poll interval based on current state:
+//   - unauthed (banner up): every 3s, forced (re-probe) so mid-
+//     session `iron auth` clears quickly
+//   - authed (banner down): every 30s, cached (cheap; catches
+//     token expiry without spamming the server)
+let authPollHandle = null;
+function scheduleAuthPoll() {
+  if (authPollHandle) clearInterval(authPollHandle);
+  const unauthed = !authStatus || !authStatus.irods_authed;
+  const interval = unauthed ? 3000 : 30000;
+  authPollHandle = setInterval(async () => {
+    await refreshAuth(!authStatus || !authStatus.irods_authed);
+    // Reschedule if the state category flipped (unauthed→authed or back).
+    const nowUnauthed = !authStatus || !authStatus.irods_authed;
+    if (nowUnauthed !== unauthed) scheduleAuthPoll();
+  }, interval);
 }
 async function refreshAll() {
   renderCrumbs();
@@ -879,6 +932,88 @@ document.getElementById('upload-go').addEventListener('click', async () => {
     await refreshAuth();
   }
 });
+
+// ── resizable panels ───────────────────────────────────────────────────
+// Three fractional-width columns separated by two draggable dividers.
+// The sum of the three column widths is always 100% — dragging a
+// divider steals width from one neighbour and gives it to the other.
+// State persists to localStorage so a depositor's preference sticks.
+
+// Default: equal thirds. Loaded from LS if a prior session saved.
+let panelPercents = [33.33, 33.34, 33.33];
+
+function applyPanelWidths() {
+  const main = document.getElementById('main-grid');
+  if (!main) return;
+  main.style.gridTemplateColumns =
+    panelPercents[0] + '% 6px ' + panelPercents[1] + '% 6px ' + panelPercents[2] + '%';
+}
+function restorePanelWidths() {
+  try {
+    const raw = localStorage.getItem('mus.serve.panelPercents');
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr) && arr.length === 3 &&
+          arr.every(v => typeof v === 'number' && v > 5 && v < 90)) {
+        panelPercents = arr;
+      }
+    }
+  } catch (e) { /* keep defaults */ }
+  applyPanelWidths();
+}
+function savePanelWidths() {
+  try { localStorage.setItem('mus.serve.panelPercents', JSON.stringify(panelPercents)); }
+  catch (e) { /* full LS or private mode — ignore */ }
+}
+
+function installDividers() {
+  const main = document.getElementById('main-grid');
+  const dividers = document.querySelectorAll('.divider');
+  dividers.forEach(d => {
+    d.addEventListener('pointerdown', (e) => {
+      const idx = parseInt(d.dataset.idx, 10); // 0 = between panel0/panel1, 1 = between panel1/panel2
+      d.classList.add('dragging');
+      d.setPointerCapture(e.pointerId);
+      // Snapshot the pair we're rebalancing so the OTHER neighbour is untouched.
+      const leftIdx = idx;
+      const rightIdx = idx + 1;
+      const pairSum = panelPercents[leftIdx] + panelPercents[rightIdx];
+      const rect = main.getBoundingClientRect();
+      const totalPx = rect.width;
+      // Pixel range in which the left panel of the pair lives: from
+      // the start of the left panel to the end of the right panel.
+      const before = panelPercents.slice(0, leftIdx).reduce((a, b) => a + b, 0);
+      const beforePx = (before / 100) * totalPx;
+      const pairPx = (pairSum / 100) * totalPx;
+      const minPct = 8; // don't let either side of the pair collapse below this
+
+      const onMove = (ev) => {
+        const localX = ev.clientX - rect.left - beforePx;
+        let leftFrac = Math.max(minPct / 100,
+          Math.min((pairSum - minPct) / 100, localX / pairPx));
+        panelPercents[leftIdx]  = leftFrac * pairSum;
+        panelPercents[rightIdx] = (1 - leftFrac) * pairSum;
+        applyPanelWidths();
+      };
+      const onUp = () => {
+        d.classList.remove('dragging');
+        d.removeEventListener('pointermove', onMove);
+        d.removeEventListener('pointerup', onUp);
+        d.removeEventListener('pointercancel', onUp);
+        savePanelWidths();
+      };
+      d.addEventListener('pointermove', onMove);
+      d.addEventListener('pointerup', onUp);
+      d.addEventListener('pointercancel', onUp);
+    });
+    // Double-click divider → reset the whole layout to equal thirds.
+    d.addEventListener('dblclick', () => {
+      panelPercents = [33.33, 33.34, 33.33];
+      applyPanelWidths();
+      savePanelWidths();
+    });
+  });
+}
 
 // ── go! ────────────────────────────────────────────────────────────────
 boot();
