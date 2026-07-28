@@ -23,6 +23,7 @@ import (
 	"crypto/rand"
 	_ "embed"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -31,6 +32,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -131,6 +133,12 @@ func runServe(ctx context.Context, opt serveOptions, stdout, stderr interface {
 	fmt.Fprintf(stdout, "  → open in your browser: %s\n", url)
 	fmt.Fprintf(stdout, "  Ctrl-C to stop.\n\n")
 
+	// Probe iRODS auth once at startup so the UI can surface the
+	// authenticated state up-front. Non-fatal — if `iron pwd` fails
+	// (missing binary, expired token), the browser gets a yellow
+	// banner with the exact `iron auth ...` command to run.
+	probeIRODSAuth(ctx, stdout)
+
 	// Start the server in a goroutine so we can block on a signal.
 	serverErr := make(chan error, 1)
 	go func() {
@@ -159,6 +167,67 @@ func runServe(ctx context.Context, opt serveOptions, stdout, stderr interface {
 	defer cancel()
 	_ = server.Shutdown(shutdownCtx)
 	return nil
+}
+
+// authState caches the iron auth probe result so the UI can query
+// it without shelling out on every page load. Mutated by
+// probeIRODSAuth() at startup + refresh; read by apiAuthStatus.
+var authState struct {
+	iRODSAuthed  bool
+	iRODSPwd     string // output of `iron pwd`, when authed
+	iRODSHint    string // suggested command to fix (when unauthed)
+	iRODSErrText string // short human explanation when unauthed
+	elnAuthed    bool
+	elnUser      string
+	probedAt     time.Time
+}
+
+// probeIRODSAuth runs `iron pwd` and, separately, checks whether an
+// ELN token is stored. Populates authState. Best-effort — never
+// returns an error. Reports outcome on stdout so the terminal
+// launcher sees it too.
+func probeIRODSAuth(ctx context.Context, stdout interface {
+	Write([]byte) (int, error)
+}) {
+	authState.probedAt = time.Now()
+
+	// iRODS side.
+	if _, err := exec.LookPath("iron"); err != nil {
+		authState.iRODSAuthed = false
+		authState.iRODSErrText = "iron CLI not on PATH — install from https://rdm-docs.icts.kuleuven.be/mango/clients/iron.html"
+		fmt.Fprintln(stdout, "  ⚠ iRODS: iron CLI not found on PATH")
+	} else {
+		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		out, err := exec.CommandContext(probeCtx, "iron", "pwd").Output()
+		if err != nil {
+			authState.iRODSAuthed = false
+			authState.iRODSErrText = "not authenticated against iRODS"
+			authState.iRODSHint = IronAuthHint
+			fmt.Fprintln(stdout, "  ⚠ iRODS: not authenticated (upload will fail until you run `"+IronAuthHint+"`)")
+		} else {
+			authState.iRODSAuthed = true
+			authState.iRODSPwd = strings.TrimSpace(string(out))
+			fmt.Fprintf(stdout, "  ✓ iRODS: authenticated (iron pwd = %s)\n", authState.iRODSPwd)
+		}
+	}
+
+	// ELN side — cheap: openELN reads keyring / age; failure means
+	// no token or misconfigured URL.
+	if client, err := openELN(); err == nil {
+		if u, uerr := client.CurrentUser(); uerr == nil {
+			authState.elnAuthed = true
+			authState.elnUser = u.FullName()
+			fmt.Fprintf(stdout, "  ✓ ELN: authenticated as %s\n", authState.elnUser)
+		} else {
+			authState.elnAuthed = false
+			fmt.Fprintf(stdout, "  ⚠ ELN: token stored but verification failed: %v\n", uerr)
+		}
+	} else {
+		authState.elnAuthed = false
+		fmt.Fprintln(stdout, "  ⚠ ELN: no token stored — `mus eln login` to enable ELN linking")
+	}
+	fmt.Fprintln(stdout)
 }
 
 // generateToken returns 32 cryptographically-random bytes
@@ -294,7 +363,43 @@ func registerServeRoutes(mux *http.ServeMux, _ string) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		fmt.Fprintf(w, "%s", cwd)
 	})
+	mux.HandleFunc("/api/auth-status", apiAuthStatus)
+	mux.HandleFunc("/api/auth-refresh", apiAuthRefresh)
 	registerServeAPI(mux)
 	registerServeActions(mux)
 }
+
+// apiAuthStatus returns the cached iRODS + ELN auth state from
+// authState. Refreshed manually via /api/auth-refresh.
+func apiAuthStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"irods_authed":   authState.iRODSAuthed,
+		"irods_pwd":      authState.iRODSPwd,
+		"irods_hint":     authState.iRODSHint,
+		"irods_err_text": authState.iRODSErrText,
+		"eln_authed":     authState.elnAuthed,
+		"eln_user":       authState.elnUser,
+		"probed_at":      authState.probedAt.Format(time.RFC3339),
+	})
+}
+
+// apiAuthRefresh re-runs the probe. Called by the UI when the
+// depositor clicks "check again" after having run `iron auth` in a
+// terminal.
+func apiAuthRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	probeIRODSAuth(r.Context(), silentWriter{})
+	apiAuthStatus(w, r)
+}
+
+// silentWriter discards writes — used during /api/auth-refresh where
+// we don't want to spam the server's stdout on every browser click.
+type silentWriter struct{}
+
+func (silentWriter) Write(p []byte) (int, error) { return len(p), nil }
+
 

@@ -5,247 +5,372 @@
 <title>mus serve</title>
 <style>
   /* Vanilla single-file UI. No framework. ~6 lab depositors, not a SaaS
-     product — readability beats slickness. */
+     product — readability + big touch targets beat slickness. */
+
+  /* ── design tokens ───────────────────────────────────────────────── */
+  :root {
+    --font-size-base: 15px;
+    --font-size-h2: 1.1em;
+    --font-size-small: 0.88em;
+    --color-fg: #1f2937;
+    --color-fg-muted: #6b7280;
+    --color-bg: #f5f6f8;
+    --color-panel: #ffffff;
+    --color-border: #e5e7eb;
+    --color-primary: #2563eb;
+    --color-primary-dark: #1d4ed8;
+    --color-primary-bg: #eff6ff;
+    --color-ok: #16a34a;
+    --color-ok-bg: #ecfdf5;
+    --color-warn: #92400e;
+    --color-warn-bg: #fef3c7;
+    --color-error: #991b1b;
+    --color-error-bg: #fee2e2;
+    --header-height: 68px;
+    --radius: 6px;
+  }
+
   * { box-sizing: border-box; }
   body {
-    font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-          system-ui, sans-serif;
-    margin: 0; color: #222; background: #fafafa;
-  }
-  header {
-    background: #fff; border-bottom: 1px solid #e0e0e0;
-    padding: 0.6em 1em; display: flex; align-items: center; gap: 0.6em;
-  }
-  header h1 { font-size: 1.1em; margin: 0; flex: 1; }
-  header .root { color: #666; font-family: ui-monospace, Menlo, monospace; }
-  main {
-    display: grid; grid-template-columns: 300px 1fr 340px;
-    gap: 0; height: calc(100vh - 50px);
-  }
-  .panel { padding: 0.8em; overflow-y: auto; background: #fff; }
-  .panel + .panel { border-left: 1px solid #e0e0e0; }
-  .panel h2 {
-    font-size: 0.95em; margin: 0 0 0.6em 0;
-    color: #444; text-transform: uppercase; letter-spacing: 0.05em;
-    border-bottom: 1px solid #eee; padding-bottom: 0.3em;
+    font: var(--font-size-base)/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI",
+          Roboto, system-ui, sans-serif;
+    margin: 0;
+    color: var(--color-fg);
+    background: var(--color-bg);
   }
 
-  /* Folder tree */
-  .crumbs { font-family: ui-monospace, Menlo, monospace; font-size: 0.85em;
-            color: #888; margin-bottom: 0.4em; word-break: break-all; }
-  .crumbs a { color: #2563eb; text-decoration: none; cursor: pointer; }
+  /* ── header ──────────────────────────────────────────────────────── */
+  header.topbar {
+    display: flex; align-items: center; gap: 1.5em;
+    background: linear-gradient(180deg, #ffffff 0%, #f9fafb 100%);
+    border-bottom: 1px solid var(--color-border);
+    padding: 0.75em 1.5em;
+    min-height: var(--header-height);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+  }
+  .brand {
+    display: flex; align-items: center; gap: 0.5em;
+    font-weight: 700; font-size: 1.35em;
+    color: var(--color-primary); letter-spacing: -0.02em;
+    user-select: none;
+  }
+  .brand svg { width: 28px; height: 28px; }
+  .brand small {
+    font-size: 0.55em; font-weight: 500; color: var(--color-fg-muted);
+    text-transform: uppercase; letter-spacing: 0.1em;
+    align-self: center; margin-left: 0.3em;
+  }
+
+  .linkbox {
+    display: flex; align-items: center; gap: 0.6em; flex: 1;
+  }
+  .linkbox label {
+    display: flex; flex-direction: column; gap: 0.15em;
+    font-size: 0.75em; color: var(--color-fg-muted);
+    text-transform: uppercase; letter-spacing: 0.05em;
+    flex: 1; max-width: 24em;
+  }
+  .linkbox input {
+    padding: 0.5em 0.7em;
+    border: 1px solid #cbd5e1; border-radius: var(--radius);
+    font-size: 1em; font-family: inherit;
+    background: #fff;
+  }
+  .linkbox input:focus {
+    outline: 2px solid var(--color-primary);
+    outline-offset: -1px; border-color: transparent;
+  }
+
+  .hdrstatus {
+    display: flex; align-items: center; gap: 0.6em;
+    flex-shrink: 0;
+  }
+  .hdrbadge {
+    font-size: 0.85em; padding: 0.3em 0.6em;
+    border-radius: 999px; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 0.35em;
+  }
+  .hdrbadge.ok   { background: var(--color-ok-bg);   color: var(--color-ok); }
+  .hdrbadge.warn { background: var(--color-warn-bg); color: var(--color-warn); cursor: help; }
+  .hdrbadge .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .server-root {
+    font-family: ui-monospace, Menlo, monospace; font-size: 0.78em;
+    color: var(--color-fg-muted); max-width: 26em;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  /* ── auth banner (below header) ──────────────────────────────────── */
+  .banner {
+    padding: 0.7em 1.5em; font-size: var(--font-size-small);
+    display: flex; align-items: center; gap: 0.6em;
+    border-bottom: 1px solid;
+  }
+  .banner.warn  { background: var(--color-warn-bg);  color: var(--color-warn);  border-color: #fbbf24; }
+  .banner.error { background: var(--color-error-bg); color: var(--color-error); border-color: #f87171; }
+  .banner code {
+    font-family: ui-monospace, Menlo, monospace;
+    background: rgba(255,255,255,0.5); padding: 0.1em 0.4em; border-radius: 3px;
+  }
+  .banner button {
+    margin-left: auto; padding: 0.3em 0.7em; font-size: 0.9em;
+  }
+
+  /* ── main 3-column layout ────────────────────────────────────────── */
+  main {
+    display: grid;
+    grid-template-columns: 340px 1fr 400px;
+    gap: 0;
+    height: calc(100vh - var(--header-height));
+  }
+  .panel { padding: 1.1em 1.2em; overflow-y: auto; background: var(--color-panel); }
+  .panel + .panel { border-left: 1px solid var(--color-border); }
+  .panel h2 {
+    font-size: var(--font-size-h2); margin: 0 0 0.8em 0;
+    color: var(--color-fg); font-weight: 600;
+    padding-bottom: 0.5em; border-bottom: 1px solid var(--color-border);
+  }
+  .section-label {
+    display: block; font-size: 0.85em; font-weight: 600;
+    color: var(--color-fg-muted); text-transform: uppercase;
+    letter-spacing: 0.05em; margin: 1em 0 0.4em 0;
+  }
+  .help {
+    color: var(--color-fg-muted); font-size: var(--font-size-small);
+    margin: 0.4em 0 0.8em; line-height: 1.5;
+  }
+
+  /* ── files column ────────────────────────────────────────────────── */
+  .crumbs {
+    font-family: ui-monospace, Menlo, monospace; font-size: 0.85em;
+    color: var(--color-fg-muted); margin-bottom: 0.5em; word-break: break-all;
+    padding: 0.4em 0.6em; background: #f9fafb; border-radius: var(--radius);
+  }
+  .crumbs a { color: var(--color-primary); text-decoration: none; cursor: pointer; }
   .crumbs a:hover { text-decoration: underline; }
   .filter {
-    width: 100%; padding: 0.4em 0.5em; margin-bottom: 0.4em;
-    border: 1px solid #d0d0d0; border-radius: 4px; font-size: 0.9em;
+    width: 100%; padding: 0.55em 0.7em; margin-bottom: 0.6em;
+    border: 1px solid #cbd5e1; border-radius: var(--radius);
+    font-size: 0.95em;
   }
   .tree-row {
-    display: flex; align-items: center; padding: 0.25em 0.4em;
-    border-radius: 4px; gap: 0.4em;
+    display: flex; align-items: center; padding: 0.4em 0.5em;
+    border-radius: var(--radius); gap: 0.5em;
   }
-  .tree-row:hover { background: #f0f4ff; }
-  .tree-row .icon { width: 1.1em; text-align: center; color: #888; }
+  .tree-row:hover { background: var(--color-primary-bg); }
+  .tree-row .icon { width: 1.2em; text-align: center; color: var(--color-fg-muted); }
   .tree-row.dir .icon { color: #d97706; }
   .tree-row .name { font-family: ui-monospace, Menlo, monospace;
-                    font-size: 0.9em; word-break: break-all; }
-  .tree-row .drill { flex: 1; display: flex; align-items: center; gap: 0.4em;
+                    font-size: 0.92em; word-break: break-all; }
+  .tree-row .drill { flex: 1; display: flex; align-items: center; gap: 0.5em;
                      cursor: pointer; }
   .tree-row .badge {
-    font-size: 0.7em; color: #16a34a; background: #ecfdf5;
-    padding: 0.05em 0.4em; border-radius: 3px;
+    font-size: 0.72em; color: var(--color-ok); background: var(--color-ok-bg);
+    padding: 0.1em 0.5em; border-radius: 3px; font-weight: 500;
   }
   .tree-row .badge.uploaded {
-    color: #2563eb; background: #eff6ff; font-weight: 600;
-    cursor: help;
+    color: var(--color-primary); background: var(--color-primary-bg);
+    font-weight: 600; cursor: help;
   }
-  .tree-row.sidecar { opacity: 0.55; }
+  .tree-row.sidecar { opacity: 0.5; }
   .tree-row.whole-folder {
-    background: #fff7ed; border: 1px solid #fed7aa; margin-bottom: 0.3em;
+    background: #fff7ed; border: 1px solid #fed7aa; margin-bottom: 0.4em;
   }
-  .tree-row input.select { margin: 0; cursor: pointer; }
-  .tree-row .select-spacer { width: 1em; display: inline-block; }
+  .tree-row input.select {
+    margin: 0; cursor: pointer;
+    width: 18px; height: 18px;
+  }
+  .tree-row .select-spacer { width: 18px; display: inline-block; }
 
-  /* Cascade chips */
-  .chips { display: flex; flex-direction: column; gap: 0.4em; margin-bottom: 0.8em; }
-  .chip-group { display: flex; flex-wrap: wrap; gap: 0.3em; }
+  /* ── annotation column ───────────────────────────────────────────── */
+  .chips { display: flex; flex-direction: column; gap: 0.5em; margin-bottom: 1em; }
+  .chip-group { display: flex; flex-wrap: wrap; gap: 0.35em; }
   .chip-group-label {
-    font-size: 0.75em; color: #555; text-transform: uppercase;
-    letter-spacing: 0.05em; margin-top: 0.2em;
+    font-size: 0.78em; color: var(--color-fg-muted); text-transform: uppercase;
+    letter-spacing: 0.05em; margin-top: 0.3em; font-weight: 500;
   }
-  .chip-group-label.inherited { color: #888; }
+  .chip-group-label.inherited { color: #9ca3af; }
   .chip {
-    background: #f3f4f6; border-radius: 4px; padding: 0.2em 0.5em;
-    font-size: 0.82em; font-family: ui-monospace, Menlo, monospace;
-    display: inline-flex; align-items: center; gap: 0.3em;
+    background: #f3f4f6; border-radius: var(--radius); padding: 0.3em 0.6em;
+    font-size: 0.85em; font-family: ui-monospace, Menlo, monospace;
+    display: inline-flex; align-items: center; gap: 0.4em;
   }
-  .chip.local { background: #ecfdf5; border: 1px solid #a7f3d0; }
+  .chip.local { background: var(--color-ok-bg); border: 1px solid #a7f3d0; }
   .chip.inherited { opacity: 0.85; }
-  .chip b { color: #444; }
+  .chip b { color: var(--color-fg); }
   .chip-x {
-    background: transparent; border: 0; color: #888;
-    cursor: pointer; padding: 0 0.2em; font-size: 1em;
+    background: transparent; border: 0; color: var(--color-fg-muted);
+    cursor: pointer; padding: 0 0.25em; font-size: 1.1em;
     line-height: 1; border-radius: 2px;
   }
-  .chip-x:hover { background: #fee2e2; color: #b91c1c; }
+  .chip-x:hover { background: var(--color-error-bg); color: var(--color-error); }
 
-  /* Form — annotation key+value side by side */
   .kv-form .kv-row {
     display: grid; grid-template-columns: 1fr 1.4fr auto;
-    gap: 0.4em; align-items: center; margin-bottom: 0.4em;
+    gap: 0.5em; align-items: center; margin-bottom: 0.5em;
   }
   .kv-form input, .kv-form select {
-    padding: 0.4em 0.5em;
-    border: 1px solid #d0d0d0; border-radius: 4px; font-size: 0.92em;
-    font-family: ui-monospace, Menlo, monospace;
-    box-sizing: border-box; width: 100%;
+    padding: 0.5em 0.6em;
+    border: 1px solid #cbd5e1; border-radius: var(--radius);
+    font-size: 0.95em; font-family: ui-monospace, Menlo, monospace;
+    width: 100%;
   }
-  button {
-    padding: 0.4em 0.8em; font-size: 0.9em;
-    background: #2563eb; color: #fff; border: 0; border-radius: 4px;
-    cursor: pointer;
-  }
-  button:hover { background: #1d4ed8; }
-  button.ghost { background: #fff; color: #2563eb; border: 1px solid #2563eb; }
-  button.ghost:hover { background: #eff6ff; }
-  button:disabled { opacity: 0.4; cursor: not-allowed; }
 
-  /* Pre-flight + ELN + Upload */
-  .checks { list-style: none; padding: 0; margin: 0 0 0.8em 0; }
+  /* ── upload column ───────────────────────────────────────────────── */
+  .checks { list-style: none; padding: 0; margin: 0 0 1em 0; }
   .checks li {
-    display: flex; align-items: center; gap: 0.5em;
-    padding: 0.3em 0; border-bottom: 1px solid #f0f0f0;
+    display: flex; align-items: center; gap: 0.6em;
+    padding: 0.4em 0.2em; border-bottom: 1px solid #f0f0f0;
+    font-size: 0.95em;
   }
-  .checks .mark { font-weight: bold; width: 1em; text-align: center; }
-  .checks .ok  .mark { color: #16a34a; }
-  .checks .bad .mark { color: #dc2626; }
+  .checks .mark { font-weight: 600; width: 1.2em; text-align: center; font-size: 1.05em; }
+  .checks .ok  .mark { color: var(--color-ok); }
+  .checks .bad .mark { color: var(--color-error); }
   .checks .label { flex: 1; }
-  .checks .detail { color: #888; font-size: 0.82em; }
+  .checks .detail { color: var(--color-fg-muted); font-size: 0.85em; }
 
-  /* Big message textarea in center */
   textarea.message {
-    width: 100%; padding: 0.5em; min-height: 4em;
-    border: 1px solid #d0d0d0; border-radius: 4px;
-    font: 0.92em ui-monospace, Menlo, monospace; box-sizing: border-box;
+    width: 100%; padding: 0.6em; min-height: 5em;
+    border: 1px solid #cbd5e1; border-radius: var(--radius);
+    font: 0.95em ui-monospace, Menlo, monospace;
     resize: vertical;
+  }
+  .upload-opts {
+    display: flex; gap: 1.2em; flex-wrap: wrap; margin: 0.6em 0;
+    font-size: 0.9em; color: var(--color-fg-muted);
+  }
+  .upload-opts label { display: flex; align-items: center; gap: 0.4em; cursor: pointer; }
+
+  #upload-selected-summary {
+    font-size: 0.87em; color: var(--color-fg-muted);
+    padding: 0.5em 0.7em; background: #f9fafb; border-radius: var(--radius);
+    margin-bottom: 0.6em;
   }
 
   pre.log {
-    background: #0f172a; color: #e2e8f0; padding: 0.6em; border-radius: 4px;
+    background: #0f172a; color: #e2e8f0; padding: 0.7em; border-radius: var(--radius);
     font-family: ui-monospace, Menlo, monospace; font-size: 0.82em;
-    max-height: 40vh; overflow-y: auto; white-space: pre-wrap;
-    margin: 0.6em 0 0 0;
+    max-height: 35vh; overflow-y: auto; white-space: pre-wrap;
+    margin: 0.8em 0 0 0;
   }
 
-  /* ELN block — collapsible */
-  .eln-block { border: 1px solid #e5e7eb; border-radius: 6px;
-               padding: 0.5em 0.7em; margin-bottom: 0.8em; background: #fafafa; }
-  .eln-block.decided { background: #f0fdf4; border-color: #bbf7d0; }
-  .eln-block summary {
-    cursor: pointer; font-weight: 600; font-size: 0.9em; color: #333;
-    list-style: none;
+  /* ── buttons ────────────────────────────────────────────────────── */
+  button {
+    padding: 0.5em 1em; font-size: 0.95em;
+    background: var(--color-primary); color: #fff;
+    border: 0; border-radius: var(--radius);
+    cursor: pointer; font-family: inherit; font-weight: 500;
   }
-  .eln-block summary::-webkit-details-marker { display: none; }
-  .eln-block summary::before {
-    content: '▸ '; display: inline-block; transition: transform 0.1s;
-    color: #888;
+  button:hover { background: var(--color-primary-dark); }
+  button.ghost { background: #fff; color: var(--color-primary); border: 1px solid var(--color-primary); }
+  button.ghost:hover { background: var(--color-primary-bg); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.big {
+    width: 100%; padding: 0.9em; font-size: 1.05em; font-weight: 600;
+    margin-top: 0.5em;
   }
-  .eln-block[open] summary::before { transform: rotate(90deg); }
-  .eln-block .eln-form { margin-top: 0.6em; display: flex;
-                         flex-direction: column; gap: 0.4em; }
-  .eln-block input { padding: 0.35em 0.5em; border: 1px solid #d0d0d0;
-                     border-radius: 4px; font-size: 0.88em;
-                     font-family: ui-monospace, Menlo, monospace; }
 
-  .notice { color: #92400e; background: #fef3c7; padding: 0.4em 0.6em;
-            border-radius: 4px; font-size: 0.85em; margin-bottom: 0.6em; }
-  .error  { color: #991b1b; background: #fee2e2; padding: 0.4em 0.6em;
-            border-radius: 4px; font-size: 0.85em; margin-bottom: 0.6em;
-            white-space: pre-wrap; }
-  .help { color: #555; font-size: 0.82em; margin: 0.3em 0 0.6em; }
+  /* ── notices ────────────────────────────────────────────────────── */
+  .notice {
+    color: var(--color-warn); background: var(--color-warn-bg);
+    padding: 0.5em 0.7em; border-radius: var(--radius);
+    font-size: 0.9em; margin-bottom: 0.6em;
+  }
+  .error {
+    color: var(--color-error); background: var(--color-error-bg);
+    padding: 0.5em 0.7em; border-radius: var(--radius);
+    font-size: 0.9em; margin-bottom: 0.6em; white-space: pre-wrap;
+  }
 </style>
 </head>
 <body>
-<header>
-  <h1>mus serve</h1>
-  <span class="root" id="server-root">…</span>
-</header>
-<main>
-  <!-- LEFT: folder tree + filter -->
-  <section class="panel" id="panel-tree">
-    <h2>Folders</h2>
-    <div class="crumbs" id="crumbs"></div>
-    <input class="filter" id="filter" type="search"
-           placeholder="filter (substring of file name)…">
-    <div id="tree"></div>
-  </section>
 
-  <!-- MIDDLE: annotation + message + upload -->
-  <section class="panel" id="panel-form">
-    <h2>Folder annotation (mus.cfg)</h2>
+<header class="topbar">
+  <div class="brand">
+    <!-- Simple mouse-silhouette wordmark. Inline SVG so no image asset. -->
+    <svg viewBox="0 0 32 32" fill="none" aria-hidden="true">
+      <circle cx="16" cy="18" r="10" fill="#2563eb"/>
+      <circle cx="9"  cy="10" r="4"  fill="#2563eb"/>
+      <circle cx="23" cy="10" r="4"  fill="#2563eb"/>
+      <circle cx="9"  cy="10" r="1.5" fill="#fff"/>
+      <circle cx="23" cy="10" r="1.5" fill="#fff"/>
+      <circle cx="16" cy="20" r="1"  fill="#fff"/>
+    </svg>
+    mus <small>serve</small>
+  </div>
+
+  <div class="linkbox">
+    <label>experiment id
+      <input id="hdr-expid" placeholder="e.g. 1955928" autocomplete="off">
+    </label>
+    <label>data_project
+      <input id="hdr-dp" placeholder="e.g. Fiers2025" autocomplete="off">
+    </label>
+    <button type="button" class="ghost" id="hdr-suggest"
+            title="Look up the experiment in eLab and propose a data_project name">
+      Suggest
+    </button>
+    <button type="button" id="hdr-link">Link experiment</button>
+  </div>
+
+  <div class="hdrstatus">
+    <span class="hdrbadge" id="eln-hdr-badge" hidden></span>
+    <span class="hdrbadge" id="irods-hdr-badge" hidden></span>
+    <span class="server-root" id="server-root" title=""></span>
+  </div>
+</header>
+
+<div class="banner warn" id="auth-banner" hidden>
+  <strong>Authentication required.</strong>
+  <span id="auth-banner-text">…</span>
+  <button type="button" id="auth-banner-recheck" class="ghost">Check again</button>
+</div>
+
+<main>
+  <!-- LEFT: annotation / metadata -->
+  <section class="panel">
+    <h2>Metadata</h2>
     <div id="form-status"></div>
     <div id="cascade-chips" class="chips"></div>
     <form class="kv-form" id="cfg-form" autocomplete="off">
       <div class="kv-row">
         <select id="cfg-key">
           <option value="">— pick a key —</option>
-          <!-- populated from /api/known-keys?manual=true, grouped by category -->
         </select>
         <div id="cfg-value-host"></div>
         <button type="button" id="cfg-add">Save</button>
       </div>
-      <div class="help">
-        Keys marked ★ have a controlled vocabulary — the value box becomes a
-        dropdown of allowed values (with a "Custom value (force-set)…" escape).
-        Pick "Custom key…" at the bottom for keys outside the known list.
-      </div>
+      <p class="help">
+        Keys marked <b>★</b> have a controlled vocabulary — the value box becomes
+        a dropdown. Local values (green) override inherited ones (grey).
+      </p>
     </form>
-
-    <h2 style="margin-top: 1.2em;">Upload message</h2>
-    <textarea class="message" id="upload-msg" rows="3"
-              placeholder="Required. Describe what's being uploaded and why — like a git commit message."></textarea>
-    <div style="display: flex; gap: 1em; flex-wrap: wrap; margin-top: 0.4em;">
-      <label style="display: flex; align-items: center; gap: 0.4em; font-size: 0.85em; color: #555;">
-        <input type="checkbox" id="upload-dryrun">
-        <span>Dry-run (no bytes transferred)</span>
-      </label>
-      <label style="display: flex; align-items: center; gap: 0.4em; font-size: 0.85em; color: #555;">
-        <input type="checkbox" id="upload-pack">
-        <span>Pack folders as <code>.tar.gz</code> first</span>
-      </label>
-    </div>
-    <div id="upload-selected-summary"
-         style="font-size: 0.82em; color: #555; margin-top: 0.4em;"></div>
-    <div style="margin-top: 0.5em;">
-      <button type="button" id="upload-go">Upload to iRODS</button>
-    </div>
-    <pre class="log" id="upload-log" hidden></pre>
   </section>
 
-  <!-- RIGHT: pre-flight + ELN -->
-  <section class="panel" id="panel-right">
-    <h2>Pre-flight</h2>
+  <!-- CENTER: file selection -->
+  <section class="panel">
+    <h2>Folder &amp; files</h2>
+    <div class="crumbs" id="crumbs"></div>
+    <input class="filter" id="filter" type="search" placeholder="filter by name…">
+    <div id="tree"></div>
+  </section>
+
+  <!-- RIGHT: upload -->
+  <section class="panel">
+    <h2>Submit &amp; upload</h2>
     <ul class="checks" id="checks"></ul>
 
-    <h2>ELN</h2>
-    <details class="eln-block" id="eln-block">
-      <summary id="eln-summary">ELN: …</summary>
-      <div class="eln-form">
-        <div id="eln-form-status"></div>
-        <input id="eln-expid" placeholder="experiment_id (e.g. 12345)">
-        <div style="display: flex; gap: 0.4em;">
-          <input id="eln-dp" placeholder="data_project (required)" style="flex: 1;">
-          <button type="button" class="ghost" id="eln-suggest"
-                  title="Look up the experiment in eLab and propose a data_project name">
-            Suggest
-          </button>
-        </div>
-        <div style="display: flex; gap: 0.4em;">
-          <button type="button" id="eln-link" style="flex: 1;">Link</button>
-          <button type="button" class="ghost" id="eln-disable">Disable here</button>
-          <button type="button" class="ghost" id="eln-enable">Re-enable</button>
-        </div>
-      </div>
-    </details>
+    <label class="section-label" for="upload-msg">Message</label>
+    <textarea class="message" id="upload-msg" rows="4"
+              placeholder="Describe what's being uploaded — like a git commit message."></textarea>
+
+    <div class="upload-opts">
+      <label><input type="checkbox" id="upload-dryrun"> Dry-run</label>
+      <label><input type="checkbox" id="upload-pack"> Pack folders as .tar.gz</label>
+    </div>
+
+    <div id="upload-selected-summary">no files selected</div>
+    <button type="button" id="upload-go" class="big">▶ Upload to iRODS</button>
+    <pre class="log" id="upload-log" hidden></pre>
   </section>
 </main>
 
@@ -258,6 +383,7 @@ let serverRoot = '';
 const selectedPaths = new Set();
 let filterText = '';
 let knownKeys = [];        // [{key, vocab}] from /api/known-keys?manual=true
+let authStatus = null;     // last /api/auth-status result
 
 // ── helpers ────────────────────────────────────────────────────────────
 async function api(path, opts) {
@@ -287,28 +413,111 @@ function el(tag, attrs, ...children) {
   }
   return e;
 }
-function showError(div, msg) {
-  div.innerHTML = '';
-  div.appendChild(el('div', { class: 'error' }, msg));
+function showError(div, msg)  { div.innerHTML = ''; div.appendChild(el('div', { class: 'error'  }, msg)); }
+function showNotice(div, msg) { div.innerHTML = ''; div.appendChild(el('div', { class: 'notice' }, msg)); }
+function clearStatus(div)     { div.innerHTML = ''; }
+
+// ── auth banner + header badges ────────────────────────────────────────
+async function refreshAuth() {
+  try {
+    authStatus = await api('/api/auth-status');
+  } catch (e) {
+    authStatus = null;
+    return;
+  }
+  const banner = document.getElementById('auth-banner');
+  const bannerText = document.getElementById('auth-banner-text');
+  const elnBadge = document.getElementById('eln-hdr-badge');
+  const irBadge  = document.getElementById('irods-hdr-badge');
+
+  // ELN badge
+  if (authStatus.eln_authed) {
+    elnBadge.className = 'hdrbadge ok';
+    elnBadge.textContent = 'ELN: ' + (authStatus.eln_user || 'authed');
+    elnBadge.hidden = false;
+  } else {
+    elnBadge.className = 'hdrbadge warn';
+    elnBadge.textContent = 'ELN: not authenticated';
+    elnBadge.title = 'run `mus eln login` in a terminal';
+    elnBadge.hidden = false;
+  }
+  // iRODS badge
+  if (authStatus.irods_authed) {
+    irBadge.className = 'hdrbadge ok';
+    irBadge.textContent = 'iRODS: ' + (authStatus.irods_pwd || 'authed');
+    irBadge.hidden = false;
+  } else {
+    irBadge.className = 'hdrbadge warn';
+    irBadge.textContent = 'iRODS: not authenticated';
+    irBadge.title = authStatus.irods_hint || 'run iron auth';
+    irBadge.hidden = false;
+  }
+
+  // Prominent banner if EITHER is missing (upload will fail).
+  if (!authStatus.irods_authed || !authStatus.eln_authed) {
+    let msg = '';
+    if (!authStatus.irods_authed) {
+      msg = 'iRODS: ' + (authStatus.irods_err_text || 'not authenticated');
+      if (authStatus.irods_hint) {
+        msg += ' — run: ';
+      }
+    }
+    bannerText.innerHTML = '';
+    bannerText.appendChild(document.createTextNode(msg));
+    if (authStatus.irods_hint) {
+      bannerText.appendChild(el('code', {}, authStatus.irods_hint));
+      bannerText.appendChild(document.createTextNode(' in a terminal, then click Check again.'));
+    }
+    if (!authStatus.irods_authed) {
+      banner.hidden = false;
+    } else {
+      banner.hidden = true;
+    }
+  } else {
+    banner.hidden = true;
+  }
 }
-function showNotice(div, msg) {
-  div.innerHTML = '';
-  div.appendChild(el('div', { class: 'notice' }, msg));
-}
-function clearStatus(div) { div.innerHTML = ''; }
+
+document.getElementById('auth-banner-recheck').addEventListener('click', async () => {
+  try {
+    authStatus = await apiPost('/api/auth-refresh', {});
+  } catch (e) {}
+  await refreshAuth();
+});
 
 // ── boot ───────────────────────────────────────────────────────────────
 async function boot() {
   try {
     const r = await api('/api/cwd');
     serverRoot = r.root;
-    document.getElementById('server-root').textContent = serverRoot;
+    const rootEl = document.getElementById('server-root');
+    rootEl.textContent = serverRoot;
+    rootEl.title = serverRoot;
   } catch (e) { /* leave header blank */ }
+  await refreshAuth();
   await refreshAll();
+  // Poll auth periodically so a mid-session `iron auth` becomes visible
+  // without the depositor having to click "Check again".
+  setInterval(refreshAuth, 30000);
 }
 async function refreshAll() {
   renderCrumbs();
   await Promise.all([refreshTree(), refreshCascade(), refreshPreflight()]);
+  hydrateHeaderInputs();
+}
+
+// Populate the header experiment_id / data_project inputs from the
+// cascade whenever they aren't already being edited by the user.
+function hydrateHeaderInputs() {
+  const expInput = document.getElementById('hdr-expid');
+  const dpInput  = document.getElementById('hdr-dp');
+  // Only hydrate on focus-out or first paint — don't clobber the
+  // user's in-progress typing.
+  if (document.activeElement === expInput || document.activeElement === dpInput) return;
+  if (!lastCascade) return;
+  const eff = lastCascade.effective || {};
+  if (eff.eln_experiment_id && !expInput.value) expInput.value = eff.eln_experiment_id;
+  if (eff.data_project && !dpInput.value) dpInput.value = eff.data_project;
 }
 
 // ── crumbs ─────────────────────────────────────────────────────────────
@@ -338,7 +547,6 @@ function navigate(dir) {
 async function refreshTree() {
   const root = document.getElementById('tree');
   root.innerHTML = '';
-  // Synthetic "this folder" row at the top.
   const wholeRow = el('div', { class: 'tree-row dir whole-folder' });
   wholeRow.appendChild(el('input', { type: 'checkbox', class: 'select',
     checked: selectedPaths.has(''),
@@ -380,49 +588,38 @@ async function refreshTree() {
       }
       root.appendChild(row);
     }
-    if (r.entries.length === 0) {
-      root.appendChild(el('div', { class: 'notice' }, 'empty folder'));
-    } else if (shown === 0 && f) {
-      root.appendChild(el('div', { class: 'notice' },
-        'no matches for "' + filterText + '"'));
+    if (shown === 0 && f) {
+      root.appendChild(el('div', { class: 'help' },
+        'no files match "' + filterText + '"'));
     }
   } catch (e) {
-    showError(root, 'tree error: ' + e.message);
+    root.appendChild(el('div', { class: 'error' }, 'tree: ' + e.message));
   }
-  refreshSelectionSummary();
+  refreshSelectedSummary();
 }
 
 function toggleSelect(path, on, isWholeFolder) {
-  if (on) {
-    if (isWholeFolder) {
-      selectedPaths.clear();
-      selectedPaths.add('');
-    } else {
-      selectedPaths.delete('');
-      selectedPaths.add(path);
+  if (on) selectedPaths.add(path);
+  else    selectedPaths.delete(path);
+  if (isWholeFolder && on) {
+    // Clear individual selections — the whole-folder select trumps.
+    for (const p of Array.from(selectedPaths)) {
+      if (p !== '' && p.startsWith(currentDir ? currentDir + '/' : '') || p === '') {
+        if (p !== '') selectedPaths.delete(p);
+      }
     }
-  } else {
-    selectedPaths.delete(path);
+    refreshTree();
   }
-  refreshTree();
+  refreshSelectedSummary();
 }
 
-function refreshSelectionSummary() {
-  const summary = document.getElementById('upload-selected-summary');
-  if (selectedPaths.size === 0) {
-    summary.textContent = 'nothing selected';
-    document.getElementById('upload-go').disabled = true;
-    return;
-  }
-  if (selectedPaths.has('')) {
-    summary.textContent = 'selected: <this folder>' +
-      (currentDir ? ' (' + currentDir + ')' : '');
-  } else {
-    const items = [...selectedPaths];
-    summary.textContent = 'selected: ' + items.length + ' item(s) — ' +
-      items.slice(0, 3).join(', ') + (items.length > 3 ? ', …' : '');
-  }
-  document.getElementById('upload-go').disabled = false;
+function refreshSelectedSummary() {
+  const el = document.getElementById('upload-selected-summary');
+  const n = selectedPaths.size;
+  if (n === 0) { el.textContent = 'no files selected'; return; }
+  const list = Array.from(selectedPaths).map(p => p === '' ? '<this folder>' : p).slice(0, 3);
+  const extra = n > 3 ? ' (+' + (n - 3) + ' more)' : '';
+  el.textContent = n + ' selected: ' + list.join(', ') + extra;
 }
 
 document.getElementById('filter').addEventListener('input', e => {
@@ -430,342 +627,261 @@ document.getElementById('filter').addEventListener('input', e => {
   refreshTree();
 });
 
-// ── cascade + chips ────────────────────────────────────────────────────
+// ── cascade + annotation form ──────────────────────────────────────────
+let lastCascade = null;
 async function refreshCascade() {
   const chips = document.getElementById('cascade-chips');
-  const status = document.getElementById('form-status');
-  chips.innerHTML = ''; clearStatus(status);
+  chips.innerHTML = '';
   try {
-    const r = await api('/api/cascade?dir=' + encodeURIComponent(currentDir));
-    const local = r.values.filter(v => v.local);
-    const inherited = r.values.filter(v => !v.local);
-    if (local.length > 0) {
-      chips.appendChild(el('div', { class: 'chip-group-label' }, 'set in this folder:'));
-      const group = el('div', { class: 'chip-group' });
-      for (const v of local) group.appendChild(renderChip(v, true));
-      chips.appendChild(group);
-    }
-    if (inherited.length > 0) {
-      chips.appendChild(el('div', { class: 'chip-group-label inherited' },
-        'inherited from cascade:'));
-      const group = el('div', { class: 'chip-group' });
-      for (const v of inherited) group.appendChild(renderChip(v, false));
-      chips.appendChild(group);
-    }
-    if (local.length + inherited.length === 0) {
-      chips.appendChild(el('div', { class: 'notice' },
-        'no cascade values — start by linking an ELN experiment (or disabling ELN) on the right.'));
-    }
-    refreshELNState(r.values);
+    const c = await api('/api/cascade?dir=' + encodeURIComponent(currentDir));
+    lastCascade = c;
+    renderChips(chips, c);
   } catch (e) {
-    showError(status, 'cascade error: ' + e.message);
+    chips.appendChild(el('div', { class: 'error' }, 'cascade: ' + e.message));
+    lastCascade = null;
   }
+  await populateKnownKeys();
+  hydrateHeaderInputs();
 }
 
-function renderChip(v, isLocal) {
-  const chip = el('div', { class: 'chip' + (isLocal ? ' local' : ' inherited') });
-  chip.appendChild(el('b', null, v.key + '='));
-  chip.appendChild(document.createTextNode(v.value + (v.is_list ? ' (list)' : '')));
-  if (isLocal) {
-    chip.appendChild(el('button', {
-      type: 'button',
-      class: 'chip-x',
-      title: 'unset ' + v.key + ' from this folder\'s mus.cfg',
-      on: { click: () => unsetKey(v.key) },
-    }, '×'));
-  }
-  return chip;
-}
-
-async function unsetKey(key) {
-  const status = document.getElementById('form-status');
-  if (!confirm('Remove `' + key + '` from this folder\'s mus.cfg?\n'+
-               '(Inherited values from parent folders are unaffected.)')) {
+function renderChips(host, cascade) {
+  const local = cascade.local || {};
+  const inherited = cascade.inherited || {};
+  const localKeys = Object.keys(local).sort();
+  const inheritedKeys = Object.keys(inherited).sort();
+  if (localKeys.length === 0 && inheritedKeys.length === 0) {
+    host.appendChild(el('div', { class: 'help' }, 'no annotation set in cascade yet'));
     return;
   }
-  try {
-    await apiPost('/api/config/unset', { dir: currentDir, key });
-    showNotice(status, 'unset ' + key);
-    refreshAll();
-  } catch (e) {
-    showError(status, e.message);
+  if (localKeys.length) {
+    host.appendChild(el('div', { class: 'chip-group-label' }, 'this folder'));
+    const g = el('div', { class: 'chip-group' });
+    for (const k of localKeys) {
+      const chip = el('div', { class: 'chip local' },
+        el('b', {}, k), '=', local[k]);
+      chip.appendChild(el('button', {
+        type: 'button', class: 'chip-x', title: 'remove',
+        on: { click: () => onUnset(k) },
+      }, '×'));
+      g.appendChild(chip);
+    }
+    host.appendChild(g);
+  }
+  if (inheritedKeys.length) {
+    host.appendChild(el('div', { class: 'chip-group-label inherited' }, 'inherited'));
+    const g = el('div', { class: 'chip-group' });
+    for (const k of inheritedKeys) {
+      const from = (cascade.inherited_source && cascade.inherited_source[k]) || 'ancestor';
+      g.appendChild(el('div', { class: 'chip inherited', title: 'from ' + from },
+        el('b', {}, k), '=', inherited[k]));
+    }
+    host.appendChild(g);
   }
 }
 
-// ── annotation form (grouped <select> for keys, vocab dropdown for values) ─
-//
-// Native <select> + <optgroup> instead of <input list>: datalist popups
-// hide options inconsistently across browsers (Safari + Firefox handle the
-// label attribute differently; Chrome sometimes truncates the popup). A
-// plain select always shows every option, scroll-accessible, with the
-// optgroup labels giving the depositor a visual map.
-async function loadKnownKeys() {
+async function populateKnownKeys() {
+  if (knownKeys.length) return; // once per session
   try {
-    // manual=true hides eln_*/de_*/irods_*/h5ad_*/data_project —
-    // those are owned by other UI panels or auto-stamped.
     const r = await api('/api/known-keys?manual=true');
     knownKeys = r.keys || [];
-    const sel = document.getElementById('cfg-key');
-    sel.innerHTML = '<option value="">— pick a key —</option>';
-    // Group keys by their server-supplied `group` field, preserving
-    // declaration order within each group.
-    const groupOrder = []; // first-seen order
-    const groups = {};     // group → [keyDesc, …]
-    for (const k of knownKeys) {
-      const g = k.group || 'Other';
-      if (!groups[g]) { groups[g] = []; groupOrder.push(g); }
-      groups[g].push(k);
-    }
-    for (const g of groupOrder) {
-      const og = el('optgroup', { label: g });
-      for (const k of groups[g]) {
-        const star = k.vocab ? '  ★' : '';
-        og.appendChild(el('option', { value: k.key }, k.key + star));
-      }
-      sel.appendChild(og);
-    }
-    // Custom-key escape at the bottom.
-    sel.appendChild(el('option', { value: '__CUSTOM__' }, 'Custom key…'));
   } catch (e) { knownKeys = []; }
-}
-
-const keyInput = document.getElementById('cfg-key');
-let pendingCustomKey = false;
-keyInput.addEventListener('change', () => {
-  if (keyInput.value === '__CUSTOM__') {
-    pendingCustomKey = true;
-    renderCustomKeyValueField();
-    return;
+  const sel = document.getElementById('cfg-key');
+  while (sel.options.length > 1) sel.remove(1);
+  // Group by category if the endpoint provides one.
+  const byGroup = {};
+  for (const k of knownKeys) {
+    const g = k.group || 'other';
+    (byGroup[g] = byGroup[g] || []).push(k);
   }
-  pendingCustomKey = false;
-  renderValueField(keyInput.value);
-});
-
-function renderCustomKeyValueField() {
-  const host = document.getElementById('cfg-value-host');
-  host.innerHTML = '';
-  const wrap = el('div', { style: 'display: flex; gap: 0.3em;' });
-  wrap.appendChild(el('input', { id: 'cfg-custom-key',
-    placeholder: 'custom key', style: 'flex: 1;' }));
-  wrap.appendChild(el('input', { id: 'cfg-val',
-    placeholder: 'value (saved with --force)', style: 'flex: 1.4;' }));
-  host.appendChild(wrap);
+  const order = ['biology', 'eln', 'irods', 's3', 'h5ad', 'de', 'other'];
+  for (const g of order) {
+    if (!byGroup[g]) continue;
+    const og = document.createElement('optgroup');
+    og.label = g;
+    for (const k of byGroup[g]) {
+      const o = document.createElement('option');
+      o.value = k.key;
+      o.textContent = k.key + (k.vocab ? ' ★' : '');
+      og.appendChild(o);
+    }
+    sel.appendChild(og);
+  }
+  const oc = document.createElement('option');
+  oc.value = '__custom__';
+  oc.textContent = '— Custom key… —';
+  sel.appendChild(oc);
 }
 
-async function renderValueField(key) {
+document.getElementById('cfg-key').addEventListener('change', renderValueControl);
+function renderValueControl() {
+  const key = document.getElementById('cfg-key').value;
   const host = document.getElementById('cfg-value-host');
   host.innerHTML = '';
   if (!key) return;
-  const known = knownKeys.find(k => k.key === key);
-  const isVocab = known && known.vocab;
-  if (!isVocab) {
-    host.appendChild(el('input', { id: 'cfg-val', placeholder: 'value' }));
+  if (key === '__custom__') {
+    const keyIn = el('input', { id: 'cfg-custom-key', placeholder: 'key' });
+    const valIn = el('input', { id: 'cfg-val', placeholder: 'value' });
+    host.appendChild(el('div', { style: 'display: grid; grid-template-columns: 1fr 1fr; gap: 0.4em;' },
+      keyIn, valIn));
     return;
   }
-  try {
-    const r = await api('/api/vocab/' + encodeURIComponent(key));
-    const sel = el('select', { id: 'cfg-val' });
-    sel.appendChild(el('option', { value: '' }, '— pick a value —'));
-    for (const v of (r.values || [])) {
-      sel.appendChild(el('option', { value: v }, v));
+  // Fetch vocab; if any, show dropdown. Otherwise plain input.
+  fetch('/api/vocab/' + encodeURIComponent(key)).then(r => r.ok ? r.json() : null).then(v => {
+    host.innerHTML = '';
+    if (v && v.values && v.values.length) {
+      const sel = el('select', { id: 'cfg-val' });
+      sel.appendChild(el('option', { value: '' }, '— pick —'));
+      for (const val of v.values) sel.appendChild(el('option', { value: val }, val));
+      sel.appendChild(el('option', { value: '__force__' }, 'Custom value (force-set)…'));
+      host.appendChild(sel);
+      sel.addEventListener('change', () => {
+        if (sel.value === '__force__') {
+          const forceIn = el('input', { id: 'cfg-force-val', placeholder: 'custom value' });
+          host.appendChild(forceIn);
+        } else {
+          const existing = document.getElementById('cfg-force-val');
+          if (existing) existing.remove();
+        }
+      });
+    } else {
+      host.appendChild(el('input', { id: 'cfg-val', placeholder: 'value' }));
     }
-    sel.appendChild(el('option', { value: '__CUSTOMVAL__' }, 'Custom value (force-set)…'));
-    sel.addEventListener('change', () => {
-      if (sel.value === '__CUSTOMVAL__') {
-        const free = el('input', { id: 'cfg-val', placeholder: 'off-vocab value (saved with --force)' });
-        host.replaceChild(free, sel);
-        free.focus();
-      }
-    });
-    host.appendChild(sel);
-  } catch (e) {
-    host.appendChild(el('input', { id: 'cfg-val', placeholder: 'value (vocab unavailable)' }));
-  }
+  });
 }
 
 document.getElementById('cfg-add').addEventListener('click', async () => {
+  const key = document.getElementById('cfg-key').value;
   const status = document.getElementById('form-status');
-  let key;
-  if (pendingCustomKey) {
-    const ckEl = document.getElementById('cfg-custom-key');
-    key = ckEl ? ckEl.value.trim() : '';
-  } else {
-    key = keyInput.value.trim();
-  }
-  const valEl = document.getElementById('cfg-val');
-  const value = valEl ? valEl.value.trim() : '';
-  if (!key || !value) { showError(status, 'both key and value are required'); return; }
-  const known = knownKeys.find(k => k.key === key);
-  const isKnown = !!known;
-  // Force when: (a) custom (unknown) key, OR (b) vocab-controlled
-  // key with a free-text input (came via "Custom value (force-set)…").
-  const force = !isKnown || (known && known.vocab && valEl && valEl.tagName === 'INPUT');
-  try {
-    const r = await apiPost('/api/config/set',
-      { dir: currentDir, key, value, force });
-    if (r.key !== key || r.value !== value) {
-      showNotice(status,
-        'normalised → ' + r.key + '=' + r.value + (r.notes ? '\n' + r.notes : ''));
-    } else {
-      showNotice(status, 'saved ' + r.key + '=' + r.value);
+  clearStatus(status);
+  let realKey = key, realVal = '', force = false;
+  if (key === '__custom__') {
+    realKey = document.getElementById('cfg-custom-key').value.trim();
+    realVal = document.getElementById('cfg-val').value.trim();
+    force = true;
+  } else if (key) {
+    const valEl = document.getElementById('cfg-val');
+    if (!valEl) return;
+    realVal = valEl.value.trim();
+    if (realVal === '__force__') {
+      realVal = (document.getElementById('cfg-force-val') || {}).value?.trim() || '';
+      force = true;
     }
-    keyInput.value = '';
-    pendingCustomKey = false;
-    document.getElementById('cfg-value-host').innerHTML = '';
-    refreshAll();
+  }
+  if (!realKey || !realVal) { showError(status, 'key and value required'); return; }
+  try {
+    await apiPost('/api/config/set', {
+      dir: currentDir, key: realKey, value: realVal, force,
+    });
+    document.getElementById('cfg-key').value = '';
+    renderValueControl();
+    await refreshAll();
   } catch (e) { showError(status, e.message); }
 });
 
-// ── ELN block (right panel, collapsible) ──────────────────────────────
-function refreshELNState(values) {
-  const mp = {};
-  for (const v of values) mp[v.key] = v.value;
-  const block = document.getElementById('eln-block');
-  const summary = document.getElementById('eln-summary');
-  let decided = false;
-  if (mp.eln_experiment_id) {
-    summary.textContent = 'ELN ✓ linked to experiment ' + mp.eln_experiment_id +
-      (mp.eln_experiment_name ? ' (' + mp.eln_experiment_name + ')' : '');
-    decided = true;
-  } else if (mp.eln_disabled === 'true') {
-    summary.textContent = 'ELN ✓ disabled for this folder';
-    decided = true;
-  } else {
-    summary.textContent = 'ELN ⚠ undecided — link or disable below';
-  }
-  block.classList.toggle('decided', decided);
-  // Auto-collapse when decided; auto-open when undecided.
-  block.open = !decided;
+async function onUnset(key) {
+  if (!confirm('Remove ' + key + ' from this folder?')) return;
+  const status = document.getElementById('form-status');
+  clearStatus(status);
+  try {
+    await apiPost('/api/config/unset', { dir: currentDir, key });
+    await refreshAll();
+  } catch (e) { showError(status, e.message); }
 }
 
-document.getElementById('eln-suggest').addEventListener('click', async () => {
-  const status = document.getElementById('eln-form-status');
-  const expid = document.getElementById('eln-expid').value.trim();
-  if (!expid) { showError(status, 'enter an experiment_id first'); return; }
-  try {
-    const r = await apiPost('/api/eln/suggest-dp', { experiment_id: expid });
-    document.getElementById('eln-dp').value = r.data_project || '';
-    showNotice(status, 'proposed data_project=' + r.data_project +
-      ' (' + r.source + ')\n  experiment: ' +
-      (r.experiment_name || '(no name)'));
-  } catch (e) { showError(status, e.message); }
-});
-
-document.getElementById('eln-link').addEventListener('click', async () => {
-  const expid = document.getElementById('eln-expid').value.trim();
-  const dp = document.getElementById('eln-dp').value.trim();
-  const status = document.getElementById('eln-form-status');
-  if (!expid || !dp) {
-    showError(status, 'experiment_id AND data_project are required (try Suggest)');
-    return;
-  }
-  try {
-    await apiPost('/api/eln/link',
-      { dir: currentDir, experiment_id: expid, data_project: dp });
-    showNotice(status, 'linked → experiment ' + expid + ' / data_project ' + dp);
-    refreshAll();
-  } catch (e) { showError(status, e.message); }
-});
-document.getElementById('eln-disable').addEventListener('click', async () => {
-  const status = document.getElementById('eln-form-status');
-  try {
-    await apiPost('/api/eln/disable', { dir: currentDir });
-    showNotice(status, 'ELN disabled for this folder');
-    refreshAll();
-  } catch (e) { showError(status, e.message); }
-});
-document.getElementById('eln-enable').addEventListener('click', async () => {
-  const status = document.getElementById('eln-form-status');
-  try {
-    await apiPost('/api/eln/enable', { dir: currentDir });
-    showNotice(status, 'ELN re-enabled (now undecided)');
-    refreshAll();
-  } catch (e) { showError(status, e.message); }
-});
-
-// ── pre-flight ─────────────────────────────────────────────────────────
+// ── pre-flight ──────────────────────────────────────────────────────────
 async function refreshPreflight() {
-  const ul = document.getElementById('checks');
-  ul.innerHTML = '';
+  const list = document.getElementById('checks');
+  list.innerHTML = '';
   try {
     const r = await api('/api/preflight?dir=' + encodeURIComponent(currentDir));
-    let canUpload = true;
     for (const c of r.checks) {
-      const li = el('li', { class: c.ok ? 'ok' : 'bad' });
-      li.appendChild(el('span', { class: 'mark' }, c.ok ? '✓' : '✗'));
-      li.appendChild(el('span', { class: 'label' }, c.label));
-      li.appendChild(el('span', { class: 'detail' }, c.detail));
-      ul.appendChild(li);
-      if (!c.ok && c.block_upload) canUpload = false;
+      const li = el('li', { class: c.ok ? 'ok' : 'bad' },
+        el('span', { class: 'mark' }, c.ok ? '✓' : '✘'),
+        el('span', { class: 'label' }, c.label),
+        c.detail ? el('span', { class: 'detail' }, c.detail) : null);
+      list.appendChild(li);
     }
-    refreshSelectionSummary();
-    if (!canUpload) document.getElementById('upload-go').disabled = true;
   } catch (e) {
-    showError(ul, 'preflight error: ' + e.message);
+    list.appendChild(el('div', { class: 'error' }, 'preflight: ' + e.message));
   }
 }
+
+// ── ELN link (from header inputs) ───────────────────────────────────────
+document.getElementById('hdr-suggest').addEventListener('click', async () => {
+  const expid = document.getElementById('hdr-expid').value.trim();
+  if (!expid) { alert('enter an experiment_id first'); return; }
+  try {
+    const r = await apiPost('/api/eln/suggest-dp', { experiment_id: expid });
+    if (r && r.data_project) {
+      document.getElementById('hdr-dp').value = r.data_project;
+    } else {
+      alert('no suggestion available');
+    }
+  } catch (e) { alert('suggest: ' + e.message); }
+});
+
+document.getElementById('hdr-link').addEventListener('click', async () => {
+  const expid = document.getElementById('hdr-expid').value.trim();
+  const dp    = document.getElementById('hdr-dp').value.trim();
+  if (!expid) { alert('experiment_id is required'); return; }
+  if (!dp)    { alert('data_project is required — click Suggest or type one'); return; }
+  const btn = document.getElementById('hdr-link');
+  btn.disabled = true;
+  try {
+    await apiPost('/api/eln/link', {
+      dir: currentDir, experiment_id: expid, data_project: dp,
+    });
+    await refreshAll();
+    alert('Linked to experiment ' + expid);
+  } catch (e) { alert('link: ' + e.message); }
+  finally { btn.disabled = false; }
+});
 
 // ── upload ─────────────────────────────────────────────────────────────
-async function triggerUpload() {
-  const message = document.getElementById('upload-msg').value.trim();
-  const dryRun = document.getElementById('upload-dryrun').checked;
+document.getElementById('upload-go').addEventListener('click', async () => {
+  const msg = document.getElementById('upload-msg').value.trim();
+  if (!msg) { alert('please enter an upload message'); return; }
+  if (selectedPaths.size === 0) { alert('select at least one file / folder'); return; }
+  const dry = document.getElementById('upload-dryrun').checked;
   const pack = document.getElementById('upload-pack').checked;
-  const log = document.getElementById('upload-log');
-  if (!message) {
-    log.hidden = false;
-    log.textContent = 'ERROR: upload message is required.';
-    return;
-  }
-  if (selectedPaths.size === 0) {
-    log.hidden = false;
-    log.textContent = 'ERROR: select at least one item.';
-    return;
-  }
-  const paths = [...selectedPaths];
-  const summary = paths.includes('')
-    ? '<this folder>' + (currentDir ? ' (' + currentDir + ')' : '')
-    : paths.length + ' item(s)';
-  // Confirmation (skip on dry-run — no side effects).
-  if (!dryRun) {
-    const confirmMsg =
-      'Upload ' + summary + ' to iRODS?\n\n' +
-      'Message: ' + message + '\n' +
-      (pack ? 'Pack folders as tar.gz: YES\n' : '') +
-      '\nFiles already uploaded (with a ✓ badge) will be skipped automatically.\n' +
-      'This has external side effects.';
-    if (!confirm(confirmMsg)) return;
-  }
-  log.hidden = false;
-  log.textContent = dryRun ? '(dry-run — no bytes will transfer)\n' : '';
-  document.getElementById('upload-go').disabled = true;
+  const paths = Array.from(selectedPaths);
+  const btn = document.getElementById('upload-go');
+  const logEl = document.getElementById('upload-log');
+  btn.disabled = true;
+  logEl.hidden = false;
+  logEl.textContent = 'starting upload…\n';
   try {
-    const r = await fetch('/api/upload', {
+    const resp = await fetch('/api/upload', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paths, message, dry_run: dryRun, pack }),
+      body: JSON.stringify({
+        dir: currentDir, paths, message: msg, dry_run: dry, pack,
+      }),
     });
-    if (!r.ok) {
-      log.textContent = 'ERROR: ' + (await r.text());
-      return;
+    if (!resp.body) {
+      logEl.textContent += 'no streaming body\n';
+    } else {
+      const reader = resp.body.getReader();
+      const dec = new TextDecoder();
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        logEl.textContent += dec.decode(value);
+        logEl.scrollTop = logEl.scrollHeight;
+      }
     }
-    const reader = r.body.getReader();
-    const decoder = new TextDecoder();
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      log.textContent += decoder.decode(value, { stream: true });
-      log.scrollTop = log.scrollHeight;
-    }
+    if (!resp.ok) logEl.textContent += '\n✘ HTTP ' + resp.status + '\n';
   } catch (e) {
-    log.textContent += '\n\nERROR: ' + e.message;
+    logEl.textContent += '\n✘ ' + e.message + '\n';
   } finally {
-    refreshAll();
+    btn.disabled = false;
+    await refreshAll();
+    await refreshAuth();
   }
-}
-document.getElementById('upload-go').addEventListener('click', triggerUpload);
+});
 
-// ── go ─────────────────────────────────────────────────────────────────
-loadKnownKeys().then(boot);
+// ── go! ────────────────────────────────────────────────────────────────
+boot();
 </script>
 </body>
 </html>

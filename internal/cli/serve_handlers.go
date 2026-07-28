@@ -352,10 +352,17 @@ func resolveDirParam(raw string) (abs, rel string, err error) {
 		cleaned = ""
 	}
 	abs = filepath.Join(serveRoot, cleaned)
-	// Belt-and-braces: confirm the abs path is still under serveRoot.
+	// Belt-and-braces: confirm the abs path is still under serveRoot
+	// AFTER resolving any symlinks. Without EvalSymlinks, a symlink
+	// inside the tree could point outside and the guard would accept
+	// it. Windows path case-insensitivity also comes in here — Rel
+	// uses OS-appropriate case handling.
+	if err := verifyUnderServeRoot(abs); err != nil {
+		return "", "", fmt.Errorf("path %q %v", raw, err)
+	}
 	rootAbs, _ := filepath.Abs(serveRoot)
 	rel, relErr := filepath.Rel(rootAbs, abs)
-	if relErr != nil || strings.HasPrefix(rel, "..") {
+	if relErr != nil {
 		return "", "", fmt.Errorf("path %q escapes the server root", raw)
 	}
 	st, err := os.Stat(abs)
@@ -369,6 +376,45 @@ func resolveDirParam(raw string) (abs, rel string, err error) {
 		rel = ""
 	}
 	return abs, rel, nil
+}
+
+// verifyUnderServeRoot symlink-resolves both `path` and serveRoot,
+// then confirms the resolved path is still lexically inside the
+// resolved root. Uses filepath.Rel + HasPrefix(".."), same test as
+// the mainline check but AFTER EvalSymlinks so a mid-tree symlink
+// can't be used to escape.
+//
+// On Windows, filepath uses case-insensitive path comparison in
+// EvalSymlinks + Abs, so `C:\Users\mark` and `c:\users\Mark` behave
+// as the same location — which is what we want.
+func verifyUnderServeRoot(abs string) error {
+	rootAbs, err := filepath.Abs(serveRoot)
+	if err != nil {
+		return fmt.Errorf("resolve root: %w", err)
+	}
+	// EvalSymlinks fails on paths that don't exist yet; that's fine
+	// for existing-only reads. For not-yet-created directories the
+	// caller would need a different guard (we don't have such a
+	// call site today).
+	rootResolved, err := filepath.EvalSymlinks(rootAbs)
+	if err != nil {
+		// Root should always exist; if it doesn't, refuse everything.
+		return fmt.Errorf("resolve root symlinks: %w", err)
+	}
+	absResolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		// Non-existent target — fall through to the lexical check
+		// below (the caller will hit os.Stat and get its own ENOENT).
+		absResolved = abs
+	}
+	rel, err := filepath.Rel(rootResolved, absResolved)
+	if err != nil {
+		return errors.New("escapes the server root")
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return errors.New("escapes the server root (via symlink or otherwise)")
+	}
+	return nil
 }
 
 // resolveAnyPathParam is like resolveDirParam but accepts files
@@ -392,10 +438,8 @@ func resolveAnyPathParam(raw string) (string, error) {
 		cleaned = ""
 	}
 	abs := filepath.Join(serveRoot, cleaned)
-	rootAbs, _ := filepath.Abs(serveRoot)
-	rel, relErr := filepath.Rel(rootAbs, abs)
-	if relErr != nil || strings.HasPrefix(rel, "..") {
-		return "", fmt.Errorf("escapes the server root")
+	if err := verifyUnderServeRoot(abs); err != nil {
+		return "", err
 	}
 	if _, err := os.Stat(abs); err != nil {
 		return "", err

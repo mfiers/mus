@@ -257,18 +257,34 @@ func TestServeIndex_EmbeddedHTMLIsPresent(t *testing.T) {
 			"go:embed may have failed silently", len(serveIndexHTML))
 	}
 	s := string(serveIndexHTML)
-	// Spot-check load-bearing IDs the JS reaches for.
+	// Spot-check load-bearing IDs the JS reaches for. Updated for
+	// the 0.2.44+ redesign: ELN linkage moved to the top-bar header
+	// (hdr-expid / hdr-dp / hdr-link) — the old eln-block collapsed
+	// panel is gone, and the disable/enable buttons were removed
+	// (ELN linkage is now a required step, not optional).
 	for _, id := range []string{
 		"id=\"tree\"", "id=\"filter\"", "id=\"cfg-form\"",
 		"id=\"cfg-key\"", "id=\"cfg-value-host\"",
 		"id=\"upload-go\"", "id=\"upload-dryrun\"", "id=\"upload-pack\"",
-		"id=\"eln-block\"", "id=\"eln-suggest\"",
+		"id=\"hdr-expid\"", "id=\"hdr-dp\"", "id=\"hdr-link\"", "id=\"hdr-suggest\"",
+		"id=\"auth-banner\"", "id=\"eln-hdr-badge\"", "id=\"irods-hdr-badge\"",
 		"id=\"checks\"", "id=\"upload-log\"",
 		"/api/preflight", "/api/upload", "/api/known-keys?manual=true",
 		"/api/config/unset", "/api/eln/suggest-dp", "chip-x",
+		"/api/auth-status", "/api/auth-refresh",
 	} {
 		if !strings.Contains(s, id) {
 			t.Errorf("embedded UI missing required element / endpoint: %q", id)
+		}
+	}
+	// Removed elements — regression guard against a partial revert
+	// bringing them back. The old ELN block + disable/enable buttons
+	// are gone by design (ELN linkage is mandatory now).
+	for _, gone := range []string{
+		"id=\"eln-block\"", "id=\"eln-disable\"", "id=\"eln-enable\"",
+	} {
+		if strings.Contains(s, gone) {
+			t.Errorf("embedded UI still contains removed element: %q", gone)
 		}
 	}
 	// Should NOT mention S3 upload — that path is intentionally
