@@ -248,6 +248,7 @@ type StatInfo struct {
 	Size     int64         `json:"size"`
 	Creator  string        `json:"creator"`
 	Modified string        `json:"modified"`
+	Checksum string        `json:"checksum"`
 	Metadata []MetaTriplet `json:"metadata"`
 }
 
@@ -302,6 +303,136 @@ func (c *Client) Chmod(ctx context.Context, permission, userOrGroup, path string
 		args = append(args, "-r")
 	}
 	args = append(args, permission, userOrGroup, path)
+	_, err := c.Run(ctx, args...)
+	return err
+}
+
+// FindByName runs a live iCat query for all data objects whose
+// DATA_NAME (basename) exactly matches the input. Returns the full
+// iRODS paths. Duplicate paths (from replicas) are collapsed.
+//
+// DATA_NAME is indexed in iCat, so this returns instantly even on
+// large catalogs (unlike DATA_CHECKSUM which is unindexed and slow).
+// Right for basename-based relocation lookup during retrofit.
+func (c *Client) FindByName(ctx context.Context, basename string) ([]string, error) {
+	if basename == "" {
+		return nil, errors.New("FindByName: empty basename")
+	}
+	if c.DefaultTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.DefaultTimeout)
+		defer cancel()
+	}
+	// iron query returns [][]string when --json is passed. Columns
+	// requested here: COLL_NAME (collection), DATA_NAME (basename).
+	q := fmt.Sprintf(`select COLL_NAME, DATA_NAME where DATA_NAME = '%s'`,
+		strings.ReplaceAll(basename, "'", "''"))
+	raw, err := c.Run(ctx, "query", "--json", q)
+	if err != nil {
+		return nil, fmt.Errorf("iron query: %w", err)
+	}
+	// Response is a JSON array of [coll, name] pairs.
+	var rows [][]string
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &rows); err != nil {
+		return nil, fmt.Errorf("iron query response: %w (raw: %s)", err, raw)
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, r := range rows {
+		if len(r) < 2 {
+			continue
+		}
+		full := r[0] + "/" + r[1]
+		if seen[full] {
+			continue
+		}
+		seen[full] = true
+		out = append(out, full)
+	}
+	return out, nil
+}
+
+// CollectionContents lists the direct children of an iRODS
+// collection: data objects (files) and sub-collections. Returns two
+// slices; empty slices when the collection exists but is empty. When
+// the collection itself doesn't exist, returns nil, nil, nil — the
+// caller distinguishes empty-collection from missing-collection via
+// a prior Stat if it cares. Used by `mus eln retrofit` to check for
+// leftover files in a source collection after moves complete.
+func (c *Client) CollectionContents(ctx context.Context, collPath string) (files, subcolls []string, err error) {
+	if collPath == "" {
+		return nil, nil, errors.New("CollectionContents: empty path")
+	}
+	if c.DefaultTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.DefaultTimeout)
+		defer cancel()
+	}
+	escaped := strings.ReplaceAll(collPath, "'", "''")
+	// Data objects directly in this collection.
+	fq := fmt.Sprintf(`select DATA_NAME where COLL_NAME = '%s'`, escaped)
+	fraw, err := c.Run(ctx, "query", "--json", fq)
+	if err != nil {
+		return nil, nil, fmt.Errorf("iron query files in %s: %w", collPath, err)
+	}
+	var frows [][]string
+	if err := json.Unmarshal([]byte(strings.TrimSpace(fraw)), &frows); err != nil {
+		return nil, nil, fmt.Errorf("parse files response: %w", err)
+	}
+	fileSeen := map[string]bool{}
+	for _, r := range frows {
+		if len(r) < 1 || fileSeen[r[0]] {
+			continue
+		}
+		fileSeen[r[0]] = true
+		files = append(files, r[0])
+	}
+	// Sub-collections directly under this collection. iCat exposes
+	// them via COLL_PARENT_NAME; the child's COLL_NAME is the full
+	// path.
+	cq := fmt.Sprintf(`select COLL_NAME where COLL_PARENT_NAME = '%s'`, escaped)
+	craw, err := c.Run(ctx, "query", "--json", cq)
+	if err != nil {
+		return nil, nil, fmt.Errorf("iron query subcolls in %s: %w", collPath, err)
+	}
+	var crows [][]string
+	if err := json.Unmarshal([]byte(strings.TrimSpace(craw)), &crows); err != nil {
+		return nil, nil, fmt.Errorf("parse subcolls response: %w", err)
+	}
+	for _, r := range crows {
+		if len(r) < 1 {
+			continue
+		}
+		subcolls = append(subcolls, r[0])
+	}
+	return files, subcolls, nil
+}
+
+// Mv runs `iron mv <src> <dst>`. Moves a data object or collection from
+// src to dst in the iRODS catalog namespace — no bytes are transferred,
+// just the catalog entry is renamed, so this is fast even on huge
+// objects. AVUs, checksums, permissions, and the catalog ID (hence
+// the PURL) are all preserved. When `preserveMtime` is true, the
+// object's original modification time is kept; otherwise iron updates
+// mtime to the current time.
+//
+// dst can be either a full destination path OR a collection path (with
+// or without trailing slash). See `iron mv --help` for the semantic
+// rules eLabNext^H^H iron applies to trailing slashes.
+func (c *Client) Mv(ctx context.Context, src, dst string, preserveMtime bool) error {
+	if src == "" || dst == "" {
+		return errors.New("Mv: empty src or dst")
+	}
+	if c.DefaultTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.DefaultTimeout)
+		defer cancel()
+	}
+	args := []string{"mv"}
+	if preserveMtime {
+		args = append(args, "--preserve-mtime")
+	}
+	args = append(args, src, dst)
 	_, err := c.Run(ctx, args...)
 	return err
 }

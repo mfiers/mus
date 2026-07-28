@@ -182,6 +182,83 @@ func (c *Client) CreateFileSection(expID int64, title string) (int64, error) {
 	return journalID, nil
 }
 
+// ExperimentSection is one row from GET /experiments/{id}/sections.
+// Only fields mus reads are declared — the wire schema has more.
+type ExperimentSection struct {
+	ExpJournalID  int64  `json:"expJournalID"`
+	SectionType   string `json:"sectionType"`
+	SectionHeader string `json:"sectionHeader"`
+	Position      int    `json:"position"`
+}
+
+// ListExperimentSections returns every section on the experiment.
+// includeArchived=true adds `?archived=true` so soft-deleted sections
+// are also returned (useful when auditing what a retrofit already did).
+func (c *Client) ListExperimentSections(expID int64, includeArchived bool) ([]ExperimentSection, error) {
+	expID = FixExperimentID(expID)
+	params := url.Values{}
+	params.Set("$records", "500")
+	if includeArchived {
+		params.Set("archived", "true")
+	}
+	var out struct {
+		Data []ExperimentSection `json:"data"`
+	}
+	if err := c.get(fmt.Sprintf("experiments/%d/sections", expID), params, &out); err != nil {
+		return nil, fmt.Errorf("list sections for experiment %d: %w", expID, err)
+	}
+	return out.Data, nil
+}
+
+// GetSectionContent returns the HTML body of a text/COMMENT section
+// (the `contents` field on GET /experiments/sections/{jid}/content).
+// Empty string is a valid return when the section has no body.
+func (c *Client) GetSectionContent(jid int64) (string, error) {
+	var out struct {
+		Contents string `json:"contents"`
+	}
+	if err := c.get(fmt.Sprintf("experiments/sections/%d/content", jid), nil, &out); err != nil {
+		return "", fmt.Errorf("get section %d content: %w", jid, err)
+	}
+	return out.Contents, nil
+}
+
+// UpdateSectionContent replaces the HTML body of an existing text /
+// COMMENT section. eLabNext's PUT /experiments/sections/{jid}/content
+// takes {"contents": "..."} — same wire shape as CreateCommentSection's
+// content step.
+func (c *Client) UpdateSectionContent(jid int64, htmlBody string) error {
+	contentBody := map[string]string{"contents": htmlBody}
+	var ignored any
+	if err := c.put(fmt.Sprintf("experiments/sections/%d/content", jid), contentBody, &ignored); err != nil {
+		return fmt.Errorf("update section %d content: %w", jid, err)
+	}
+	return nil
+}
+
+// ArchiveSection soft-deletes an experiment section. Content is
+// preserved server-side and can be brought back via
+// POST /experiments/sections/{id}/restore. eLabNext expresses this
+// as DELETE /experiments/sections/{id}.
+func (c *Client) ArchiveSection(jid int64) error {
+	req, err := http.NewRequest("DELETE", "", nil)
+	if err != nil {
+		return err
+	}
+	u, err := c.buildURL(fmt.Sprintf("experiments/sections/%d", jid), nil)
+	if err != nil {
+		return err
+	}
+	req.URL, err = url.Parse(u)
+	if err != nil {
+		return err
+	}
+	if err := c.do(req, nil); err != nil {
+		return fmt.Errorf("archive section %d: %w", jid, err)
+	}
+	return nil
+}
+
 // --- samples ---------------------------------------------------------------
 
 // SampleType is one row from GET /sampleTypes. Every sample created via
