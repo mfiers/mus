@@ -27,6 +27,7 @@
     --color-error: #991b1b;
     --color-error-bg: #fee2e2;
     --header-height: 68px;
+    --statusbar-height: 32px;
     --radius: 6px;
   }
 
@@ -63,6 +64,19 @@
 
   .linkbox {
     display: flex; align-items: center; gap: 0.6em; flex: 1;
+    flex-wrap: wrap;
+  }
+  /* Full-width hint line: forces a wrap so it sits under the row. */
+  .linkhint {
+    flex-basis: 100%;
+    font-size: 0.78em; color: var(--color-fg-muted);
+    text-transform: none; letter-spacing: normal;
+    margin-top: 0.1em; min-height: 1.1em;
+  }
+  .linkhint.ok   { color: var(--color-ok); }
+  .linkhint.warn { color: var(--color-error); }
+  .linkbox input:disabled {
+    background: #f1f5f9; color: var(--color-fg-muted); cursor: not-allowed;
   }
   .linkbox label {
     display: flex; flex-direction: column; gap: 0.15em;
@@ -70,6 +84,7 @@
     text-transform: uppercase; letter-spacing: 0.05em;
     flex: 1; max-width: 24em;
   }
+  .linkbox label .cap { display: flex; align-items: center; }
   .linkbox input {
     padding: 0.5em 0.7em;
     border: 1px solid #cbd5e1; border-radius: var(--radius);
@@ -105,6 +120,11 @@
     display: flex; align-items: center; gap: 0.6em;
     border-bottom: 1px solid;
   }
+  /* An author `display` rule (e.g. `.banner{display:flex}`) beats the
+     UA default that implements the `hidden` attribute, so `el.hidden =
+     true` fails to hide any element that has an explicit display. Force
+     `[hidden]` to win globally. */
+  [hidden] { display: none !important; }
   .banner.warn  { background: var(--color-warn-bg);  color: var(--color-warn);  border-color: #fbbf24; }
   .banner.error { background: var(--color-error-bg); color: var(--color-error); border-color: #f87171; }
   .banner code {
@@ -123,7 +143,7 @@
     display: grid;
     grid-template-columns: 1fr 6px 1fr 6px 1fr;
     gap: 0;
-    height: calc(100vh - var(--header-height));
+    height: calc(100vh - var(--header-height) - var(--statusbar-height));
   }
   .panel { padding: 1.1em 1.2em; overflow-y: auto; background: var(--color-panel); min-width: 0; }
   .divider {
@@ -234,17 +254,8 @@
   }
 
   /* ── upload column ───────────────────────────────────────────────── */
-  .checks { list-style: none; padding: 0; margin: 0 0 1em 0; }
-  .checks li {
-    display: flex; align-items: center; gap: 0.6em;
-    padding: 0.4em 0.2em; border-bottom: 1px solid #f0f0f0;
-    font-size: 0.95em;
-  }
-  .checks .mark { font-weight: 600; width: 1.2em; text-align: center; font-size: 1.05em; }
-  .checks .ok  .mark { color: var(--color-ok); }
-  .checks .bad .mark { color: var(--color-error); }
-  .checks .label { flex: 1; }
-  .checks .detail { color: var(--color-fg-muted); font-size: 0.85em; }
+  /* (the always-on green/red preflight checklist was removed in 0.2.47;
+     its requirements now surface only in the upload-block dialog.) */
 
   textarea.message {
     width: 100%; padding: 0.6em; min-height: 5em;
@@ -286,6 +297,51 @@
     width: 100%; padding: 0.9em; font-size: 1.05em; font-weight: 600;
     margin-top: 0.5em;
   }
+  button.small { padding: 0.25em 0.6em; font-size: 0.8em; font-weight: 500; }
+  /* The upload button flips between two states: not-ready (red, because
+     an upload writes to the archive and shouldn't be fired half-set-up)
+     and ready (green, all requirements met). updateUploadButton() in JS
+     toggles .danger / .ready. */
+  button.danger { background: var(--color-error); }
+  button.danger:hover { background: #7f1d1d; }
+  button.ready { background: var(--color-ok); }
+  button.ready:hover { background: #15803d; }
+
+  /* ── info icons + tooltips ──────────────────────────────────────── */
+  .info {
+    display: inline-block; margin-left: 0.35em;
+    width: 1.15em; height: 1.15em; line-height: 1.15em;
+    text-align: center; border-radius: 50%;
+    background: var(--color-primary-bg); color: var(--color-primary);
+    font-size: 0.8em; font-style: normal; cursor: help;
+    position: relative; vertical-align: middle; user-select: none;
+  }
+  .info::after {
+    content: attr(data-tip);
+    position: absolute; z-index: 10000;
+    top: 130%; left: 50%; transform: translateX(-50%);
+    width: max-content; max-width: 22em;
+    background: #0f172a; color: #f1f5f9;
+    padding: 0.55em 0.7em; border-radius: var(--radius);
+    font-size: 0.92em; font-weight: 400; line-height: 1.35;
+    text-transform: none; letter-spacing: normal; text-align: left;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.25);
+    opacity: 0; visibility: hidden; transition: opacity 0.12s;
+    pointer-events: none;
+  }
+  .info:hover::after, .info:focus::after { opacity: 1; visibility: visible; }
+
+  /* ── upload-block dialog ────────────────────────────────────────── */
+  dialog#upload-block-dialog {
+    border: 0; border-radius: var(--radius); padding: 1.4em 1.6em;
+    max-width: 30em; box-shadow: 0 12px 48px rgba(0,0,0,0.35);
+    color: var(--color-fg);
+  }
+  dialog#upload-block-dialog::backdrop { background: rgba(15,23,42,0.5); }
+  dialog#upload-block-dialog h3 { margin: 0 0 0.5em 0; color: var(--color-error); }
+  dialog#upload-block-dialog .dlg-intro { margin: 0 0 0.6em 0; }
+  dialog#upload-block-dialog ul { margin: 0 0 0.4em 1.2em; padding: 0; line-height: 1.5; }
+  dialog#upload-block-dialog .dlg-actions { margin-top: 0.8em; }
 
   /* ── notices ────────────────────────────────────────────────────── */
   .notice {
@@ -298,6 +354,40 @@
     padding: 0.5em 0.7em; border-radius: var(--radius);
     font-size: 0.9em; margin-bottom: 0.6em; white-space: pre-wrap;
   }
+
+  /* ── connection-lost overlay ─────────────────────────────────────── */
+  /* Covers the whole viewport and eats all pointer events, so nothing
+     underneath can be clicked while the server is unreachable. */
+  .conn-overlay {
+    position: fixed; inset: 0; z-index: 9999;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(15, 23, 42, 0.55);
+    backdrop-filter: blur(2px);
+  }
+  .conn-card {
+    background: var(--color-error-bg); color: var(--color-error);
+    border: 1px solid #f87171; border-radius: var(--radius);
+    padding: 1.4em 1.8em; max-width: 26em; text-align: center;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.35);
+  }
+  .conn-title { font-weight: 700; font-size: 1.15em; margin-bottom: 0.5em; }
+  .conn-body  { margin: 0 0 0.6em 0; line-height: 1.4; }
+  .conn-recon { margin: 0; opacity: 0.8; font-size: 0.9em; }
+
+  /* ── status bar (fixed, bottom) ─────────────────────────────────── */
+  .statusbar {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    height: var(--statusbar-height);
+    display: flex; align-items: center; gap: 0.5em;
+    padding: 0 1.2em; font-size: var(--font-size-small);
+    background: #0f172a; color: #e2e8f0;
+    border-top: 1px solid #1e293b; z-index: 500;
+  }
+  .statusbar-icon { flex-shrink: 0; }
+  .statusbar-msg  { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .statusbar-time { flex-shrink: 0; opacity: 0.55; font-variant-numeric: tabular-nums; }
+  .statusbar.ok   .statusbar-msg { color: #6ee7b7; }
+  .statusbar.warn .statusbar-msg { color: #fca5a5; }
 </style>
 </head>
 <body>
@@ -317,17 +407,25 @@
   </div>
 
   <div class="linkbox">
-    <label>experiment id
+    <label>
+      <span class="cap">ELN experiment id<span class="info" tabindex="0"
+            data-tip="The numeric id of the eLabJournal experiment this folder belongs to. Find it in the experiment's URL or title bar in eLab. Linking pulls the experiment's study/project metadata into this folder.">ⓘ</span></span>
       <input id="hdr-expid" placeholder="e.g. 1955928" autocomplete="off">
     </label>
-    <label>data_project
-      <input id="hdr-dp" placeholder="e.g. Fiers2025" autocomplete="off">
-    </label>
-    <button type="button" class="ghost" id="hdr-suggest"
-            title="Look up the experiment in eLab and propose a data_project name">
-      Suggest
+    <button type="button" id="hdr-link"
+            title="Look the experiment up in the ELN and link this folder to it">
+      Link ELN experiment
     </button>
-    <button type="button" id="hdr-link">Link experiment</button>
+    <label>
+      <span class="cap">data_project<span class="info" tabindex="0"
+            data-tip="The archive project name files are filed under in MANGO/iRODS. Set once per experiment; mus proposes it automatically when a sibling experiment in the same study or project already has one.">ⓘ</span></span>
+      <input id="hdr-dp" placeholder="set after linking" autocomplete="off">
+    </label>
+    <button type="button" id="hdr-setdp"
+            title="Save this data_project for the folder">
+      Set data_project
+    </button>
+    <div class="linkhint" id="hdr-hint"></div>
   </div>
 
   <div class="hdrstatus">
@@ -368,7 +466,10 @@
 
   <!-- CENTER: file selection -->
   <section class="panel">
-    <h2>Folder &amp; files</h2>
+    <h2>Folder &amp; files
+      <button type="button" id="tree-refresh" class="ghost small"
+              title="Reload the file list (also refreshes automatically)">↻ Refresh</button>
+    </h2>
     <div class="crumbs" id="crumbs"></div>
     <input class="filter" id="filter" type="search" placeholder="filter by name…">
     <div id="tree"></div>
@@ -379,22 +480,66 @@
   <!-- RIGHT: upload -->
   <section class="panel">
     <h2>Submit &amp; upload</h2>
-    <ul class="checks" id="checks"></ul>
 
-    <label class="section-label" for="upload-msg">Message</label>
+    <label class="section-label" for="upload-msg">Message
+      <span class="info" tabindex="0"
+            data-tip="A short description of what you're uploading, like a git commit message. Stored with the files in the ELN and iRODS.">ⓘ</span>
+    </label>
     <textarea class="message" id="upload-msg" rows="4"
               placeholder="Describe what's being uploaded — like a git commit message."></textarea>
 
     <div class="upload-opts">
-      <label><input type="checkbox" id="upload-dryrun"> Dry-run</label>
-      <label><input type="checkbox" id="upload-pack"> Pack folders as .tar.gz</label>
+      <label><input type="checkbox" id="upload-dryrun"> Dry-run
+        <span class="info" tabindex="0"
+              data-tip="Show exactly what would happen without transferring anything. Nothing is written to iRODS or the ELN.">ⓘ</span>
+      </label>
+      <label><input type="checkbox" id="upload-pack"> Pack folders as .tar.gz
+        <span class="info" tabindex="0"
+              data-tip="Bundle each selected folder into a single .tar.gz before upload — recommended for folders with many small files. Packing is done by mus itself (no system tar/gzip needed, works on Windows). This is a manual choice: mus does not auto-pack.">ⓘ</span>
+      </label>
+      <label class="danger-opt"><input type="checkbox" id="upload-force"> Overwrite changed files on iRODS
+        <span class="info" tabindex="0"
+              data-tip="If a selected file already exists on iRODS with DIFFERENT contents, replace the remote copy with your local version. Leave OFF and such files are left untouched (a warning is shown). Only affects files whose bytes differ; identical files are always skipped.">ⓘ</span>
+      </label>
     </div>
 
     <div id="upload-selected-summary">no files selected</div>
-    <button type="button" id="upload-go" class="big">▶ Upload to iRODS</button>
+    <button type="button" id="upload-go" class="big danger">▶ Upload to MANGO/iRODS</button>
     <pre class="log" id="upload-log" hidden></pre>
   </section>
 </main>
+
+<!-- "What's still required" dialog, shown when the upload button is
+     pressed while one or more requirements are unmet. -->
+<dialog id="upload-block-dialog">
+  <h3>⚠ Not ready to upload</h3>
+  <p class="dlg-intro" id="upload-block-intro">Please resolve the following before uploading to MANGO/iRODS:</p>
+  <ul id="upload-block-list"></ul>
+  <div class="dlg-actions">
+    <button type="button" id="upload-block-close" class="big">OK</button>
+  </div>
+</dialog>
+
+<!-- Full-screen blocking overlay shown when the heartbeat to the
+     server fails. Starts hidden; the heartbeat toggles `.hidden`. -->
+<div class="conn-overlay" id="conn-overlay" hidden>
+  <div class="conn-card">
+    <div class="conn-title">⚠ Connection lost</div>
+    <p class="conn-body">
+      Lost contact with the <code>mus serve</code> process.
+      Is the terminal still open?
+    </p>
+    <p class="conn-recon">Reconnecting…</p>
+  </div>
+</div>
+
+<!-- Persistent status bar: shows the latest action result / update
+     message (e.g. "Linked to experiment 1955928 — test_upload."). -->
+<div class="statusbar" id="statusbar">
+  <span class="statusbar-icon" id="statusbar-icon"></span>
+  <span class="statusbar-msg" id="statusbar-msg">Ready.</span>
+  <span class="statusbar-time" id="statusbar-time"></span>
+</div>
 
 <script>
 'use strict';
@@ -524,6 +669,8 @@ async function boot() {
   await refreshAuth(true);
   await refreshAll();
   scheduleAuthPoll();
+  scheduleHeartbeat();
+  scheduleTreePoll();
   restorePanelWidths();
   installDividers();
   // Re-probe on tab focus — depositors typically Alt-Tab to a
@@ -531,9 +678,27 @@ async function boot() {
   // visible transition means the banner clears within one poll of
   // the depositor's return without them having to click anything.
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) refreshAuth(true);
+    if (!document.hidden) { refreshAuth(true); heartbeatTick(); refreshTreeOnly(); }
   });
-  window.addEventListener('focus', () => refreshAuth(true));
+  window.addEventListener('focus', () => { refreshAuth(true); heartbeatTick(); });
+}
+
+// Manual refresh button on the file panel.
+document.getElementById('tree-refresh').addEventListener('click', () => refreshTreeOnly());
+
+// scheduleTreePoll reloads the file list every 5s so files added on
+// disk while mus serve is open appear without a manual refresh. Skips a
+// tick while the user is typing in the filter box (focus there means
+// they're actively working the list) to avoid yanking it around.
+const TREE_POLL_MS = 5000;
+let treePollHandle = null;
+function scheduleTreePoll() {
+  if (treePollHandle) clearInterval(treePollHandle);
+  treePollHandle = setInterval(() => {
+    if (document.hidden) return;                       // don't poll a background tab
+    if (document.activeElement === document.getElementById('filter')) return;
+    refreshTreeOnly();
+  }, TREE_POLL_MS);
 }
 
 // scheduleAuthPoll picks a poll interval based on current state:
@@ -553,14 +718,70 @@ function scheduleAuthPoll() {
     if (nowUnauthed !== unauthed) scheduleAuthPoll();
   }, interval);
 }
+
+// ── heartbeat / connection-lost overlay ────────────────────────────────
+// Polls /api/ping every 2s. A *network* failure (server process gone,
+// laptop offline) increments a miss counter; after HEARTBEAT_MAX_MISS
+// consecutive misses the blocking overlay goes up and the UI is frozen.
+// A single successful ping clears it. We deliberately treat only network
+// errors as misses — an HTTP 4xx/5xx means the server is alive and
+// answering, which is not a lost connection.
+const HEARTBEAT_INTERVAL_MS = 2000;
+const HEARTBEAT_MAX_MISS = 3;
+let heartbeatMisses = 0;
+let heartbeatHandle = null;
+
+function setConnOverlay(visible) {
+  const overlay = document.getElementById('conn-overlay');
+  if (!overlay) return;
+  overlay.hidden = !visible;
+}
+
+async function heartbeatTick() {
+  try {
+    // cache:'no-store' so a proxy/browser cache can't fake a live server.
+    const r = await fetch('/api/ping', { cache: 'no-store' });
+    // Any HTTP response — even an error status — proves the process is
+    // reachable. Only a thrown fetch (network layer) counts as a miss.
+    void r;
+    heartbeatMisses = 0;
+    setConnOverlay(false);
+  } catch (e) {
+    heartbeatMisses++;
+    if (heartbeatMisses >= HEARTBEAT_MAX_MISS) setConnOverlay(true);
+  }
+}
+
+function scheduleHeartbeat() {
+  if (heartbeatHandle) clearInterval(heartbeatHandle);
+  heartbeatHandle = setInterval(heartbeatTick, HEARTBEAT_INTERVAL_MS);
+}
+
 async function refreshAll() {
   renderCrumbs();
   await Promise.all([refreshTree(), refreshCascade(), refreshPreflight()]);
   hydrateHeaderInputs();
 }
 
+// refreshTreeOnly reloads just the file list — used by the manual
+// Refresh button and the background auto-poll, which must NOT reset the
+// header inputs or cascade the user may be editing.
+async function refreshTreeOnly() {
+  await Promise.all([refreshTree(), refreshPreflight()]);
+}
+
 // Populate the header experiment_id / data_project inputs from the
 // cascade whenever they aren't already being edited by the user.
+// cascadeMap flattens the /api/cascade `values` array
+// ([{key,value,...}]) into a plain {key: value} object.
+function cascadeMap(cascade) {
+  const map = {};
+  if (cascade && Array.isArray(cascade.values)) {
+    for (const entry of cascade.values) map[entry.key] = entry.value;
+  }
+  return map;
+}
+
 function hydrateHeaderInputs() {
   const expInput = document.getElementById('hdr-expid');
   const dpInput  = document.getElementById('hdr-dp');
@@ -568,9 +789,10 @@ function hydrateHeaderInputs() {
   // user's in-progress typing.
   if (document.activeElement === expInput || document.activeElement === dpInput) return;
   if (!lastCascade) return;
-  const eff = lastCascade.effective || {};
+  const eff = cascadeMap(lastCascade);
   if (eff.eln_experiment_id && !expInput.value) expInput.value = eff.eln_experiment_id;
   if (eff.data_project && !dpInput.value) dpInput.value = eff.data_project;
+  updateHeaderButtons();
 }
 
 // ── crumbs ─────────────────────────────────────────────────────────────
@@ -669,16 +891,23 @@ function toggleSelect(path, on, isWholeFolder) {
 function refreshSelectedSummary() {
   const el = document.getElementById('upload-selected-summary');
   const n = selectedPaths.size;
-  if (n === 0) { el.textContent = 'no files selected'; return; }
-  const list = Array.from(selectedPaths).map(p => p === '' ? '<this folder>' : p).slice(0, 3);
-  const extra = n > 3 ? ' (+' + (n - 3) + ' more)' : '';
-  el.textContent = n + ' selected: ' + list.join(', ') + extra;
+  if (n === 0) { el.textContent = 'no files selected'; }
+  else {
+    const list = Array.from(selectedPaths).map(p => p === '' ? '<this folder>' : p).slice(0, 3);
+    const extra = n > 3 ? ' (+' + (n - 3) + ' more)' : '';
+    el.textContent = n + ' selected: ' + list.join(', ') + extra;
+  }
+  updateUploadButton();
 }
 
 document.getElementById('filter').addEventListener('input', e => {
   filterText = e.target.value;
   refreshTree();
 });
+
+// Re-evaluate the upload button's ready/not-ready state as the message
+// is typed (min-length is one of the requirements).
+document.getElementById('upload-msg').addEventListener('input', updateUploadButton);
 
 // ── cascade + annotation form ──────────────────────────────────────────
 let lastCascade = null;
@@ -698,35 +927,36 @@ async function refreshCascade() {
 }
 
 function renderChips(host, cascade) {
-  const local = cascade.local || {};
-  const inherited = cascade.inherited || {};
-  const localKeys = Object.keys(local).sort();
-  const inheritedKeys = Object.keys(inherited).sort();
-  if (localKeys.length === 0 && inheritedKeys.length === 0) {
+  // Server returns `values: [{key, value, local, is_list}]`. `local`
+  // true → set in THIS folder's mus.cfg (removable); false → inherited
+  // from an ancestor cfg (read-only here).
+  const values = (cascade && Array.isArray(cascade.values)) ? cascade.values : [];
+  const localEntries = values.filter(e => e.local).sort((a, b) => a.key.localeCompare(b.key));
+  const inheritedEntries = values.filter(e => !e.local).sort((a, b) => a.key.localeCompare(b.key));
+  if (localEntries.length === 0 && inheritedEntries.length === 0) {
     host.appendChild(el('div', { class: 'help' }, 'no annotation set in cascade yet'));
     return;
   }
-  if (localKeys.length) {
+  if (localEntries.length) {
     host.appendChild(el('div', { class: 'chip-group-label' }, 'this folder'));
     const g = el('div', { class: 'chip-group' });
-    for (const k of localKeys) {
+    for (const entry of localEntries) {
       const chip = el('div', { class: 'chip local' },
-        el('b', {}, k), '=', local[k]);
+        el('b', {}, entry.key), '=', entry.value);
       chip.appendChild(el('button', {
         type: 'button', class: 'chip-x', title: 'remove',
-        on: { click: () => onUnset(k) },
+        on: { click: () => onUnset(entry.key) },
       }, '×'));
       g.appendChild(chip);
     }
     host.appendChild(g);
   }
-  if (inheritedKeys.length) {
+  if (inheritedEntries.length) {
     host.appendChild(el('div', { class: 'chip-group-label inherited' }, 'inherited'));
     const g = el('div', { class: 'chip-group' });
-    for (const k of inheritedKeys) {
-      const from = (cascade.inherited_source && cascade.inherited_source[k]) || 'ancestor';
-      g.appendChild(el('div', { class: 'chip inherited', title: 'from ' + from },
-        el('b', {}, k), '=', inherited[k]));
+    for (const entry of inheritedEntries) {
+      g.appendChild(el('div', { class: 'chip inherited', title: 'inherited from an ancestor mus.cfg' },
+        el('b', {}, entry.key), '=', entry.value));
     }
     host.appendChild(g);
   }
@@ -740,15 +970,19 @@ async function populateKnownKeys() {
   } catch (e) { knownKeys = []; }
   const sel = document.getElementById('cfg-key');
   while (sel.options.length > 1) sel.remove(1);
-  // Group by category if the endpoint provides one.
+  // Group by category, preserving the server's key order within each
+  // group. IMPORTANT: render EVERY group the server sends — an earlier
+  // version filtered against a hardcoded lowercase list that no longer
+  // matched the server's group names ("Biology", "Provenance", …), so
+  // nothing rendered. We now key off the actual group labels.
   const byGroup = {};
+  const groupOrder = [];
   for (const k of knownKeys) {
-    const g = k.group || 'other';
-    (byGroup[g] = byGroup[g] || []).push(k);
+    const g = k.group || 'Other';
+    if (!(g in byGroup)) { byGroup[g] = []; groupOrder.push(g); }
+    byGroup[g].push(k);
   }
-  const order = ['biology', 'eln', 'irods', 's3', 'h5ad', 'de', 'other'];
-  for (const g of order) {
-    if (!byGroup[g]) continue;
+  for (const g of groupOrder) {
     const og = document.createElement('optgroup');
     og.label = g;
     for (const k of byGroup[g]) {
@@ -842,73 +1076,302 @@ async function onUnset(key) {
 }
 
 // ── pre-flight ──────────────────────────────────────────────────────────
+// lastPreflight caches the server's checklist for the current folder.
+// The always-on green/red list was removed from the UI; the checks are
+// now surfaced only at upload time, in a "what's still required" dialog.
+let lastPreflight = null;
 async function refreshPreflight() {
-  const list = document.getElementById('checks');
-  list.innerHTML = '';
   try {
-    const r = await api('/api/preflight?dir=' + encodeURIComponent(currentDir));
-    for (const c of r.checks) {
-      const li = el('li', { class: c.ok ? 'ok' : 'bad' },
-        el('span', { class: 'mark' }, c.ok ? '✓' : '✘'),
-        el('span', { class: 'label' }, c.label),
-        c.detail ? el('span', { class: 'detail' }, c.detail) : null);
-      list.appendChild(li);
-    }
+    lastPreflight = await api('/api/preflight?dir=' + encodeURIComponent(currentDir));
   } catch (e) {
-    list.appendChild(el('div', { class: 'error' }, 'preflight: ' + e.message));
+    lastPreflight = null;
   }
+  updateUploadButton();
+}
+
+// Minimum characters required in the upload message — a one-word
+// message ("backup") is rarely enough to understand a deposit later.
+const MIN_MESSAGE_LEN = 15;
+
+// blockingRequirements returns a list of human-readable strings for
+// everything that must be fixed before an upload can proceed: the
+// server-side preflight checks flagged block_upload && !ok, plus the
+// client-only conditions (message present + long enough, files
+// selected).
+function blockingRequirements() {
+  const problems = [];
+  const msg = document.getElementById('upload-msg').value.trim();
+  if (!msg) {
+    problems.push('Enter an upload message describing what you’re uploading.');
+  } else if (msg.length < MIN_MESSAGE_LEN) {
+    problems.push('The upload message is too short — please write at least ' +
+      MIN_MESSAGE_LEN + ' characters (currently ' + msg.length + ').');
+  }
+  if (selectedPaths.size === 0) problems.push('Select at least one file or folder in the middle panel.');
+  if (lastPreflight && Array.isArray(lastPreflight.checks)) {
+    for (const c of lastPreflight.checks) {
+      if (c.block_upload && !c.ok) {
+        problems.push(c.label + (c.detail ? ' — ' + c.detail : ''));
+      }
+    }
+  }
+  return problems;
+}
+
+// updateUploadButton flips the upload button between "not ready" (red /
+// .danger) and "ready" (green / .ready) based on whether any
+// requirement is still outstanding. The click handler re-validates
+// server-side regardless — this is purely the visual affordance the
+// depositor asked for.
+function updateUploadButton() {
+  const btn = document.getElementById('upload-go');
+  if (!btn) return;
+  const ready = blockingRequirements().length === 0;
+  btn.classList.toggle('ready', ready);
+  btn.classList.toggle('danger', !ready);
+  btn.title = ready
+    ? 'All requirements met — click to upload'
+    : 'Not ready: ' + blockingRequirements().join(' · ');
 }
 
 // ── ELN link (from header inputs) ───────────────────────────────────────
-document.getElementById('hdr-suggest').addEventListener('click', async () => {
-  const expid = document.getElementById('hdr-expid').value.trim();
-  if (!expid) { alert('enter an experiment_id first'); return; }
-  try {
-    const r = await apiPost('/api/eln/suggest-dp', { experiment_id: expid });
-    if (r && r.data_project) {
-      document.getElementById('hdr-dp').value = r.data_project;
+// updateHeaderButtons relabels the two header buttons to match state,
+// keeping the flow legible for a non-technical depositor:
+//   - experiment not yet linked → "Link ELN experiment"
+//   - experiment linked         → "Update ELN data" (refetch metadata)
+//   - data_project not yet set   → "Set data_project"
+//   - data_project already set   → "Update data_project"
+// Also sets a plain-language hint line under the inputs.
+function updateHeaderButtons() {
+  const eff = cascadeMap(lastCascade);
+  const linked = !!eff.eln_experiment_id;
+  const hasDP  = !!eff.data_project;
+  const linkBtn  = document.getElementById('hdr-link');
+  const setDpBtn = document.getElementById('hdr-setdp');
+  const dpInput  = document.getElementById('hdr-dp');
+  const hint     = document.getElementById('hdr-hint');
+
+  linkBtn.textContent  = linked ? 'Update ELN data' : 'Link ELN experiment';
+  setDpBtn.textContent = hasDP  ? 'Update data_project' : 'Set data_project';
+
+  // data_project can't be set until an experiment is linked (the
+  // suggestion + mapping key off it). Gate the field + button.
+  dpInput.disabled  = !linked;
+  setDpBtn.disabled = !linked;
+  dpInput.placeholder = linked ? 'e.g. Fiers2025' : 'link an ELN experiment first';
+
+  if (!hint._sticky) {           // don't clobber a transient action message
+    if (!linked) {
+      hint.textContent = 'Step 1 — enter the ELN experiment id and click “Link ELN experiment”.';
+    } else if (!hasDP) {
+      hint.textContent = 'Step 2 — set a data_project (a suggestion is proposed when one is registered).';
     } else {
-      alert('no suggestion available');
+      const summary = 'Linked to experiment ' + eff.eln_experiment_id + ', data_project ' + eff.data_project + '.';
+      hint.textContent = summary;
+      // Mirror the fully-configured summary to the status bar so it's
+      // the standing "where am I" line, not just header text. Guard on
+      // change so the 5s tree-poll's refreshes don't re-stamp the
+      // timestamp every tick.
+      if (statusbarLastSummary !== summary) {
+        statusbarLastSummary = summary;
+        pushStatus(summary, 'ok');
+      }
     }
-  } catch (e) { alert('suggest: ' + e.message); }
-});
+    hint.className = 'linkhint';
+  }
+}
+let statusbarLastSummary = '';
+
+// setHint shows a transient, styled message on the header hint line
+// AND mirrors it to the persistent bottom status bar. `sticky` keeps
+// updateHeaderButtons from overwriting the header line until the next
+// refresh; the status bar always keeps the latest message.
+function setHint(msg, kind) {
+  const hint = document.getElementById('hdr-hint');
+  hint.textContent = msg;
+  hint.className = 'linkhint' + (kind ? ' ' + kind : '');
+  hint._sticky = true;
+  pushStatus(msg, kind);
+}
+function clearHintSticky() { document.getElementById('hdr-hint')._sticky = false; }
+
+// pushStatus writes the latest action result / update message to the
+// bottom status bar, with an icon and a wall-clock timestamp. This is
+// the durable record: header hints get overwritten by step guidance,
+// but the status bar holds the last thing that happened.
+function pushStatus(msg, kind) {
+  const bar  = document.getElementById('statusbar');
+  const icon = document.getElementById('statusbar-icon');
+  const text = document.getElementById('statusbar-msg');
+  const time = document.getElementById('statusbar-time');
+  bar.className = 'statusbar' + (kind ? ' ' + kind : '');
+  icon.textContent = kind === 'ok' ? '✓' : kind === 'warn' ? '⚠' : '›';
+  text.textContent = msg;
+  text.title = msg;                    // full text on hover when truncated
+  const d = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  time.textContent = pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+}
+
+// After linking, propose a data_project ONLY when the field is still
+// empty. If a data_project is already set (in the field or the folder
+// cascade) we leave it alone and say nothing — a suggestion lookup that
+// comes back "none" must never overwrite or warn about an existing
+// value. Never invents a value.
+async function proposeDataProject(expid) {
+  const dpInput = document.getElementById('hdr-dp');
+  // Already have a value (typed, or hydrated from the cascade)? Nothing
+  // to propose — don't second-guess it with a "not registered" warning.
+  if (dpInput.value.trim()) return;
+  try {
+    const r = await apiPost('/api/eln/suggest-dp', { dir: currentDir, experiment_id: expid });
+    if (r && r.data_project) {
+      dpInput.value = r.data_project;
+      const via = r.source === 'cascade'    ? 'this folder’s configuration'
+                : r.source === 'experiment' ? 'this experiment'
+                : r.source === 'study'      ? 'the same study'
+                : r.source === 'project'    ? 'the same project'
+                : 'a registered mapping';
+      setHint('data_project “' + r.data_project + '” (from ' + via + '). Click “Set data_project” to confirm, or edit first.', 'ok');
+    } else {
+      setHint('No data_project is registered yet for this experiment, study, or project — type one and click “Set data_project”.', '');
+    }
+  } catch (e) { /* suggestion is best-effort; silent on failure */ }
+}
 
 document.getElementById('hdr-link').addEventListener('click', async () => {
   const expid = document.getElementById('hdr-expid').value.trim();
-  const dp    = document.getElementById('hdr-dp').value.trim();
-  if (!expid) { alert('experiment_id is required'); return; }
-  if (!dp)    { alert('data_project is required — click Suggest or type one'); return; }
+  if (!expid) { setHint('Enter an ELN experiment id first.', 'warn'); return; }
   const btn = document.getElementById('hdr-link');
   btn.disabled = true;
   try {
-    await apiPost('/api/eln/link', {
+    // force:true so "Update ELN data" can refetch even when already linked.
+    const r = await apiPost('/api/eln/link', {
+      dir: currentDir, experiment_id: expid, force: true,
+    });
+    clearHintSticky();
+    await refreshAll();
+    setHint('Linked to experiment ' + (r.eln_experiment_id || expid)
+      + (r.experiment_name ? ' — ' + r.experiment_name : '') + '.', 'ok');
+    await proposeDataProject(r.eln_experiment_id || expid);
+  } catch (e) { setHint('Link failed: ' + e.message, 'warn'); }
+  finally { btn.disabled = false; }
+});
+
+document.getElementById('hdr-setdp').addEventListener('click', async () => {
+  const expid = document.getElementById('hdr-expid').value.trim();
+  const dp    = document.getElementById('hdr-dp').value.trim();
+  if (!dp) { setHint('Enter a data_project value first.', 'warn'); return; }
+  const btn = document.getElementById('hdr-setdp');
+  btn.disabled = true;
+  try {
+    await apiPost('/api/eln/set-dp', {
       dir: currentDir, experiment_id: expid, data_project: dp,
     });
+    clearHintSticky();
     await refreshAll();
-    alert('Linked to experiment ' + expid);
-  } catch (e) { alert('link: ' + e.message); }
+    setHint('data_project set to “' + dp + '”.', 'ok');
+  } catch (e) { setHint('Could not set data_project: ' + e.message, 'warn'); }
   finally { btn.disabled = false; }
 });
 
 // ── upload ─────────────────────────────────────────────────────────────
+function showUploadBlockDialog(problems) {
+  const dlg  = document.getElementById('upload-block-dialog');
+  // Reset title + intro to the "not ready" wording — showUploadErrorDialog
+  // reuses this same element and rewrites them.
+  dlg.querySelector('h3').textContent = '⚠ Not ready to upload';
+  document.getElementById('upload-block-intro').textContent =
+    'Please resolve the following before uploading to MANGO/iRODS:';
+  const list = document.getElementById('upload-block-list');
+  list.innerHTML = '';
+  for (const p of problems) list.appendChild(el('li', {}, p));
+  if (typeof dlg.showModal === 'function') dlg.showModal();
+  else alert('Not ready to upload:\n\n• ' + problems.join('\n• ')); // <dialog> fallback
+}
+document.getElementById('upload-block-close').addEventListener('click', () => {
+  document.getElementById('upload-block-dialog').close();
+});
+
+// diagnoseUploadOutput maps known, recoverable CLI failure signatures
+// in the upload output to a plain-language explanation + concrete fix.
+// Returns null when no known problem is present. The matched phrases are
+// load-bearing and pinned by a Go test (skills_test / serve_actions
+// test) so a CLI wording change can't silently break this detection.
+function diagnoseUploadOutput(out) {
+  const text = out || '';
+  // 1. Remote object exists with different bytes, --force not passed.
+  if (/exists with different bytes|DIFFERENT bytes/i.test(text)) {
+    return {
+      short: 'Upload blocked: a file already exists on iRODS with different contents.',
+      title: 'A file already exists on iRODS — with different contents',
+      detail: 'One or more selected files are already on iRODS with DIFFERENT bytes. ' +
+        'mus will not overwrite them unless you say so.',
+      fixes: [
+        'Tick “Overwrite changed files on iRODS”, then click Upload again to replace the remote copy with your local version.',
+        'Or leave it off if the remote copy should be kept — deselect the changed file(s) instead.',
+      ],
+    };
+  }
+  // 2. Dense folder, auto-pack couldn't prompt (no TTY) — needs the pack box.
+  if (/density check failed|no TTY available for prompt/i.test(text)) {
+    return {
+      short: 'Upload blocked: a folder has many small files and needs packing.',
+      title: 'This folder should be packed before upload',
+      detail: 'A selected folder holds many small files. Uploading them one-by-one is slow ' +
+        'and hard on the archive, so mus asks you to bundle them first.',
+      fixes: [
+        'Tick “Pack folders as .tar.gz”, then click Upload again — mus bundles the folder into a single archive and uploads that.',
+      ],
+    };
+  }
+  return null;
+}
+
+// showUploadErrorDialog reuses the block-dialog element to present a
+// titled error with a short explanation and a list of concrete fixes.
+function showUploadErrorDialog(title, detail, fixes) {
+  const dlg   = document.getElementById('upload-block-dialog');
+  const hEl    = dlg.querySelector('h3');
+  const introEl = document.getElementById('upload-block-intro');
+  const list   = document.getElementById('upload-block-list');
+  hEl.textContent = '⚠ ' + title;
+  introEl.textContent = detail;
+  list.innerHTML = '';
+  for (const f of (fixes || [])) list.appendChild(el('li', {}, f));
+  if (typeof dlg.showModal === 'function') dlg.showModal();
+  else alert(title + '\n\n' + detail + '\n\n• ' + (fixes || []).join('\n• '));
+}
+
 document.getElementById('upload-go').addEventListener('click', async () => {
+  // Re-check the server-side preflight right now so the dialog reflects
+  // the current folder state, not a stale poll.
+  await refreshPreflight();
+  const problems = blockingRequirements();
+  if (problems.length) {
+    showUploadBlockDialog(problems);
+    return;
+  }
   const msg = document.getElementById('upload-msg').value.trim();
-  if (!msg) { alert('please enter an upload message'); return; }
-  if (selectedPaths.size === 0) { alert('select at least one file / folder'); return; }
   const dry = document.getElementById('upload-dryrun').checked;
   const pack = document.getElementById('upload-pack').checked;
+  const force = document.getElementById('upload-force').checked;
   const paths = Array.from(selectedPaths);
   const btn = document.getElementById('upload-go');
   const logEl = document.getElementById('upload-log');
   btn.disabled = true;
   logEl.hidden = false;
   logEl.textContent = 'starting upload…\n';
+  pushStatus((dry ? 'Dry-run upload' : 'Upload') + ' started (' + paths.length +
+    ' item' + (paths.length === 1 ? '' : 's') + ')…', '');
+  let httpOK = true;
+  let output = '';
   try {
     const resp = await fetch('/api/upload', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        dir: currentDir, paths, message: msg, dry_run: dry, pack,
+        dir: currentDir, paths, message: msg, dry_run: dry, pack, force,
       }),
     });
     if (!resp.body) {
@@ -919,13 +1382,35 @@ document.getElementById('upload-go').addEventListener('click', async () => {
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
-        logEl.textContent += dec.decode(value);
+        const chunk = dec.decode(value);
+        output += chunk;
+        logEl.textContent += chunk;
         logEl.scrollTop = logEl.scrollHeight;
       }
     }
+    httpOK = resp.ok;
     if (!resp.ok) logEl.textContent += '\n✘ HTTP ' + resp.status + '\n';
+
+    // Scan the CLI output for known, recoverable failure modes and
+    // surface a plain-language, actionable error instead of making the
+    // depositor decode the log. diagnose returns null when the output
+    // shows no known problem.
+    const diag = diagnoseUploadOutput(output);
+    if (diag) {
+      pushStatus(diag.short, 'warn');
+      showUploadErrorDialog(diag.title, diag.detail, diag.fixes);
+    } else if (!httpOK) {
+      pushStatus('Upload failed (HTTP ' + resp.status + ') — see the log.', 'warn');
+      showUploadErrorDialog('Upload failed',
+        'The upload did not complete (HTTP ' + resp.status + '). The full output is in the log panel below.',
+        []);
+    } else {
+      pushStatus((dry ? 'Dry-run' : 'Upload') + ' finished.', 'ok');
+    }
   } catch (e) {
     logEl.textContent += '\n✘ ' + e.message + '\n';
+    pushStatus('Upload failed: ' + e.message, 'warn');
+    showUploadErrorDialog('Upload failed', e.message, []);
   } finally {
     btn.disabled = false;
     await refreshAll();

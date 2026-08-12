@@ -438,16 +438,21 @@ fallback (` + "`~/.config/mus/secrets.age`" + `) for HPC login nodes.
   summary, then "Upload to iRODS". Confirm dialog before
   non-dry-run runs spells out that already-uploaded files will
   be skipped.
-- **Right — pre-flight + ELN.** Pre-flight chips
-  (data_project / ELN state / iron-on-PATH / data-files-present).
-  ELN block uses ` + "`<details>`" + ` that auto-collapses when ELN
-  state is decided (linked or disabled) and auto-expands when
-  undecided. Inside: experiment_id input + "Suggest" button
-  (calls /api/eln/suggest-dp which looks up the experiment in
-  eLab and pre-fills data_project via the same resolver the CLI
-  uses — cross-folder cache, then first-collaborator+year
-  heuristic). Then data_project input + Link / Disable here /
-  Re-enable buttons.
+- **Top header — ELN linkage (two-step flow).** The header holds:
+  ELN experiment id input + a button that reads "Link ELN
+  experiment" when unlinked and "Update ELN data" once linked;
+  then a data_project input + a button that reads "Set
+  data_project" / "Update data_project". Linking (POST
+  /api/eln/link) fetches the experiment's eln_* metadata and
+  writes it to mus.cfg — data_project is NOT required to link.
+  After linking, the GUI auto-proposes a data_project (POST
+  /api/eln/suggest-dp) using a tiered lookup of the mapping
+  store: a value already registered for THIS experiment, else the
+  same study, else the same project. If nothing is registered at
+  any tier it proposes nothing (never invents one). Setting the
+  data_project (POST /api/eln/set-dp) writes mus.cfg and records
+  the experiment→data_project mapping (with study/project) so
+  sibling folders can auto-propose it later.
 
 **Upload safety (mus 0.2.32+):**
 

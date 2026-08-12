@@ -52,6 +52,7 @@ func registerServeAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/eln/disable", apiELNDisable)
 	mux.HandleFunc("/api/eln/enable", apiELNEnable)
 	mux.HandleFunc("/api/eln/link", apiELNLink)
+	mux.HandleFunc("/api/eln/set-dp", apiELNSetDataProject)
 	mux.HandleFunc("/api/eln/suggest-dp", apiELNSuggestDataProject)
 }
 
@@ -636,19 +637,21 @@ func apiELNEnable(w http.ResponseWriter, r *http.Request) {
 //
 //	{"dir": "<rel>", "experiment_id": "<id>", "data_project": "<dp>", "force": false}.
 //
-// Fetches the experiment metadata from eLabJournal, validates the
-// supplied data_project, and stamps both into the folder's
-// mus.cfg. Also clears any pre-existing eln_disabled flag — `link`
-// implies `enable`, matching the CLI semantics.
+// Fetches the experiment metadata from eLabJournal and stamps the
+// eln_* keys into the folder's mus.cfg. Also clears any pre-existing
+// eln_disabled flag — `link` implies `enable`, matching the CLI.
 //
-// `data_project` is REQUIRED in the request (no interactive
-// prompt path through HTTP). The GUI is responsible for surfacing
-// the chosen value back to the user before POSTing. The endpoint
-// will return 400 if it's missing or fails dataproject.ValidateName.
+// `data_project` is OPTIONAL. The new GUI flow links the experiment
+// first (this endpoint) and sets the data_project afterwards via
+// /api/eln/set-dp, so an experiment can be linked before its
+// data_project is decided. When data_project IS supplied it is
+// validated, written to mus.cfg, and recorded in the mapping store
+// (with study/project) so future folders can auto-propose it.
 //
 // If a different experiment is already linked in this folder, the
 // endpoint refuses unless `force` is true. Same idempotency guard
-// as the CLI.
+// as the CLI. Response includes the resolved study/project IDs so
+// the GUI can immediately request a data_project suggestion.
 func apiELNLink(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -674,24 +677,19 @@ func apiELNLink(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if req.DataProject == "" {
-		http.Error(w, "data_project is required (no interactive prompt over HTTP)", http.StatusBadRequest)
-		return
-	}
-	if err := dataproject.ValidateName(req.DataProject); err != nil {
-		http.Error(w, fmt.Sprintf("data_project %q rejected: %v", req.DataProject, err), http.StatusBadRequest)
-		return
-	}
-	expIDStr := strconv.FormatInt(expID, 10)
-	// Idempotency guard mirrors runELNLink.
-	localEnv, _ := config.LoadLocal(abs)
-	if existing := localEnv.String("eln_experiment_id"); existing != "" && !req.Force {
-		if existing == expIDStr {
-			// Re-link to the same ID is a no-op success — saves a refresh round-trip.
-			writeJSON(w, map[string]any{"ok": true, "noop": true,
-				"eln_experiment_id": existing})
+	// data_project is optional now, but if present it must be valid.
+	if req.DataProject != "" {
+		if err := dataproject.ValidateName(req.DataProject); err != nil {
+			http.Error(w, fmt.Sprintf("data_project %q rejected: %v", req.DataProject, err), http.StatusBadRequest)
 			return
 		}
+	}
+	expIDStr := strconv.FormatInt(expID, 10)
+	// Idempotency guard mirrors runELNLink. Relinking the SAME id is
+	// allowed to fall through (it refreshes eln_* metadata); only a
+	// DIFFERENT already-linked id is refused without force.
+	localEnv, _ := config.LoadLocal(abs)
+	if existing := localEnv.String("eln_experiment_id"); existing != "" && existing != expIDStr && !req.Force {
 		http.Error(w, fmt.Sprintf(
 			"folder is already linked to experiment %s; pass force=true to relink", existing),
 			http.StatusConflict)
@@ -708,7 +706,9 @@ func apiELNLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kv := experimentToKV(info)
-	kv["data_project"] = req.DataProject
+	if req.DataProject != "" {
+		kv["data_project"] = req.DataProject
+	}
 	if err := config.Save(abs, kv); err != nil {
 		http.Error(w, fmt.Sprintf("save: %v", err), http.StatusInternalServerError)
 		return
@@ -717,35 +717,106 @@ func apiELNLink(w http.ResponseWriter, r *http.Request) {
 	if localEnv.Has("eln_disabled") {
 		_ = config.Unset(abs, "eln_disabled")
 	}
+	// Remember an explicitly-supplied data_project so sibling folders
+	// can auto-propose it (with study/project for the tiered lookup).
+	if req.DataProject != "" {
+		if store, serr := elnmap.Open(""); serr == nil {
+			_ = store.RememberFull(expIDStr, req.DataProject, info.ExperimentName,
+				elnStudyIDStr(info), elnProjectIDStr(info))
+		}
+	}
 	writeJSON(w, map[string]any{
-		"ok":     true,
-		"values": kv,
+		"ok":                true,
+		"values":            kv,
+		"eln_experiment_id": expIDStr,
+		"eln_study_id":      elnStudyIDStr(info),
+		"eln_project_id":    elnProjectIDStr(info),
+		"experiment_name":   info.ExperimentName,
 	})
+}
+
+// apiELNSetDataProject — POST /api/eln/set-dp with JSON body
+//
+//	{"dir": "<rel>", "experiment_id": "<id>", "data_project": "<dp>"}.
+//
+// Writes data_project into the folder's mus.cfg and records the
+// experiment→data_project mapping (with study/project, fetched from
+// the ELN) so future folders in the same experiment/study/project can
+// auto-propose it. Used by the GUI's "set / update data_project"
+// button, which is decoupled from linking the experiment.
+func apiELNSetDataProject(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Dir          string `json:"dir"`
+		ExperimentID string `json:"experiment_id"`
+		DataProject  string `json:"data_project"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("decode body: %v", err), http.StatusBadRequest)
+		return
+	}
+	abs, _, err := resolveDirParam(req.Dir)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.DataProject == "" {
+		http.Error(w, "data_project is required", http.StatusBadRequest)
+		return
+	}
+	if err := dataproject.ValidateName(req.DataProject); err != nil {
+		http.Error(w, fmt.Sprintf("data_project %q rejected: %v", req.DataProject, err), http.StatusBadRequest)
+		return
+	}
+	if err := config.Save(abs, map[string]string{"data_project": req.DataProject}); err != nil {
+		http.Error(w, fmt.Sprintf("save: %v", err), http.StatusInternalServerError)
+		return
+	}
+	// Record in the mapping store. Best-effort study/project enrichment:
+	// if we can resolve the experiment we store its study/project so the
+	// tiered suggestion works for siblings; otherwise store experiment-only.
+	if req.ExperimentID != "" {
+		if expID, perr := parseELNExperimentID(req.ExperimentID); perr == nil {
+			studyID, projectID, expName := "", "", ""
+			if client, cerr := openELN(); cerr == nil {
+				if info, ierr := client.ExpInfo(expID); ierr == nil {
+					studyID, projectID, expName = elnStudyIDStr(info), elnProjectIDStr(info), info.ExperimentName
+				}
+			}
+			if store, serr := elnmap.Open(""); serr == nil {
+				_ = store.RememberFull(strconv.FormatInt(expID, 10), req.DataProject, expName, studyID, projectID)
+			}
+		}
+	}
+	writeJSON(w, map[string]any{"ok": true, "data_project": req.DataProject})
 }
 
 // apiELNSuggestDataProject — POST /api/eln/suggest-dp with
 //
 //	{"experiment_id": "<id>"}
 //
-// Looks the experiment up via the ELN API, runs the same
-// suggestion logic the CLI's `mus eln link` uses (cached value
-// from another folder if available, else "FirstCollaboratorSurname"
-// + current year), and returns:
+// Looks the experiment up via the ELN API, then queries the mapping
+// store's tiered lookup: a data_project already registered for THIS
+// experiment, else one from the same study, else the same project.
+// Returns:
 //
-//	{"data_project": "<proposed>", "source": "cached|derived",
-//	 "experiment_name": "...", "collaborators": [...]}
+//	{"data_project": "<proposed>", "source": "experiment|study|project|none",
+//	 "experiment_name": "...", "study_name": "...", "project_name": "..."}
 //
-// UI pre-fills the data_project input with the suggestion. The
-// user can still edit before hitting Link. Anything else mus
-// would have prompted for (existing cascade value, --force) is
-// out of scope — the GUI's Link button posts to /api/eln/link
-// which has its own validation.
+// When nothing is registered at any tier, data_project is "" and
+// source is "none" — the GUI proposes nothing (per the spec: only
+// auto-propose from a registered value, never invent one). The user
+// can still open the data_project field and type one.
 func apiELNSuggestDataProject(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	var req struct {
+		Dir          string `json:"dir"`
 		ExperimentID string `json:"experiment_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -757,6 +828,23 @@ func apiELNSuggestDataProject(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// Tier 0 — the folder's own cascade is the strongest source of
+	// truth. If data_project is already declared here (in this folder's
+	// mus.cfg or an ancestor), that IS the answer — return it and never
+	// fall through to the "nothing registered" case. This is independent
+	// of the mapping store, so a fully-configured folder never shows the
+	// misleading "none" warning even when the store has no entry for it.
+	if abs, _, derr := resolveDirParam(req.Dir); derr == nil {
+		if env, lerr := config.Load(abs); lerr == nil && env != nil {
+			if dp := env.String("data_project"); dp != "" {
+				writeJSON(w, map[string]any{
+					"data_project": dp,
+					"source":       "cascade",
+				})
+				return
+			}
+		}
+	}
 	client, err := openELN()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("open ELN: %v", err), http.StatusInternalServerError)
@@ -767,26 +855,22 @@ func apiELNSuggestDataProject(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("fetch experiment %d: %v", expID, err), http.StatusBadGateway)
 		return
 	}
-	// First check the cross-folder mapping cache for a known
-	// data_project for this experiment — saves the depositor
-	// retyping a value an earlier folder already settled on.
-	source := "derived"
 	suggestion := ""
+	source := "none"
 	if store, err := elnmap.Open(""); err == nil {
-		if cached, _ := store.Lookup(strconv.FormatInt(expID, 10)); cached != nil &&
-			cached.DataProject != "" {
-			suggestion = cached.DataProject
-			source = "cached"
+		if match, _ := store.LookupTiered(
+			strconv.FormatInt(expID, 10), elnStudyIDStr(info), elnProjectIDStr(info),
+		); match != nil {
+			suggestion = match.DataProject
+			source = match.Tier // "experiment" | "study" | "project"
 		}
-	}
-	if suggestion == "" {
-		suggestion = suggestDataProjectFromELN(info)
 	}
 	writeJSON(w, map[string]any{
 		"data_project":    suggestion,
 		"source":          source,
 		"experiment_name": info.ExperimentName,
-		"collaborators":   info.Collaborators,
+		"study_name":      info.StudyName,
+		"project_name":    info.ProjectName,
 	})
 }
 

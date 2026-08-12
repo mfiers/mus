@@ -185,6 +185,12 @@ func apiUpload(w http.ResponseWriter, r *http.Request) {
 		// dense folders get archived before upload. Default off:
 		// the depositor opts in via the GUI checkbox.
 		Pack bool `json:"pack"`
+		// Force=true → pass --force so a file whose bytes differ from
+		// the existing remote object is OVERWRITTEN without the
+		// interactive [y/N] prompt (which the non-TTY serve subprocess
+		// can't answer). Default off — overwriting the archive is
+		// destructive, so the depositor opts in via the GUI checkbox.
+		Force bool `json:"force"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, fmt.Sprintf("decode body: %v", err), http.StatusBadRequest)
@@ -251,6 +257,12 @@ func apiUpload(w http.ResponseWriter, r *http.Request) {
 		// for file args.
 		subcommand = append(subcommand, "--pack", "tar.gz")
 	}
+	if req.Force {
+		// Overwrite remote objects whose bytes differ, without the
+		// [y/N] prompt the non-TTY subprocess can't answer. Mirrors
+		// `mus irods upload --force`.
+		subcommand = append(subcommand, "--force")
+	}
 	subcommand = append(subcommand, upload...)
 	self, err := os.Executable()
 	if err != nil {
@@ -310,18 +322,25 @@ func apiUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 // filterAlreadyUploaded splits `paths` into (toUpload, skipped).
-// A path is skipped when:
+// A path is skipped ONLY when we can prove it's a no-op re-upload:
 //   - it points at an existing file (not a directory)
 //   - a matching <basename>.mus sidecar exists with a non-zero
 //     irods_uploaded_at timestamp
+//   - AND the file is unchanged since that sidecar was written, i.e.
+//     its current size + mtime still match the sidecar (doc.Stale).
+//
+// The staleness gate is the important part: a file that was uploaded
+// and then locally EDITED must NOT be skipped — its recorded sha256 no
+// longer describes the bytes on disk, so re-uploading is real work, not
+// a no-op. Without this check the changed version would silently never
+// reach iRODS.
 //
 // Directories pass through unchanged — mus irods upload's own
 // per-file skip-if-same gate handles their contents at upload time.
 //
-// Any I/O error (stat, sidecar parse) is treated as "we can't
-// prove this is already uploaded, so let it through." Better to
-// risk a no-op re-run than to silently exclude a file the
-// depositor explicitly selected.
+// Any I/O error (stat, sidecar parse) is treated as "we can't prove
+// this is already uploaded, so let it through." Better to risk a no-op
+// re-run than to silently exclude a file the depositor selected.
 func filterAlreadyUploaded(paths []string) (toUpload []string, skipped []string) {
 	for _, p := range paths {
 		st, err := os.Stat(p)
@@ -333,6 +352,13 @@ func filterAlreadyUploaded(paths []string) (toUpload []string, skipped []string)
 		doc, err := readMaybe(scPath)
 		if err != nil || doc == nil || doc.IRODS == nil ||
 			doc.IRODS.UploadedAt.IsZero() {
+			toUpload = append(toUpload, p)
+			continue
+		}
+		// Uploaded before — but only skip if the local file is
+		// unchanged since. A stale sidecar (size/mtime differ) means
+		// the file was edited: upload the new version.
+		if doc.Stale(st) {
 			toUpload = append(toUpload, p)
 			continue
 		}

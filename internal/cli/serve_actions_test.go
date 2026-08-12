@@ -6,8 +6,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestAPIPreflight_EmptyRoot — fresh cwd, nothing set → every blocking
@@ -173,32 +175,80 @@ func TestAPIUpload_SkipsAlreadyUploaded(t *testing.T) {
 }
 
 // TestFilterAlreadyUploaded_Unit — the pure helper, in isolation.
+// Covers four cases: an unchanged uploaded file (skipped), a
+// never-uploaded file (uploaded), a directory (always passes), and an
+// uploaded-then-EDITED file whose sidecar is now stale (must upload —
+// the regression this test guards).
 func TestFilterAlreadyUploaded_Unit(t *testing.T) {
 	root := t.TempDir()
-	uploaded := filepath.Join(root, "u.tsv")
-	fresh := filepath.Join(root, "f.tsv")
-	if err := os.WriteFile(uploaded, []byte("x"), 0o644); err != nil {
+
+	// writeSidecarMatching writes a .mus recording the file's CURRENT
+	// size + mtime plus an upload timestamp, so doc.Stale() sees an
+	// unchanged file.
+	writeUploadedSidecar := func(file string) {
+		st, err := os.Stat(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mtime := st.ModTime().UTC().Truncate(time.Second).Format(time.RFC3339)
+		body := "sha256=a\n" +
+			"size=" + strconv.FormatInt(st.Size(), 10) + "\n" +
+			"mtime=" + mtime + "\n" +
+			"irods_uploaded_at=2026-06-20T10:00:00Z\n"
+		if err := os.WriteFile(file+".mus", []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// (1) uploaded + unchanged → skipped.
+	unchanged := filepath.Join(root, "u.tsv")
+	if err := os.WriteFile(unchanged, []byte("hello"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	writeUploadedSidecar(unchanged)
+
+	// (2) never uploaded → toUpload.
+	fresh := filepath.Join(root, "f.tsv")
 	if err := os.WriteFile(fresh, []byte("y"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(uploaded+".mus",
-		[]byte("sha256=a\nirods_uploaded_at=2026-06-20T10:00:00Z\n"),
-		0o644); err != nil {
-		t.Fatal(err)
-	}
-	// A directory should always pass through (folder upload semantics).
+
+	// (3) directory → always passes through.
 	dirPath := filepath.Join(root, "d")
 	if err := os.MkdirAll(dirPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	toUpload, skipped := filterAlreadyUploaded([]string{uploaded, fresh, dirPath})
-	if len(skipped) != 1 || skipped[0] != uploaded {
-		t.Errorf("expected uploaded file in skipped; got skipped=%v", skipped)
+
+	// (4) uploaded, THEN edited so size/mtime no longer match the
+	// sidecar → must upload, not skip.
+	edited := filepath.Join(root, "e.tsv")
+	if err := os.WriteFile(edited, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if len(toUpload) != 2 {
-		t.Errorf("expected fresh + dir in toUpload; got %v", toUpload)
+	writeUploadedSidecar(edited)
+	// Change the contents (different length) + bump mtime so Stale trips
+	// on either signal.
+	if err := os.WriteFile(edited, []byte("edited-and-longer"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(edited, future, future); err != nil {
+		t.Fatal(err)
+	}
+
+	toUpload, skipped := filterAlreadyUploaded([]string{unchanged, fresh, dirPath, edited})
+
+	if len(skipped) != 1 || skipped[0] != unchanged {
+		t.Errorf("expected only the unchanged uploaded file skipped; got skipped=%v", skipped)
+	}
+	wantUpload := map[string]bool{fresh: true, dirPath: true, edited: true}
+	if len(toUpload) != len(wantUpload) {
+		t.Fatalf("expected %d in toUpload; got %v", len(wantUpload), toUpload)
+	}
+	for _, p := range toUpload {
+		if !wantUpload[p] {
+			t.Errorf("unexpected path in toUpload: %s", p)
+		}
 	}
 }
 
@@ -217,6 +267,22 @@ func TestAPIUpload_AcceptsDryRun(t *testing.T) {
 	})
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected message-required error even with dry_run; got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "message is required") {
+		t.Errorf("body should still require message; got: %s", w.Body)
+	}
+}
+
+// TestAPIUpload_AcceptsForce — the force field decodes and the request
+// still runs the shared validation chain (empty message → 400).
+func TestAPIUpload_AcceptsForce(t *testing.T) {
+	root := t.TempDir()
+	defer withServeRoot(t, root)()
+	w := postJSON(apiUpload, map[string]any{
+		"paths": []string{""}, "force": true,
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected message-required error even with force; got %d", w.Code)
 	}
 	if !strings.Contains(w.Body.String(), "message is required") {
 		t.Errorf("body should still require message; got: %s", w.Body)
@@ -257,21 +323,28 @@ func TestServeIndex_EmbeddedHTMLIsPresent(t *testing.T) {
 			"go:embed may have failed silently", len(serveIndexHTML))
 	}
 	s := string(serveIndexHTML)
-	// Spot-check load-bearing IDs the JS reaches for. Updated for
-	// the 0.2.44+ redesign: ELN linkage moved to the top-bar header
-	// (hdr-expid / hdr-dp / hdr-link) — the old eln-block collapsed
-	// panel is gone, and the disable/enable buttons were removed
-	// (ELN linkage is now a required step, not optional).
+	// Spot-check load-bearing IDs the JS reaches for. The 0.2.47 header
+	// rework decouples linking from data_project: the experiment is
+	// linked first (hdr-link → "Link ELN experiment" / "Update ELN
+	// data"), then data_project is set separately (hdr-setdp → "Set /
+	// Update data_project"). The old one-shot "Suggest" button is gone;
+	// suggestion now fires automatically after linking.
 	for _, id := range []string{
 		"id=\"tree\"", "id=\"filter\"", "id=\"cfg-form\"",
 		"id=\"cfg-key\"", "id=\"cfg-value-host\"",
-		"id=\"upload-go\"", "id=\"upload-dryrun\"", "id=\"upload-pack\"",
-		"id=\"hdr-expid\"", "id=\"hdr-dp\"", "id=\"hdr-link\"", "id=\"hdr-suggest\"",
-		"id=\"auth-banner\"", "id=\"eln-hdr-badge\"", "id=\"irods-hdr-badge\"",
-		"id=\"checks\"", "id=\"upload-log\"",
+		"id=\"upload-go\"", "id=\"upload-dryrun\"", "id=\"upload-pack\"", "id=\"upload-force\"",
+		"id=\"hdr-expid\"", "id=\"hdr-dp\"", "id=\"hdr-link\"", "id=\"hdr-setdp\"",
+		"id=\"hdr-hint\"",
+		"id=\"auth-banner\"", "id=\"conn-overlay\"",
+		"id=\"eln-hdr-badge\"", "id=\"irods-hdr-badge\"",
+		"id=\"upload-log\"", "id=\"tree-refresh\"",
+		"id=\"upload-block-dialog\"", "id=\"upload-block-list\"",
+		"id=\"statusbar\"", "id=\"statusbar-msg\"",
+		"Upload to MANGO/iRODS", "class=\"info\"",
 		"/api/preflight", "/api/upload", "/api/known-keys?manual=true",
-		"/api/config/unset", "/api/eln/suggest-dp", "chip-x",
-		"/api/auth-status", "/api/auth-refresh",
+		"/api/config/unset", "/api/eln/suggest-dp", "/api/eln/set-dp",
+		"/api/eln/link", "chip-x",
+		"/api/auth-status", "/api/auth-refresh", "/api/ping",
 	} {
 		if !strings.Contains(s, id) {
 			t.Errorf("embedded UI missing required element / endpoint: %q", id)
@@ -279,13 +352,19 @@ func TestServeIndex_EmbeddedHTMLIsPresent(t *testing.T) {
 	}
 	// Removed elements — regression guard against a partial revert
 	// bringing them back. The old ELN block + disable/enable buttons
-	// are gone by design (ELN linkage is mandatory now).
+	// are gone by design; hdr-suggest was replaced by hdr-setdp.
 	for _, gone := range []string{
 		"id=\"eln-block\"", "id=\"eln-disable\"", "id=\"eln-enable\"",
+		"id=\"hdr-suggest\"", "id=\"checks\"", "Upload to iRODS",
 	} {
 		if strings.Contains(s, gone) {
 			t.Errorf("embedded UI still contains removed element: %q", gone)
 		}
+	}
+	// The [hidden] override must survive — without it authed users see
+	// the auth banner and a dead connection overlay (both use `hidden`).
+	if !strings.Contains(s, "[hidden]") {
+		t.Errorf("embedded UI missing the `[hidden] { display:none }` override")
 	}
 	// Should NOT mention S3 upload — that path is intentionally
 	// excluded from the GUI per the 0.2.31 scope.

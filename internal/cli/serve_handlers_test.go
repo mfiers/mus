@@ -632,18 +632,42 @@ func TestAPIELNDisable_WritesFlag(t *testing.T) {
 	}
 }
 
-func TestAPIELNLink_RequiresDataProject(t *testing.T) {
+// data_project is OPTIONAL for linking as of 0.2.47 — the GUI links the
+// experiment first and sets data_project separately. A missing
+// data_project must therefore NOT be rejected at the validation gate; the
+// request proceeds to the ELN lookup (which fails here with no real ELN,
+// proving it got past the old 400).
+func TestAPIELNLink_DataProjectOptional(t *testing.T) {
 	root := t.TempDir()
 	defer withServeRoot(t, root)()
 	w := postJSON(apiELNLink, map[string]any{
 		"dir":           "",
 		"experiment_id": "12345",
 	})
+	if w.Code == http.StatusBadRequest && strings.Contains(w.Body.String(), "data_project is required") {
+		t.Fatalf("data_project should be optional now; got 400: %s", w.Body)
+	}
+}
+
+// set-dp requires a data_project.
+func TestAPIELNSetDataProject_RequiresValue(t *testing.T) {
+	root := t.TempDir()
+	defer withServeRoot(t, root)()
+	w := postJSON(apiELNSetDataProject, map[string]any{"dir": "", "experiment_id": "12345"})
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 (data_project missing); got %d; body: %s", w.Code, w.Body)
 	}
-	if !strings.Contains(w.Body.String(), "data_project") {
-		t.Errorf("error should name the missing field; got: %s", w.Body)
+}
+
+// set-dp rejects a path-traversal data_project before writing anything.
+func TestAPIELNSetDataProject_RejectsBadValue(t *testing.T) {
+	root := t.TempDir()
+	defer withServeRoot(t, root)()
+	w := postJSON(apiELNSetDataProject, map[string]any{
+		"dir": "", "experiment_id": "12345", "data_project": "../etc/passwd",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 (bad data_project); got %d; body: %s", w.Code, w.Body)
 	}
 }
 

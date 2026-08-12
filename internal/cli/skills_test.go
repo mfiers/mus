@@ -170,7 +170,8 @@ func TestMusSkill_BodyMentionsDEFlow(t *testing.T) {
 		"Skip-already-uploaded",
 		"Pack folders as tar.gz",
 		"filtered to MANUAL keys only",
-		"Suggest",
+		"two-step flow",
+		"auto-proposes a data_project",
 		// mus 0.2.33+ — iRODS path layout with year segment
 		"/projects/<YEAR>/<data_project>/<exp_name>",
 		"falls back to the legacy",

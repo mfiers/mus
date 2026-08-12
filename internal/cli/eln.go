@@ -53,6 +53,7 @@ func newELNCmd() *cobra.Command {
 		newELNAttachCmd(),
 		newELNSampleTypeCmd(),
 		newELNRetrofitCmd(),
+		newELNRebuildMapCmd(),
 	)
 	return cmd
 }
@@ -470,7 +471,7 @@ func resolveDataProject(cmd *cobra.Command, expIDStr string, info *eln.Experimen
 		if err := dataproject.ValidateName(explicit); err != nil {
 			return "", err
 		}
-		_ = store.Remember(expIDStr, explicit, info.ExperimentName)
+		_ = store.RememberFull(expIDStr, explicit, info.ExperimentName, elnStudyIDStr(info), elnProjectIDStr(info))
 		pushStage2(ctx, ironClient, store, remotePath, stderr)
 		return explicit, nil
 	}
@@ -481,7 +482,7 @@ func resolveDataProject(cmd *cobra.Command, expIDStr string, info *eln.Experimen
 			return "", fmt.Errorf("existing data_project in cascade: %w", err)
 		}
 		fmt.Fprintf(stdout, "using existing data_project=%s (from mus.cfg cascade)\n", existing)
-		_ = store.Remember(expIDStr, existing, info.ExperimentName)
+		_ = store.RememberFull(expIDStr, existing, info.ExperimentName, elnStudyIDStr(info), elnProjectIDStr(info))
 		pushStage2(ctx, ironClient, store, remotePath, stderr)
 		return existing, nil
 	}
@@ -504,7 +505,7 @@ func resolveDataProject(cmd *cobra.Command, expIDStr string, info *eln.Experimen
 	if err := dataproject.ValidateName(chosen); err != nil {
 		return "", err
 	}
-	_ = store.Remember(expIDStr, chosen, info.ExperimentName)
+	_ = store.RememberFull(expIDStr, chosen, info.ExperimentName, elnStudyIDStr(info), elnProjectIDStr(info))
 	pushStage2(ctx, ironClient, store, remotePath, stderr)
 	return chosen, nil
 }
@@ -532,6 +533,23 @@ func suggestDataProjectFromELN(info *eln.ExperimentInfo) string {
 		return first + cleaned[1:] + strconv.Itoa(year)
 	}
 	return "Project" + strconv.Itoa(year)
+}
+
+// elnStudyIDStr / elnProjectIDStr render an ExperimentInfo's study /
+// project ID as a decimal string, or "" when the ID is 0 (unknown) so
+// it never creates a spurious study/project match in the mapping store.
+func elnStudyIDStr(info *eln.ExperimentInfo) string {
+	if info == nil || info.StudyID == 0 {
+		return ""
+	}
+	return strconv.FormatInt(info.StudyID, 10)
+}
+
+func elnProjectIDStr(info *eln.ExperimentInfo) string {
+	if info == nil || info.ProjectID == 0 {
+		return ""
+	}
+	return strconv.FormatInt(info.ProjectID, 10)
 }
 
 func stripNonAlnum(s string) string {
