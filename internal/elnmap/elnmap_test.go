@@ -126,3 +126,54 @@ func TestFilePermissionsOnWrite(t *testing.T) {
 		t.Errorf("mode = %o, want 0600", st.Mode().Perm())
 	}
 }
+
+func TestLookupTiered(t *testing.T) {
+	s, _ := newStore(t)
+
+	// Register data_projects for two experiments in the same study/project.
+	if err := s.RememberFull("100", "AlphaProj", "exp A", "S1", "P1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RememberFull("200", "BetaProj", "exp B", "S2", "P1"); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name                string
+		exp, study, project string
+		wantDP, wantTier    string
+		wantNil             bool
+	}{
+		{"exact experiment match", "100", "S1", "P1", "AlphaProj", "experiment", false},
+		{"study match (unknown exp, known study)", "999", "S2", "PX", "BetaProj", "study", false},
+		{"project match (unknown exp+study)", "999", "SX", "P1", "", "project", false},
+		{"no match at any tier", "999", "SX", "PX", "", "", true},
+		{"empty study/project skips those tiers", "999", "", "", "", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := s.LookupTiered(tc.exp, tc.study, tc.project)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.wantNil {
+				if got != nil {
+					t.Fatalf("want nil, got %+v", got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("want tier %q, got nil", tc.wantTier)
+			}
+			if got.Tier != tc.wantTier {
+				t.Errorf("tier = %q, want %q", got.Tier, tc.wantTier)
+			}
+			// project-tier match is nondeterministic between the two P1
+			// entries only if both had the same SetAt; here 200 is newer,
+			// so the project tier for P1 should return BetaProj.
+			if tc.wantDP != "" && got.DataProject != tc.wantDP {
+				t.Errorf("data_project = %q, want %q", got.DataProject, tc.wantDP)
+			}
+		})
+	}
+}

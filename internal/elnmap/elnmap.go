@@ -28,7 +28,14 @@ import (
 type Mapping struct {
 	DataProject    string    `json:"data_project"`
 	ExperimentName string    `json:"experiment_name,omitempty"`
-	SetAt          time.Time `json:"set_at"`
+	// StudyID / ProjectID record the experiment's ELN study and project
+	// so a data_project can be proposed for a *different* experiment that
+	// shares the same study or project (see LookupTiered). Both omitempty
+	// for backward compatibility — entries written before this field
+	// existed simply lack them and never match the study/project tiers.
+	StudyID   string    `json:"study_id,omitempty"`
+	ProjectID string    `json:"project_id,omitempty"`
+	SetAt     time.Time `json:"set_at"`
 }
 
 // Store is the file-backed map. Safe for concurrent use within a process via
@@ -114,9 +121,69 @@ func (s *Store) Lookup(experimentID string) (*Mapping, error) {
 	return &cp, nil
 }
 
+// TieredMatch is the result of LookupTiered: the proposed data_project
+// plus which tier it came from ("experiment", "study", or "project").
+type TieredMatch struct {
+	DataProject string
+	Tier        string // "experiment" | "study" | "project"
+}
+
+// LookupTiered proposes a data_project for an experiment by checking, in
+// order: (1) an exact mapping for experimentID; (2) any mapping whose
+// StudyID equals studyID; (3) any mapping whose ProjectID equals
+// projectID. Returns (nil, nil) when nothing matches. studyID/projectID
+// may be empty to skip that tier. When several entries match a tier, the
+// most recently set one wins (deterministic and "freshest intent").
+func (s *Store) LookupTiered(experimentID, studyID, projectID string) (*TieredMatch, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if m, ok := s.data[experimentID]; ok && m.DataProject != "" {
+		return &TieredMatch{DataProject: m.DataProject, Tier: "experiment"}, nil
+	}
+
+	// newestMatch returns the freshest mapping satisfying pred.
+	newestMatch := func(pred func(Mapping) bool) *Mapping {
+		var best *Mapping
+		for key := range s.data {
+			m := s.data[key]
+			if m.DataProject == "" || !pred(m) {
+				continue
+			}
+			if best == nil || m.SetAt.After(best.SetAt) {
+				cp := m
+				best = &cp
+			}
+		}
+		return best
+	}
+
+	if studyID != "" {
+		if m := newestMatch(func(m Mapping) bool { return m.StudyID == studyID }); m != nil {
+			return &TieredMatch{DataProject: m.DataProject, Tier: "study"}, nil
+		}
+	}
+	if projectID != "" {
+		if m := newestMatch(func(m Mapping) bool { return m.ProjectID == projectID }); m != nil {
+			return &TieredMatch{DataProject: m.DataProject, Tier: "project"}, nil
+		}
+	}
+	return nil, nil
+}
+
 // Remember persists an experiment_id → data_project association.
-// Overwrites any prior mapping for the same ID.
+// Overwrites any prior mapping for the same ID. Study/project are left
+// empty; use RememberFull to record them and enable the study/project
+// suggestion tiers.
 func (s *Store) Remember(experimentID, dataProject, experimentName string) error {
+	return s.RememberFull(experimentID, dataProject, experimentName, "", "")
+}
+
+// RememberFull is Remember plus the experiment's ELN study and project
+// IDs, so LookupTiered can propose this data_project for sibling
+// experiments in the same study or project. Empty studyID/projectID are
+// stored as absent (they simply won't match those tiers).
+func (s *Store) RememberFull(experimentID, dataProject, experimentName, studyID, projectID string) error {
 	if experimentID == "" {
 		return errors.New("empty experiment ID")
 	}
@@ -127,6 +194,8 @@ func (s *Store) Remember(experimentID, dataProject, experimentName string) error
 	s.data[experimentID] = Mapping{
 		DataProject:    dataProject,
 		ExperimentName: experimentName,
+		StudyID:        studyID,
+		ProjectID:      projectID,
 		SetAt:          time.Now().UTC().Truncate(time.Second),
 	}
 	s.mu.Unlock()
