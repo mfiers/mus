@@ -45,3 +45,13 @@ Thumbs.db
 *.ndjson
 all_gbiomed_mango_data.json
 /tmp/
+
+# transient local testing / tooling debris (not part of the project):
+#   .omp/            oh-my-posh + ssh state
+#   .playwright-mcp/ browser-driven serve-UI test screenshots/logs
+#   internal/mus.cfg fixture written while testing `mus serve` in-tree
+#   /test/           scratch fixtures + a stray source snapshot (`test/busy/`)
+.omp/
+.playwright-mcp/
+/internal/mus.cfg
+/test/

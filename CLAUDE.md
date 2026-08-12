@@ -15,13 +15,31 @@ This is a ground-up Go rewrite of the Python `mus` at `/data/1/users/mark/_backu
 
 ## Status
 
-Bootstrap: 2026-05-22. See task list / `report/` for current state.
+Bootstrap: 2026-05-22. Released: `v0.2.46`. VERSION: `0.2.47-dev` (next `make ship` → v0.2.47).
+
+As of the last session there is a **large uncommitted stack on `main`** (all in
+the working tree, not yet committed) centred on `mus serve`:
+
+- Serve UI fixes: `[hidden]` CSS banner bug; connection-lost heartbeat overlay;
+  cascade/known-keys JSON-shape drift; status bar; two-step ELN link → set
+  data_project flow; info-icon tooltips; red/green upload button; upload-block
+  and upload-error dialogs; file-list refresh + auto-poll.
+- Skip-already-uploaded now checks `doc.Stale()` (size/mtime) so an edited file
+  re-uploads; `--force` (overwrite) + `--pack` surfaced as UI checkboxes.
+- `mus eln rebuild-map` — new subcommand; rebuilds the elnmap store from iRODS
+  AVUs, read-only (guarded by `TestRebuildMap_IsReadOnlyAgainstIRODS`).
+- `elnmap` gained tiered experiment→study→project data_project lookup.
+
+Untracked cruft in the tree: `test/busy/` (a stray partial source snapshot —
+breaks `go test ./...`), `.omp/`, `.playwright-mcp/`, `internal/mus.cfg`.
+
+See `HANDOFF.md` for the prior (v0.2.46) handover and `report/` for status.
 
 ## Key design decisions (do not silently revisit)
 
 | Concern | Decision |
 | --- | --- |
-| Language | Go 1.24, pure-Go (no CGO) so cross-compile works for darwin/arm64, linux/amd64, linux/arm64 |
+| Language | Go 1.24+ (builds run on 1.26.x), pure-Go (no CGO) so cross-compile works for darwin/arm64, linux/amd64, linux/arm64 |
 | CLI | `spf13/cobra`, git-style subcommands |
 | iRODS | Shell out to `iron` (KU Leuven RDM CLI); no native iRODS client |
 | Folder config | `mus.cfg` (flat KEY=VALUE), cascading up the directory tree — same grammar as legacy Python mus. Legacy `.env` still read; `mus config migrate` moves mus-recognised keys to `mus.cfg`. |
@@ -58,6 +76,8 @@ mus/
     irodscache/        SQLite-backed iron-tree snapshots (mus irods scan)
     signing/           ed25519 verifier with embedded pubkey (mus upgrade / install)
     cli/               cobra subcommand definitions
+      ui/index.html    the `mus serve` browser GUI — single go:embed'd file
+                       (HTML + CSS + JS). See "mus serve — GUI notes" below.
   scripts/             release helper scripts (publish-release.sh, next-version.sh)
   doc/                 user-facing documentation (quickstart, this README target)
   data/                test fixtures (gitignored beyond manifest)
@@ -70,7 +90,7 @@ mus/
 ```
 make build              # host binary -> ./bin/mus
 make build-all          # darwin/arm64 + linux/amd64 + linux/arm64 -> ./dist/
-make test               # go test ./...
+make test               # go test ./...  (but see caveat below)
 make show-version       # print VERSION file + next planned version
 make bump [LEVEL=minor] # bump VERSION file (no release)
 make ship [LEVEL=minor] # full release pipeline (interactive — passphrase once)
@@ -95,6 +115,16 @@ ship, plus a `-dev` suffix during development. Single source of truth — no
 separate `Version` constant to update.
 
 The host `go` may be too old — Makefile uses `/usr/local/go/bin/go` if present.
+On the maintainer's Mac that path does NOT exist; plain `go` (1.26.x) is used.
+
+**`go test ./...` is currently polluted** by the untracked `test/busy/` stray
+tree (its vocab test fails on a missing `../../vocabulary/main.yaml`). Until
+`test/busy/` is deleted, run `go test ./internal/... ./cmd/...` for a clean run.
+
+`make doc-precheck` (runs before every `make ship`) asserts the bundled
+Claude-skill text (`internal/cli/mus_skill_body.go`) still contains its
+load-bearing phrases, pinned by `internal/cli/skills_test.go`. Update both when
+you change user-facing serve/CLI behaviour.
 
 ## Signing
 
@@ -136,6 +166,38 @@ trigger an "invalid key" parser warning — keep it dense.
 `origin` → `ssh://git@codeberg.org/mfiers/mus.git`. Pushes are deliberately
 manual — `make release` only prepares artifacts and prints the push command.
 
+## mus serve — GUI notes (learned the hard way)
+
+`mus serve` boots a localhost web GUI (`internal/cli/ui/index.html`, go:embed'd)
+for annotate + upload. Gotchas that each cost real debugging time:
+
+- **PATH shadowing / testing the right binary.** On the maintainer's Mac, `mus`
+  resolves to `~/bin/mus`, which precedes `/usr/local/bin`. After `make build`,
+  reinstall with `install -m 755 bin/mus ~/bin/mus` (no sudo) OR test via
+  `./bin/mus` directly. Skipping this makes "fixed" bugs still reproduce because
+  the shell runs the OLD binary — the cause of two separate false
+  "Authentication required" reports.
+- **Test it live**, don't eyeball the HTML: `./bin/mus serve --no-browser --port
+  8199`, then drive the printed `?t=<token>` URL (Playwright MCP works well).
+- **JS ↔ handler contract drift** is the recurring bug class. The embedded JS
+  must match the JSON shape the Go handlers emit; it has silently broken twice
+  (cascade `values:[{key,value,local}]` array; `/api/known-keys` group names).
+  When touching either side, curl the endpoint and compare.
+- **`hidden` attribute vs CSS `display`.** Any element with an explicit CSS
+  `display` defeats the HTML `hidden` attribute. The UI depends on
+  `[hidden]{display:none!important}` — keep it. (This was the original
+  "Authentication required" banner-won't-hide bug.)
+- **Non-TTY subprocess.** `mus serve` shells out to `mus` subcommands with no
+  TTY, so any interactive prompt (overwrite-differing-bytes, pack-density) hard-
+  fails. Every such prompt needs a non-interactive flag (`--force`,
+  `--pack tar.gz`) surfaced as a UI control, not a terminal prompt.
+- **Auth banner.** `/api/auth-status` / `/api/auth-refresh` just run `iron pwd` +
+  an ELN whoami. Both green ⇒ banner must stay hidden. Banner showing while
+  authed ⇒ suspect a stale binary or stale browser tab, not the probe.
+- **data_project auto-propose** keys on the elnmap experiment→study→project
+  tiers, which only populate for experiments linked/uploaded AFTER those fields
+  existed. `mus eln rebuild-map` backfills from iRODS AVUs (read-only).
+
 ## Conventions
 
 - All exported funcs / types in `internal/` have a short doc comment. Unexported helpers usually don't.
@@ -144,6 +206,7 @@ manual — `make release` only prepares artifacts and prints the push command.
 - Paths: always absolute internally. Convert at the CLI boundary.
 - File writes that update a sidecar or config: temp-file + `os.Rename` for atomicity.
 - Concurrency: when scanning many files, use a worker pool sized to `runtime.NumCPU()`. Don't spin one goroutine per file.
+- `mus serve` UI is one go:embed'd `internal/cli/ui/index.html`; its JS must track the handlers' JSON shapes (see "mus serve — GUI notes"). The embedded-HTML regression test in `serve_actions_test.go` pins load-bearing element IDs / endpoints — update it when you add or rename them.
 
 ## External tools required at runtime
 
