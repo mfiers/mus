@@ -9,9 +9,11 @@ package cli
 // Reference: /data/1/users/mark/pika/main.go (upgrade subcommand, ~L1054).
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -211,9 +213,42 @@ func upgradeFetchRelease(tag string) (*upgradeRelease, error) {
 	return &rel, nil
 }
 
+// Download tuning. The old code used a single 120s Client.Timeout, which
+// is a TOTAL deadline over the whole request INCLUDING reading the body —
+// so a large binary over a slow-but-healthy link (common on HPC login
+// nodes behind a throttling proxy) aborts mid-stream with an opaque
+// "context deadline exceeded". We replace that with:
+//   - a connect/TLS/response-header timeout (fail fast on a dead host),
+//   - a STALL timeout that only fires when NO bytes arrive for a while
+//     (a download that keeps making progress is never killed), and
+//   - a generous overall backstop so a trickle can't hang forever.
+// Package vars (not consts) so tests can shrink them; production values
+// below.
+var (
+	upgradeConnectTimeout = 30 * time.Second
+	upgradeStallTimeout   = 60 * time.Second
+	upgradeOverallTimeout = 30 * time.Minute
+)
+
 func upgradeDownload(url, dest string, verbose bool) error {
-	client := &http.Client{Timeout: 120 * time.Second}
-	resp, err := client.Get(url)
+	transport := &http.Transport{
+		DialContext:           (&net.Dialer{Timeout: upgradeConnectTimeout}).DialContext,
+		TLSHandshakeTimeout:   upgradeConnectTimeout,
+		ResponseHeaderTimeout: upgradeConnectTimeout,
+		Proxy:                 http.ProxyFromEnvironment, // honour HTTP(S)_PROXY on HPC nodes
+	}
+	// No Client.Timeout — a total deadline would reintroduce the very
+	// bug we're fixing. The stall watchdog below bounds inactivity; the
+	// overall context bounds the absolute worst case.
+	client := &http.Client{Transport: transport}
+
+	ctx, cancel := context.WithTimeout(context.Background(), upgradeOverallTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -226,8 +261,27 @@ func upgradeDownload(url, dest string, verbose bool) error {
 		return err
 	}
 	defer out.Close()
-	n, err := io.Copy(out, resp.Body)
+
+	// Stall watchdog: cancel the request if no bytes arrive for
+	// upgradeStallTimeout. Reset on every successful read via the
+	// stallReader wrapper. A steadily-progressing slow download keeps
+	// resetting it and is never interrupted.
+	stall := time.AfterFunc(upgradeStallTimeout, cancel)
+	defer stall.Stop()
+	reader := &stallReader{r: resp.Body, reset: func() { stall.Reset(upgradeStallTimeout) }}
+
+	n, err := io.Copy(out, reader)
 	if err != nil {
+		// Either the stall watchdog cancelled (ctx.Canceled) or the
+		// overall backstop expired (ctx.DeadlineExceeded); both surface
+		// here as a context error on the request. Map to one actionable
+		// message rather than the opaque "context canceled".
+		if ctx.Err() != nil {
+			return fmt.Errorf("download stalled (no data for %s) or exceeded %s overall — "+
+				"the network/proxy is likely the cause. Try again, set HTTP(S)_PROXY if your "+
+				"site needs one, or download the binary manually with curl -C -",
+				upgradeStallTimeout, upgradeOverallTimeout)
+		}
 		return err
 	}
 	if verbose {
@@ -237,6 +291,26 @@ func upgradeDownload(url, dest string, verbose bool) error {
 		return fmt.Errorf("downloaded file is suspiciously small (%d bytes)", n)
 	}
 	return nil
+}
+
+// stallReader wraps an io.Reader and calls reset() after every read that
+// returns at least one byte. Paired with a time.AfterFunc(cancel), this
+// implements an inactivity ("stall") timeout: as long as data keeps
+// flowing the timer is pushed forward, but a connection that goes quiet
+// for the timeout window gets its context cancelled, unblocking the
+// io.Copy with a context error. Progress — not total elapsed time — is
+// what keeps a slow download alive.
+type stallReader struct {
+	r     io.Reader
+	reset func()
+}
+
+func (s *stallReader) Read(p []byte) (int, error) {
+	n, err := s.r.Read(p)
+	if n > 0 {
+		s.reset()
+	}
+	return n, err
 }
 
 // upgradeReplace swaps the new binary into place.
