@@ -18,8 +18,10 @@
 # To verify a git tag:
 #   git -c gpg.ssh.allowedSignersFile=.gitsigners verify-tag v0.1.0
 #
-# Trust-bootstrapping note: the entry below is committed inside the repo it
+# Trust-bootstrapping note: the entries below are committed inside the repo it
 # verifies, so a clone alone cannot prove it was not tampered with. Cross-check
-# the public key against https://codeberg.org/mfiers.keys before treating
-# signatures as authoritative.
+# the public keys against https://codeberg.org/mfiers.keys before treating
+# signatures as authoritative. Each entry is one authorised signing key for the
+# same principal (different machines / keys); any one of them may sign a release.
 mark.fiers@kuleuven.be namespaces="git,file" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHP0TEW6QS203/gQ9ch11yWEnHrOZwsrWtUnxyLsDpEn
+mark.fiers@kuleuven.be namespaces="git,file" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEK7id0GYNL9nxhhrxB//wtJtwJOLIQx9kXIIFk5Ckdy mark@macaroni
