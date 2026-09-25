@@ -402,6 +402,21 @@ func uploadFolderDirect(
 	// a safe autodelete on an unpacked folder — use --pack tar.gz for a
 	// single-call verify.
 	if cleanup.verify && cleanup.source {
+		// Unpacked verify does one `iron checksum` per file — cheap for a
+		// handful of large files, painful for a dense folder of many small
+		// ones. Warn (using the SAME density heuristic as the pack prompt)
+		// and point at --pack tar.gz, which verifies in a single call.
+		minDensity := readFloat(env, "irods_upload_min_density", 10.0)
+		minCount := readInt64(env, "irods_upload_min_density_count", 20)
+		if folder.DensityOK(prof, minDensity, minCount) != nil {
+			fmt.Fprintf(stderr,
+				"  \033[33m⚠  --verify-and-clean on an unpacked, high-density folder "+
+					"(%d files, median %s): verification does one checksum PER FILE and "+
+					"will be slow.\033[0m\n"+
+					"     Prefer --pack tar.gz --verify-and-clean — it uploads and verifies "+
+					"a single archive in one checksum call.\n",
+				prof.FileCount, folder.FormatHumanBytes(prof.MedianSize))
+		}
 		cache, cErr := hashcache.Open("")
 		if cErr != nil {
 			return fmt.Errorf("open hashcache for verification: %w", cErr)
