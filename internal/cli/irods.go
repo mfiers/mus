@@ -233,7 +233,14 @@ func newIRODSUploadCmd() *cobra.Command {
 	cmd.Flags().Bool("cleanup-source", false,
 		"after a successful upload, delete the source folder — sidecar becomes a "+
 			"tombstone (irods_status=local_deleted). Combine with --cleanup-archive "+
-			"for the equivalent of the interactive [X] letter.")
+			"for the equivalent of the interactive [X] letter. Deletes on trust "+
+			"(no re-verification) — use --verify-and-clean for the safe variant.")
+	cmd.Flags().Bool("verify-and-clean", false,
+		"full pipeline for folders: upload, register in the ELN, RE-VERIFY every "+
+			"uploaded byte against iRODS (checksum), and only on a complete match "+
+			"delete the local source (+ the .tar.gz if --pack/--archive). Any "+
+			"mismatch keeps all local data and exits non-zero. The safe way to "+
+			"free local space after archiving.")
 	cmd.Flags().Bool("no-metadata", false,
 		"skip applying mus_* AVU metadata to the uploaded iRODS object")
 	cmd.Flags().BoolVar(&noELNComment, "no-eln", false,

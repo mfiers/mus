@@ -61,9 +61,16 @@ const (
 //   source  → delete the source folder tree and mark the sidecar as a
 //             tombstone (irods_status=local_deleted); works with both
 //             packTarGz and packNone.
+//   verify  → BEFORE any deletion, re-read the uploaded object(s) from
+//             iRODS and confirm every byte matches the local copy
+//             (full checksum). Any mismatch or verify error aborts the
+//             cleanup and keeps the local data. Set by --verify-and-clean;
+//             the bare --cleanup-* flags leave this false (delete-on-trust,
+//             preserved for backward compatibility).
 type postUploadCleanup struct {
 	archive bool
 	source  bool
+	verify  bool
 }
 
 // resolvePackMode parses the user's --pack value into the canonical packMode.
@@ -177,6 +184,23 @@ func runIRODSUploadFolder(
 	cleanup.archive, _ = cmd.Flags().GetBool("cleanup-archive")
 	cleanup.source, _ = cmd.Flags().GetBool("cleanup-source")
 
+	// --verify-and-clean is the safe autodelete: it implies --cleanup-source
+	// and turns on the verify-before-delete gate. The archive implication
+	// (delete the .tar.gz too) is added below, once the pack mode is known.
+	verifyAndClean, _ := cmd.Flags().GetBool("verify-and-clean")
+	if verifyAndClean {
+		cleanup.source = true
+		cleanup.verify = true
+	}
+
+	// Dry-run must never delete anything: the bytes may not have been
+	// uploaded, so cleanup/verify would either wrongly fail or (worse)
+	// remove local data on a "dry" run. Force all cleanup off.
+	if dryRun, _ := cmd.Flags().GetBool("dry-run"); dryRun && (cleanup.source || cleanup.archive || cleanup.verify) {
+		fmt.Fprintf(stderr, "  NOTE: --dry-run — skipping all cleanup (nothing will be deleted)\n")
+		cleanup = postUploadCleanup{}
+	}
+
 	// Decide packing strategy.
 	chosen := mode
 	if chosen == packAuto {
@@ -210,6 +234,14 @@ func runIRODSUploadFolder(
 			// --cleanup-*.
 			cleanup = promptCleanup
 		}
+	}
+
+	// --verify-and-clean on a packed upload also removes the local
+	// .tar.gz once verified — the depositor asked to reclaim ALL local
+	// space, source and archive. Applied here, after the pack mode is
+	// settled, so it only fires when there actually is an archive.
+	if verifyAndClean && chosen == packTarGz {
+		cleanup.archive = true
 	}
 
 	// Sanity: --cleanup-archive is meaningful only with packTarGz.
@@ -364,6 +396,23 @@ func uploadFolderDirect(
 	if err := finalizeFolderSidecar(cmd, srcAbs, remotePath, env, prof, nil, client, ctx, uploads, "folder", message); err != nil {
 		return err
 	}
+	// Verify-before-delete gate for the unpacked path: every local file
+	// must have a byte-matching remote counterpart before we delete the
+	// source. Expensive (one checksum per file) but that's the price of
+	// a safe autodelete on an unpacked folder — use --pack tar.gz for a
+	// single-call verify.
+	if cleanup.verify && cleanup.source {
+		cache, cErr := hashcache.Open("")
+		if cErr != nil {
+			return fmt.Errorf("open hashcache for verification: %w", cErr)
+		}
+		defer cache.Close()
+		fmt.Fprintf(stdout, "  verifying every uploaded file against iRODS before cleanup…\n")
+		if err := verifyFolderUpload(ctx, client, srcAbs, remotePath, cache.Sum); err != nil {
+			return fmt.Errorf("upload verification failed — keeping local source: %w", err)
+		}
+		fmt.Fprintf(stdout, "  ✓ all files verified against iRODS\n")
+	}
 	if cleanup.source {
 		return cleanupSourceFolder(srcAbs, stdout, stderr)
 	}
@@ -445,6 +494,18 @@ func uploadFolderArchived(
 		return err
 	}
 
+	// Verify-before-delete gate. When --verify-and-clean is set, re-read
+	// the uploaded archive from iRODS and confirm it byte-matches the
+	// local copy BEFORE deleting anything. On any failure we keep all
+	// local data and abort with a non-zero error.
+	if cleanup.verify && (cleanup.source || cleanup.archive) {
+		fmt.Fprintf(stdout, "  verifying remote archive checksum before cleanup…\n")
+		if err := verifyArchiveUpload(ctx, client, remotePath, res.Sha256); err != nil {
+			return fmt.Errorf("upload verification failed — keeping local data (source + archive): %w", err)
+		}
+		fmt.Fprintf(stdout, "  ✓ remote archive matches local (sha256 %s)\n", res.Sha256[:12])
+	}
+
 	// Cleanup step. Order matters — clean source first (updates the
 	// sidecar to tombstone), then the archive. If either fails, we
 	// warn but continue; the upload itself is already committed.
@@ -468,6 +529,94 @@ func uploadFolderArchived(
 			archiveLocal, folder.FormatHumanBytes(res.Size))
 		fmt.Fprintf(stderr,
 			"     delete it manually or re-run with --cleanup-archive next time.\n\n")
+	}
+	return nil
+}
+
+// verifyArchiveUpload confirms the single uploaded tar.gz object on
+// iRODS byte-matches the local archive, by comparing iRODS's recorded
+// checksum against the sha256 mus computed while packing. Returns nil
+// only on an exact (case-insensitive) match. Any iron error or mismatch
+// is returned as an error — the caller MUST NOT delete local data when
+// this returns non-nil.
+func verifyArchiveUpload(ctx context.Context, client *iron.Client,
+	remotePath, localSha256 string) error {
+	remoteSum, err := client.Checksum(ctx, remotePath)
+	if err != nil {
+		return fmt.Errorf("could not read remote checksum for %s: %w", remotePath, err)
+	}
+	if remoteSum == "" {
+		return fmt.Errorf("remote object %s returned an empty checksum", remotePath)
+	}
+	if !strings.EqualFold(localSha256, remoteSum) {
+		return fmt.Errorf("checksum mismatch for %s: local=%s remote=%s",
+			remotePath, localSha256, remoteSum)
+	}
+	return nil
+}
+
+// verifyFolderUpload confirms every regular file under srcAbs has a
+// remote counterpart at remoteBase/<relpath> whose iRODS checksum
+// matches the local file's sha256. Missing remote files and checksum
+// mismatches both fail. Extra remote files are ignored (they don't
+// endanger the local data we're about to delete).
+//
+// This is the expensive path: one `iron checksum` per file. It walks
+// serially — folder uploads that need speed should use --pack tar.gz,
+// which verifies in a single call.
+//
+// Returns nil only when ALL local files are present remotely and match.
+// The caller MUST NOT delete local data on a non-nil return.
+func verifyFolderUpload(ctx context.Context, client *iron.Client,
+	srcAbs, remoteBase string, sum func(string) (string, error)) error {
+
+	var problems []string
+	var checked int
+	walkErr := filepath.Walk(srcAbs, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		// Skip mus's own sidecars — they are (re)written after upload,
+		// so the local copy legitimately differs from whatever landed
+		// remotely; they are not the deposit's data.
+		if strings.HasSuffix(path, sidecar.Suffix) {
+			return nil
+		}
+		rel, relErr := filepath.Rel(srcAbs, path)
+		if relErr != nil {
+			return relErr
+		}
+		remote := remoteBase + "/" + filepath.ToSlash(rel)
+
+		localSum, sErr := sum(path)
+		if sErr != nil {
+			problems = append(problems, fmt.Sprintf("%s: local checksum failed: %v", rel, sErr))
+			return nil
+		}
+		remoteSum, rErr := client.Checksum(ctx, remote)
+		if rErr != nil {
+			problems = append(problems, fmt.Sprintf("%s: remote missing or unreadable (%s): %v", rel, remote, rErr))
+			return nil
+		}
+		if !strings.EqualFold(localSum, remoteSum) {
+			problems = append(problems, fmt.Sprintf("%s: checksum mismatch local=%s remote=%s", rel, localSum, remoteSum))
+			return nil
+		}
+		checked++
+		return nil
+	})
+	if walkErr != nil {
+		return fmt.Errorf("walking %s for verification: %w", srcAbs, walkErr)
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("upload verification failed for %d file(s):\n    %s",
+			len(problems), strings.Join(problems, "\n    "))
+	}
+	if checked == 0 {
+		return fmt.Errorf("upload verification found no files to check under %s", srcAbs)
 	}
 	return nil
 }

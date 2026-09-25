@@ -471,7 +471,12 @@ fallback (` + "`~/.config/mus/secrets.age`" + `) for HPC login nodes.
   ` + "`irods_status=local_deleted`" + `). Interactive prompt
   offers ` + "`[a]`" + ` / ` + "`[A]`" + ` (clean archive) /
   ` + "`[X]`" + ` (clean archive + source) letters — capital-only
-  for the destructive variants.
+  for the destructive variants. The bare ` + "`--cleanup-*`" + ` flags
+  delete on trust. For the safe autodelete, use
+  ` + "`--verify-and-clean`" + `: upload → register in ELN →
+  RE-VERIFY every uploaded byte against iRODS (checksum) → delete
+  the source (and the .tar.gz when packed) ONLY on a complete
+  match; any mismatch keeps all local data and exits non-zero.
 - **Dry-run** — runs ` + "`iron --dry-run`" + `. Safety gates
   (ELN-undecided, sidecar check, vocab) still fire under
   dry-run; only the byte transfer is suppressed.
