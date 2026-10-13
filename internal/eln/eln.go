@@ -572,6 +572,59 @@ func (c *Client) CreateSample(req CreateSampleReq) (*Sample, error) {
 	return nil, fmt.Errorf("create sample: could not parse response as sampleID or Sample object: %s", trimmed)
 }
 
+// CreateExperiment creates a new experiment under the given study and
+// returns its experimentID. Verified against the live VIB eLabNext API:
+//
+//	POST /experiments   body {"studyID": <int>, "name": <string>}
+//	→ HTTP 200, bare integer experimentID in the body.
+//
+// studyID is the REST studyID (a small int), NOT the long display id
+// shown in the ELN UI (e.g. 012000000411192). Callers holding a long-id
+// should strip it first; see FixStudyID.
+func (c *Client) CreateExperiment(studyID int64, name string) (int64, error) {
+	if studyID <= 0 {
+		return 0, fmt.Errorf("CreateExperiment: studyID is required")
+	}
+	if strings.TrimSpace(name) == "" {
+		return 0, fmt.Errorf("CreateExperiment: name is required")
+	}
+	body := map[string]any{"studyID": studyID, "name": name}
+	var expID int64
+	if err := c.post("experiments", body, &expID); err != nil {
+		return 0, fmt.Errorf("create experiment under study %d: %w", studyID, err)
+	}
+	if expID == 0 {
+		return 0, fmt.Errorf("create experiment under study %d: API returned no experimentID", studyID)
+	}
+	return expID, nil
+}
+
+// FixStudyID strips eLabNext's long-form display prefix from a study id,
+// returning the REST studyID the API expects. The UI shows studies as a
+// zero-padded long id (e.g. 012000000411192) whose trailing digits are
+// the real studyID (411192). Mirrors FixExperimentID for experiments.
+// A value already small enough to be a plain studyID is returned as-is.
+func FixStudyID(id int64) int64 {
+	// The long form is 0NN000000SSSSSS: a leading tag, a run of zeros,
+	// then the real id. Real studyIDs are well under ~10 million; if the
+	// value is larger, peel the trailing portion after the long zero run.
+	const maxPlausibleStudyID = 100_000_000
+	if id < maxPlausibleStudyID {
+		return id
+	}
+	s := strconv.FormatInt(id, 10)
+	// Find the last run of "000000" (6+ zeros) and take what follows.
+	if idx := strings.LastIndex(s, "000000"); idx >= 0 {
+		tail := s[idx+6:]
+		if tail != "" {
+			if v, err := strconv.ParseInt(tail, 10, 64); err == nil && v > 0 {
+				return v
+			}
+		}
+	}
+	return id
+}
+
 // CreateExperimentSection appends a section of the given type to the
 // experiment. Common types: TEXT, FILE, COMMENT, SAMPLESIN, SAMPLESOUT.
 // Returns the section's expJournalID (used by

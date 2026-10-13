@@ -247,3 +247,25 @@ func authMiddleware(t *testing.T, key string, next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+func TestFixStudyID(t *testing.T) {
+	cases := []struct {
+		name string
+		in   int64
+		want int64
+	}{
+		{"plain small id unchanged", 411192, 411192},
+		{"long UI form of Very Old Projects", 12000000411192, 411192},
+		{"long form with leading zero stripped by int parse", 12000000411192, 411192},
+		{"another long id", 12000000218872, 218872},
+		{"small id at boundary stays", 99_999_999, 99_999_999},
+		{"zero stays zero", 0, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := FixStudyID(tc.in); got != tc.want {
+				t.Errorf("FixStudyID(%d) = %d, want %d", tc.in, got, tc.want)
+			}
+		})
+	}
+}
