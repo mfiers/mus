@@ -636,13 +636,25 @@ func (c *Client) CreateExperimentSection(expID int64, sectionType, header string
 	expID = FixExperimentID(expID)
 	body := map[string]string{
 		"sectionType":   sectionType,
-		"sectionHeader": header,
+		"sectionHeader": sanitizeSectionHeader(header),
 	}
 	var journalID int64
 	if err := c.post(fmt.Sprintf("experiments/%d/sections", expID), body, &journalID); err != nil {
 		return 0, fmt.Errorf("create %s section: %w", sectionType, err)
 	}
 	return journalID, nil
+}
+
+// sanitizeSectionHeader works around a confirmed eLabNext server bug:
+// POST /experiments/{id}/sections returns HTTP 500 when sectionHeader
+// contains an ASCII apostrophe (') — reproduced on the VIB tenant, where
+// a header like "qdb backup of Sriram's ..." failed every time while an
+// apostrophe-free header succeeded. Only the apostrophe triggers it
+// (double quotes, backticks, ampersands, angle brackets, %, \, ; are all
+// fine). We replace ' with the typographic right single quote ’ (U+2019),
+// which is visually identical and dodges the bug without losing meaning.
+func sanitizeSectionHeader(h string) string {
+	return strings.ReplaceAll(h, "'", "’")
 }
 
 // LinkSamplesToSection attaches every sample in sampleIDs to a

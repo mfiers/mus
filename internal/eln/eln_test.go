@@ -357,3 +357,21 @@ func TestDo_GivesUpAfterMaxAttempts(t *testing.T) {
 		t.Errorf("expected %d attempts, got %d", elnMaxAttempts, calls)
 	}
 }
+
+// sanitizeSectionHeader replaces the ASCII apostrophe (which makes the
+// eLabNext section-create endpoint return HTTP 500) with U+2019, and
+// leaves other characters untouched.
+func TestSanitizeSectionHeader(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"no quotes here", "no quotes here"},
+		{"Sriram's work", "Sriram’s work"},
+		{"it's a 'test'", "it’s a ’test’"},
+		{`double "q" and a&b <c> 50% a\b ;`, `double "q" and a&b <c> 50% a\b ;`},
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := sanitizeSectionHeader(c.in); got != c.want {
+			t.Errorf("sanitizeSectionHeader(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
