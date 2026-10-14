@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestExpInfo(t *testing.T) {
@@ -267,5 +268,92 @@ func TestFixStudyID(t *testing.T) {
 				t.Errorf("FixStudyID(%d) = %d, want %d", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+// do() must retry transient 5xx and succeed when the server recovers.
+// Regression: a one-off HTTP 500 on POST .../sections silently dropped an
+// upload's ELN sample record.
+func TestDo_RetriesTransient5xx(t *testing.T) {
+	// Shrink backoff so the test is fast.
+	origBackoff := elnRetryBackoff
+	elnRetryBackoff = 1 * time.Millisecond
+	t.Cleanup(func() { elnRetryBackoff = origBackoff })
+
+	var calls int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/experiments/1/sections", func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls < 3 { // fail twice, then succeed
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("16194202"))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	c := New(srv.URL, "k")
+
+	id, err := c.CreateExperimentSection(1, "SAMPLESOUT", "hdr")
+	if err != nil {
+		t.Fatalf("expected success after retries, got %v (calls=%d)", err, calls)
+	}
+	if id != 16194202 {
+		t.Errorf("section id = %d, want 16194202", id)
+	}
+	if calls != 3 {
+		t.Errorf("expected 3 attempts (2 fail + 1 ok), got %d", calls)
+	}
+}
+
+// do() must NOT retry 4xx — they're deterministic. One call, immediate error.
+func TestDo_NoRetryOn4xx(t *testing.T) {
+	origBackoff := elnRetryBackoff
+	elnRetryBackoff = 1 * time.Millisecond
+	t.Cleanup(func() { elnRetryBackoff = origBackoff })
+
+	var calls int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/experiments/1/sections", func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"message":"no permission"}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	c := New(srv.URL, "k")
+
+	_, err := c.CreateExperimentSection(1, "SAMPLESOUT", "hdr")
+	if err == nil {
+		t.Fatal("expected error on 403")
+	}
+	if calls != 1 {
+		t.Errorf("4xx must not retry: expected 1 call, got %d", calls)
+	}
+}
+
+// do() exhausts retries and returns the last 5xx error.
+func TestDo_GivesUpAfterMaxAttempts(t *testing.T) {
+	origBackoff := elnRetryBackoff
+	elnRetryBackoff = 1 * time.Millisecond
+	t.Cleanup(func() { elnRetryBackoff = origBackoff })
+
+	var calls int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/experiments/1/sections", func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusBadGateway)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	c := New(srv.URL, "k")
+
+	_, err := c.CreateExperimentSection(1, "SAMPLESOUT", "hdr")
+	if err == nil {
+		t.Fatal("expected failure after exhausting retries")
+	}
+	if calls != elnMaxAttempts {
+		t.Errorf("expected %d attempts, got %d", elnMaxAttempts, calls)
 	}
 }

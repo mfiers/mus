@@ -30,6 +30,7 @@ import (
 	"codeberg.org/mfiers/mus/internal/dataproject"
 	"codeberg.org/mfiers/mus/internal/eln"
 	"codeberg.org/mfiers/mus/internal/folder"
+	"codeberg.org/mfiers/mus/internal/sidecar"
 )
 
 // qdbCruftDirs are directory names purged before a qdb backup — caches,
@@ -367,6 +368,16 @@ func runQDB(cmd *cobra.Command, expName string, o qdbOpts) error {
 
 	msg := fmt.Sprintf("qdb backup of %s", expName)
 
+	// The sibling sidecar the upload will write (and tombstone). It
+	// SURVIVES --verify-and-clean's source deletion, so we can register
+	// the ELN sample from it afterwards.
+	sidecarPath := srcAbs + sidecar.Suffix
+
+	// Run the upload with --no-eln: qdb does the ELN registration itself,
+	// AFTER the upload, so it can see success/failure (the upload's own
+	// registration is best-effort and swallows errors to stderr — exactly
+	// how the taxem sample was silently lost). qdb is supposed to be
+	// supersafe, so it must not claim success unless the ELN record exists.
 	up := newIRODSUploadCmd()
 	up.SetContext(cmd.Context())
 	up.SetIn(cmd.InOrStdin())
@@ -377,11 +388,24 @@ func runQDB(cmd *cobra.Command, expName string, o qdbOpts) error {
 		"-m", msg,
 		"--pack", packMode,
 		"--verify-and-clean",
+		"--no-eln",
 	})
 	if err := up.Execute(); err != nil {
 		return fmt.Errorf("qdb: upload/verify/clean step failed (local data NOT deleted on a verify failure): %w", err)
 	}
 
-	fmt.Fprintf(stdout, "\nqdb: done. %s is backed up to iRODS + registered in ELN experiment %d.\n", expName, expID)
+	// Data is on iRODS and verified. Now register the ELN sample from the
+	// surviving tombstone sidecar, capturing any failure. With the ELN
+	// client's 5xx retry this rarely fails, but if it does we must report
+	// it loudly rather than falsely claim "registered" — the data is safe
+	// on iRODS, only the ELN record is missing, and it can be backfilled.
+	fmt.Fprintf(stdout, "  registering ELN sample…\n")
+	if err := runELNRegisterIRODS(cmd, sidecarPath, false); err != nil {
+		fmt.Fprintf(stderr, "\n  \033[33m⚠ qdb: data IS safely on iRODS, but the ELN sample record was NOT created:\033[0m\n    %v\n", err)
+		fmt.Fprintf(stderr, "    Recover with:  mus eln register-irods %s\n\n", sidecarPath)
+		return fmt.Errorf("qdb: backup uploaded + verified, but ELN registration failed — see recovery command above")
+	}
+
+	fmt.Fprintf(stdout, "\nqdb: done. %s is backed up to iRODS AND registered in ELN experiment %d.\n", expName, expID)
 	return nil
 }

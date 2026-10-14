@@ -792,30 +792,86 @@ func (e *HTTPError) Error() string {
 	return fmt.Sprintf("HTTP %d: %s", e.StatusCode, e.Body)
 }
 
+// Retry policy for transient eLabNext failures. The ELN server
+// intermittently returns 5xx (observed: a one-off HTTP 500 on
+// POST .../sections that silently dropped an upload's sample record).
+// We retry those, and network-level errors, a few times with linear
+// backoff. We do NOT retry 4xx (deterministic client errors) — retrying
+// those just wastes time and can't succeed.
+//
+// elnRetries / elnRetryBackoff are vars (not consts) so tests can shrink
+// the backoff.
+var (
+	elnMaxAttempts  = 4
+	elnRetryBackoff = 1 * time.Second
+)
+
+// isTransientStatus reports whether an HTTP status is worth retrying.
+// 5xx = server-side, usually transient. 429 = rate-limited.
+func isTransientStatus(code int) bool {
+	return code >= 500 || code == http.StatusTooManyRequests
+}
+
 func (c *Client) do(req *http.Request, out any) error {
 	req.Header.Set("Authorization", c.APIKey)
 	req.Header.Set("Accept", "application/json")
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return err
+
+	var lastErr error
+	for attempt := 1; attempt <= elnMaxAttempts; attempt++ {
+		// Fresh body on every attempt. http.NewRequest with a
+		// *bytes.Reader body sets GetBody, so post/put bodies replay
+		// cleanly; GET/DELETE have no body and GetBody is nil.
+		if req.GetBody != nil {
+			body, berr := req.GetBody()
+			if berr != nil {
+				return berr
+			}
+			req.Body = body
+		}
+
+		resp, err := c.HTTP.Do(req)
+		if err != nil {
+			// Network / transport error — transient, retry.
+			lastErr = err
+			if attempt < elnMaxAttempts {
+				time.Sleep(time.Duration(attempt) * elnRetryBackoff)
+				continue
+			}
+			return err
+		}
+
+		raw, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			lastErr = readErr
+			if attempt < elnMaxAttempts {
+				time.Sleep(time.Duration(attempt) * elnRetryBackoff)
+				continue
+			}
+			return readErr
+		}
+
+		if resp.StatusCode/100 != 2 {
+			httpErr := &HTTPError{StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(raw))}
+			if isTransientStatus(resp.StatusCode) && attempt < elnMaxAttempts {
+				lastErr = httpErr
+				time.Sleep(time.Duration(attempt) * elnRetryBackoff)
+				continue
+			}
+			return httpErr
+		}
+
+		if out == nil {
+			return nil
+		}
+		// eLabJournal returns 2xx with an empty body for some state-mutating
+		// endpoints (PUT /experiments/sections/<id>/content is one). Treat that
+		// as success and leave `out` zero-valued — the caller would only have
+		// gotten a discardable response anyway.
+		if len(bytes.TrimSpace(raw)) == 0 {
+			return nil
+		}
+		return json.Unmarshal(raw, out)
 	}
-	defer resp.Body.Close()
-	raw, readErr := io.ReadAll(resp.Body)
-	if readErr != nil {
-		return readErr
-	}
-	if resp.StatusCode/100 != 2 {
-		return &HTTPError{StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(raw))}
-	}
-	if out == nil {
-		return nil
-	}
-	// eLabJournal returns 2xx with an empty body for some state-mutating
-	// endpoints (PUT /experiments/sections/<id>/content is one). Treat that
-	// as success and leave `out` zero-valued — the caller would only have
-	// gotten a discardable response anyway.
-	if len(bytes.TrimSpace(raw)) == 0 {
-		return nil
-	}
-	return json.Unmarshal(raw, out)
+	return lastErr
 }
