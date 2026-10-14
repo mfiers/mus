@@ -4,11 +4,60 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	"codeberg.org/mfiers/mus/internal/eln"
 )
+
+// parseELNID must treat the ELN UI's zero-padded ids as DECIMAL, never
+// octal. Regression: `-x 001000000002004560` was parsed base-0 → octal →
+// 35184372615536 → 404. (See qdb.go parseELNID.)
+func TestParseELNID(t *testing.T) {
+	cases := []struct {
+		in      string
+		want    int64
+		wantErr bool
+	}{
+		{"2004560", 2004560, false},
+		{"001000000002004560", 1000000002004560, false}, // leading zeros = decimal, not octal
+		{"0", 0, false},
+		{"000", 0, false},
+		{"  411192  ", 411192, false},
+		{"", 0, true},
+		{"notanumber", 0, true},
+	}
+	for _, c := range cases {
+		got, err := parseELNID(c.in)
+		if c.wantErr {
+			if err == nil {
+				t.Errorf("parseELNID(%q): want error, got %d", c.in, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("parseELNID(%q): unexpected error %v", c.in, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("parseELNID(%q) = %d, want %d", c.in, got, c.want)
+		}
+	}
+}
+
+// The full chain the bug hit: UI long id -> parse -> FixExperimentID.
+func TestParseELNID_ThenFixExperiment(t *testing.T) {
+	raw, err := parseELNID("001000000002004560")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := eln.FixExperimentID(raw); got != 2004560 {
+		t.Errorf("UI id 001000000002004560 should resolve to experiment 2004560, got %d", got)
+	}
+}
 
 // qdbTestCmd returns a bare cobra command carrying buffers for IO, so
 // runQDB can be driven without the full root wiring.
@@ -38,7 +87,7 @@ func writeFile(t *testing.T, path, content string) {
 // baseOpts returns a valid-ish opts set; tests tweak one field at a time.
 func baseOpts() qdbOpts {
 	return qdbOpts{
-		studyID:     qdbDefaultStudyID,
+		studyIDRaw:  strconv.FormatInt(qdbDefaultStudyID, 10),
 		maxSizeGB:   qdbDefaultMaxSizeGB,
 		dataProject: "OldPilot2026",
 		noExclude:   true, // tests exercising other gates skip the cruft prompt

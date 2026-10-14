@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -169,10 +170,14 @@ const (
 	qdbMinLargeFileBytes int64 = 1 << 30 // 1 GiB median
 )
 
-// qdbOpts bundles the qdb command's flags.
+// qdbOpts bundles the qdb command's flags. studyID / experimentID are
+// STRINGS, not ints: the eLabJournal UI shows ids zero-padded (e.g.
+// 001000000002004560), and a numeric flag parses a leading zero as OCTAL
+// (strconv base-0), silently mangling the value. We parse them ourselves
+// as base-10 and then strip the long-form prefix.
 type qdbOpts struct {
-	studyID      int64
-	experimentID int64 // -x: use an EXISTING experiment instead of creating one
+	studyIDRaw   string
+	experimentID string // -x: use an EXISTING experiment instead of creating one
 	maxSizeGB    float64
 	dataProject  string
 	noExclude    bool // --no-exclude: back up everything, skip the cruft purge
@@ -189,15 +194,15 @@ func newQDBCmd() *cobra.Command {
 			expName := strings.TrimSpace(strings.Join(args, " "))
 			// -s and -x are mutually exclusive: either create under a study
 			// or reuse an existing experiment, never both.
-			if o.experimentID != 0 && cmd.Flags().Changed("study") {
+			if strings.TrimSpace(o.experimentID) != "" && cmd.Flags().Changed("study") {
 				return fmt.Errorf("qdb: pass either -s (create under a study) OR -x (use an existing experiment), not both")
 			}
 			return runQDB(cmd, expName, o)
 		},
 	}
-	cmd.Flags().Int64VarP(&o.studyID, "study", "s", qdbDefaultStudyID,
+	cmd.Flags().StringVarP(&o.studyIDRaw, "study", "s", strconv.FormatInt(qdbDefaultStudyID, 10),
 		"ELN study id to CREATE the backup experiment under (long UI ids accepted)")
-	cmd.Flags().Int64VarP(&o.experimentID, "experiment", "x", 0,
+	cmd.Flags().StringVarP(&o.experimentID, "experiment", "x", "",
 		"use an EXISTING ELN experiment id instead of creating one (mutually exclusive with -s)")
 	cmd.Flags().Float64Var(&o.maxSizeGB, "max-size-gb", qdbDefaultMaxSizeGB,
 		"refuse to back up a folder larger than this many GB")
@@ -206,6 +211,28 @@ func newQDBCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&o.noExclude, "no-exclude", false,
 		"back up everything; skip the default cruft purge (.git, __pycache__, caches, …)")
 	return cmd
+}
+
+// parseELNID parses an eLabJournal id from the command line as base-10,
+// tolerating the UI's leading-zero padding (which a base-0 numeric parse
+// would misread as octal). Returns the raw int64; the caller applies
+// FixStudyID / FixExperimentID to strip the long-form prefix.
+func parseELNID(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("empty id")
+	}
+	// Explicit base 10, and trim leading zeros so "001000..." is decimal,
+	// never octal.
+	trimmed := strings.TrimLeft(s, "0")
+	if trimmed == "" {
+		trimmed = "0"
+	}
+	v, err := strconv.ParseInt(trimmed, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("not a numeric id: %q", s)
+	}
+	return v, nil
 }
 
 func runQDB(cmd *cobra.Command, expName string, o qdbOpts) error {
@@ -292,12 +319,22 @@ func runQDB(cmd *cobra.Command, expName string, o qdbOpts) error {
 	fmt.Fprintf(stdout, "  data_project: %s\n", dataProject)
 
 	// --- 2. resolve the ELN experiment (create new, or use existing -x) --
+	// Ids are parsed as base-10 (tolerating the UI's leading-zero padding)
+	// then long-form-stripped. See parseELNID / FixStudyID / FixExperimentID.
 	var expID int64
-	if o.experimentID != 0 {
-		expID = eln.FixExperimentID(o.experimentID)
+	if strings.TrimSpace(o.experimentID) != "" {
+		raw, perr := parseELNID(o.experimentID)
+		if perr != nil {
+			return fmt.Errorf("qdb: --experiment %q: %w", o.experimentID, perr)
+		}
+		expID = eln.FixExperimentID(raw)
 		fmt.Fprintf(stdout, "  using existing ELN experiment %d\n", expID)
 	} else {
-		studyID := eln.FixStudyID(o.studyID)
+		raw, perr := parseELNID(o.studyIDRaw)
+		if perr != nil {
+			return fmt.Errorf("qdb: --study %q: %w", o.studyIDRaw, perr)
+		}
+		studyID := eln.FixStudyID(raw)
 		fmt.Fprintf(stdout, "  creating experiment %q under study %d\n", expName, studyID)
 		expID, err = elnClient.CreateExperiment(studyID, expName)
 		if err != nil {
