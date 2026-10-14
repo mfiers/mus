@@ -16,9 +16,11 @@ package cli
 // verify-before-delete safety gate is the same tested code path.
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -28,6 +30,126 @@ import (
 	"codeberg.org/mfiers/mus/internal/eln"
 	"codeberg.org/mfiers/mus/internal/folder"
 )
+
+// qdbCruftDirs are directory names purged before a qdb backup — caches,
+// VCS metadata, tmp, editor/runtime scratch. Matched by exact base name
+// at any depth. Never worth archiving.
+var qdbCruftDirs = map[string]bool{
+	// VCS + Python/Jupyter
+	".git": true, ".svn": true, "__pycache__": true,
+	".ipynb_checkpoints": true, ".mypy_cache": true,
+	".pytest_cache": true, ".ruff_cache": true,
+	// Generic cache / tmp / language runtimes
+	".cache": true, "tmp": true, "temp": true,
+	"node_modules": true, ".venv": true, "venv": true,
+	".Rproj.user": true,
+}
+
+// qdbCruftFileSuffixes are file suffixes purged alongside the dirs.
+var qdbCruftFileSuffixes = []string{".pyc"}
+
+// qdbCruftFileNames are exact file base names purged.
+var qdbCruftFileNames = map[string]bool{
+	".DS_Store": true, "Thumbs.db": true, ".Rhistory": true,
+}
+
+// isQDBCruft reports whether a path (dir or file) matches the cruft list.
+// *.mus sidecars and mus.cfg are never cruft (they are the deposit's
+// self-describing layer).
+func isQDBCruft(base string, isDir bool) bool {
+	if isDir {
+		return qdbCruftDirs[base]
+	}
+	if qdbCruftFileNames[base] {
+		return true
+	}
+	for _, suf := range qdbCruftFileSuffixes {
+		if strings.HasSuffix(base, suf) {
+			return true
+		}
+	}
+	return false
+}
+
+// qdbFindCruft walks srcAbs and returns the top-most paths to remove. A
+// matching directory is returned without descending into it (so nested
+// __pycache__ inside node_modules isn't listed separately).
+func qdbFindCruft(srcAbs string) ([]string, error) {
+	var hits []string
+	err := filepath.WalkDir(srcAbs, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if path == srcAbs {
+			return nil
+		}
+		base := filepath.Base(path)
+		if d.IsDir() {
+			if isQDBCruft(base, true) {
+				hits = append(hits, path)
+				return filepath.SkipDir // don't descend / double-list
+			}
+			return nil
+		}
+		if isQDBCruft(base, false) {
+			hits = append(hits, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(hits)
+	return hits, nil
+}
+
+// qdbPurgeCruft finds cruft, lists it, asks for explicit confirmation,
+// and deletes it from disk. Does nothing (no prompt) when there's no
+// cruft. On a non-TTY with cruft present it refuses rather than guessing.
+func qdbPurgeCruft(cmd *cobra.Command, srcAbs string) error {
+	stdin := cmd.InOrStdin()
+	stdout := cmd.OutOrStdout()
+
+	hits, err := qdbFindCruft(srcAbs)
+	if err != nil {
+		return fmt.Errorf("qdb: scanning for cruft: %w", err)
+	}
+	if len(hits) == 0 {
+		return nil
+	}
+
+	fmt.Fprintf(stdout, "\nqdb: the following will be PERMANENTLY DELETED (not backed up):\n")
+	for _, h := range hits {
+		rel, relErr := filepath.Rel(srcAbs, h)
+		if relErr != nil {
+			rel = h
+		}
+		fmt.Fprintf(stdout, "    %s\n", rel)
+	}
+	fmt.Fprintf(stdout, "  (%d item(s); caches / VCS / tmp — pass --no-exclude to keep them)\n", len(hits))
+
+	if !stdinIsTTY(stdin) {
+		return fmt.Errorf("qdb: cruft present but stdin is not a TTY to confirm deletion — "+
+			"re-run interactively, or pass --no-exclude to back up everything (%d item(s))", len(hits))
+	}
+	fmt.Fprintf(stdout, "  delete these now? [y/N] ")
+	reader := bufio.NewReader(stdin)
+	answer, _ := reader.ReadString('\n')
+	switch strings.ToLower(strings.TrimSpace(answer)) {
+	case "y", "yes":
+		// proceed
+	default:
+		return fmt.Errorf("qdb: aborted — cruft not deleted (pass --no-exclude to back up everything)")
+	}
+
+	for _, h := range hits {
+		if err := os.RemoveAll(h); err != nil {
+			return fmt.Errorf("qdb: removing %s: %w", h, err)
+		}
+	}
+	fmt.Fprintf(stdout, "  ✓ removed %d cruft item(s)\n", len(hits))
+	return nil
+}
 
 const (
 	// Default backup study: "Very Old Projects" (REST studyID 411192;
@@ -47,10 +169,17 @@ const (
 	qdbMinLargeFileBytes int64 = 1 << 30 // 1 GiB median
 )
 
+// qdbOpts bundles the qdb command's flags.
+type qdbOpts struct {
+	studyID      int64
+	experimentID int64 // -x: use an EXISTING experiment instead of creating one
+	maxSizeGB    float64
+	dataProject  string
+	noExclude    bool // --no-exclude: back up everything, skip the cruft purge
+}
+
 func newQDBCmd() *cobra.Command {
-	var studyID int64
-	var maxSizeGB float64
-	var dataProject string
+	var o qdbOpts
 	cmd := &cobra.Command{
 		Use:    "qdb [flags] EXPERIMENT NAME...",
 		Short:  "quick-and-dirty backup of the current folder",
@@ -58,19 +187,28 @@ func newQDBCmd() *cobra.Command {
 		Args:   cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			expName := strings.TrimSpace(strings.Join(args, " "))
-			return runQDB(cmd, expName, studyID, maxSizeGB, dataProject)
+			// -s and -x are mutually exclusive: either create under a study
+			// or reuse an existing experiment, never both.
+			if o.experimentID != 0 && cmd.Flags().Changed("study") {
+				return fmt.Errorf("qdb: pass either -s (create under a study) OR -x (use an existing experiment), not both")
+			}
+			return runQDB(cmd, expName, o)
 		},
 	}
-	cmd.Flags().Int64VarP(&studyID, "study", "s", qdbDefaultStudyID,
-		"ELN study id to create the backup experiment under (long UI ids accepted)")
-	cmd.Flags().Float64Var(&maxSizeGB, "max-size-gb", qdbDefaultMaxSizeGB,
+	cmd.Flags().Int64VarP(&o.studyID, "study", "s", qdbDefaultStudyID,
+		"ELN study id to CREATE the backup experiment under (long UI ids accepted)")
+	cmd.Flags().Int64VarP(&o.experimentID, "experiment", "x", 0,
+		"use an EXISTING ELN experiment id instead of creating one (mutually exclusive with -s)")
+	cmd.Flags().Float64Var(&o.maxSizeGB, "max-size-gb", qdbDefaultMaxSizeGB,
 		"refuse to back up a folder larger than this many GB")
-	cmd.Flags().StringVarP(&dataProject, "data-project", "p", "",
+	cmd.Flags().StringVarP(&o.dataProject, "data-project", "p", "",
 		"data_project for the backup (NameYear, e.g. OldPilot2026) — REQUIRED")
+	cmd.Flags().BoolVar(&o.noExclude, "no-exclude", false,
+		"back up everything; skip the default cruft purge (.git, __pycache__, caches, …)")
 	return cmd
 }
 
-func runQDB(cmd *cobra.Command, expName string, studyIDRaw int64, maxSizeGB float64, dataProject string) error {
+func runQDB(cmd *cobra.Command, expName string, o qdbOpts) error {
 	stdout := cmd.OutOrStdout()
 	stderr := cmd.ErrOrStderr()
 
@@ -107,12 +245,24 @@ func runQDB(cmd *cobra.Command, expName string, studyIDRaw int64, maxSizeGB floa
 
 	// data_project is required (qdb targets unmanaged folders). qdb writes
 	// it to mus.cfg below; the reused upload then reads it from the cascade.
-	dataProject = strings.TrimSpace(dataProject)
+	dataProject := strings.TrimSpace(o.dataProject)
 	if dataProject == "" {
 		return fmt.Errorf("qdb: --data-project (-p) is required (NameYear, e.g. OldPilot2026)")
 	}
 	if err := dataproject.ValidateName(dataProject); err != nil {
 		return fmt.Errorf("qdb: data_project %q invalid: %w", dataProject, err)
+	}
+
+	// --- 1b. purge cruft (confirmed) ------------------------------------
+	// Remove well-known cache / VCS / tmp folders BEFORE profiling, so the
+	// size cap + pack decision reflect only what will actually be backed
+	// up. These are deleted from disk, not just excluded — qdb deletes the
+	// whole source at the end anyway, and this stuff is never worth
+	// archiving. Always confirmed interactively; --no-exclude skips it.
+	if !o.noExclude {
+		if err := qdbPurgeCruft(cmd, srcAbs); err != nil {
+			return err
+		}
 	}
 
 	// Profile the folder: non-empty check + size cap + pack decision.
@@ -123,17 +273,15 @@ func runQDB(cmd *cobra.Command, expName string, studyIDRaw int64, maxSizeGB floa
 	if prof.FileCount == 0 {
 		return fmt.Errorf("qdb: %s has no files to back up", srcAbs)
 	}
-	maxBytes := int64(maxSizeGB * float64(1<<30))
+	maxBytes := int64(o.maxSizeGB * float64(1<<30))
 	if prof.TotalBytes > maxBytes {
 		return fmt.Errorf("qdb: folder is %s, over the %.0f GB safety cap — "+
 			"raise it with --max-size-gb if you really mean to back up this much",
-			folder.FormatHumanBytes(prof.TotalBytes), maxSizeGB)
+			folder.FormatHumanBytes(prof.TotalBytes), o.maxSizeGB)
 	}
 
-	studyID := eln.FixStudyID(studyIDRaw)
-
-	// ELN must be authenticated — qdb creates an experiment. (Last of the
-	// preconditions: everything cheaper/local has already passed.)
+	// ELN must be authenticated — qdb creates/links an experiment. (Last of
+	// the preconditions: everything cheaper/local has already passed.)
 	elnClient, err := openELN()
 	if err != nil {
 		return fmt.Errorf("qdb: ELN is required (run `mus eln login`): %w", err)
@@ -141,20 +289,27 @@ func runQDB(cmd *cobra.Command, expName string, studyIDRaw int64, maxSizeGB floa
 
 	fmt.Fprintf(stdout, "qdb: backing up %s\n", srcAbs)
 	fmt.Fprintf(stdout, "  %d files, %s\n", prof.FileCount, folder.FormatHumanBytes(prof.TotalBytes))
-	fmt.Fprintf(stdout, "  experiment:   %q under study %d\n", expName, studyID)
 	fmt.Fprintf(stdout, "  data_project: %s\n", dataProject)
 
-	// --- 2. create the ELN experiment -----------------------------------
-	expID, err := elnClient.CreateExperiment(studyID, expName)
-	if err != nil {
-		return fmt.Errorf("qdb: creating ELN experiment: %w", err)
+	// --- 2. resolve the ELN experiment (create new, or use existing -x) --
+	var expID int64
+	if o.experimentID != 0 {
+		expID = eln.FixExperimentID(o.experimentID)
+		fmt.Fprintf(stdout, "  using existing ELN experiment %d\n", expID)
+	} else {
+		studyID := eln.FixStudyID(o.studyID)
+		fmt.Fprintf(stdout, "  creating experiment %q under study %d\n", expName, studyID)
+		expID, err = elnClient.CreateExperiment(studyID, expName)
+		if err != nil {
+			return fmt.Errorf("qdb: creating ELN experiment: %w", err)
+		}
+		fmt.Fprintf(stdout, "  ✓ created ELN experiment %d\n", expID)
 	}
-	fmt.Fprintf(stdout, "  ✓ created ELN experiment %d\n", expID)
 
 	// --- 3. tag the folder (write eln_* + data_project to mus.cfg) -------
 	info, err := elnClient.ExpInfo(expID)
 	if err != nil {
-		return fmt.Errorf("qdb: created experiment %d but could not read it back: %w", expID, err)
+		return fmt.Errorf("qdb: could not read ELN experiment %d: %w", expID, err)
 	}
 	kv := experimentToKV(info)
 	kv["data_project"] = dataProject

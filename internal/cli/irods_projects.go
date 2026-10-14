@@ -35,8 +35,8 @@ import (
 func newIRODSProjectsCmd() *cobra.Command {
 	var details bool
 	cmd := &cobra.Command{
-		Use:   "projects",
-		Short: "list data_project names already in use on iRODS",
+		Use:   "projects [PATTERN]",
+		Short: "list (or search) data_project names already in use on iRODS",
 		Long: "Lists the data_project names that have already been deposited\n" +
 			"on the lab's iRODS catalog. Walks both layouts:\n" +
 			"  - new:    <irods_home>/projects/<YEAR>/<NAME>\n" +
@@ -58,9 +58,13 @@ func newIRODSProjectsCmd() *cobra.Command {
 			"                `mus s3 upload` going forward)\n\n" +
 			"--details touches each project's iRODS subtree once, so the\n" +
 			"command is noticeably slower with many large projects.",
-		Args: cobra.NoArgs,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runIRODSProjects(cmd, details)
+			pattern := ""
+			if len(args) == 1 {
+				pattern = args[0]
+			}
+			return runIRODSProjects(cmd, details, pattern)
 		},
 	}
 	cmd.Flags().BoolVar(&details, "details", false,
@@ -68,7 +72,7 @@ func newIRODSProjectsCmd() *cobra.Command {
 	return cmd
 }
 
-func runIRODSProjects(cmd *cobra.Command, details bool) error {
+func runIRODSProjects(cmd *cobra.Command, details bool, pattern string) error {
 	ctx := cmd.Context()
 	dir, err := workingDir(cmd)
 	if err != nil {
@@ -105,9 +109,25 @@ func runIRODSProjects(cmd *cobra.Command, details bool) error {
 		return fmt.Errorf("querying iRODS for projects: %w", err)
 	}
 
+	// Optional case-insensitive substring filter on the project name.
+	if pattern != "" {
+		needle := strings.ToLower(pattern)
+		filtered := rows[:0]
+		for _, r := range rows {
+			if strings.Contains(strings.ToLower(r.Name), needle) {
+				filtered = append(filtered, r)
+			}
+		}
+		rows = filtered
+	}
+
 	stdout := cmd.OutOrStdout()
 	if len(rows) == 0 {
-		fmt.Fprintf(stdout, "no projects found under %s or %s\n", newParent, legacyParent)
+		if pattern != "" {
+			fmt.Fprintf(stdout, "no projects matching %q under %s or %s\n", pattern, newParent, legacyParent)
+		} else {
+			fmt.Fprintf(stdout, "no projects found under %s or %s\n", newParent, legacyParent)
+		}
 		return nil
 	}
 	if details {
