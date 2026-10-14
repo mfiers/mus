@@ -54,6 +54,7 @@ func newELNCmd() *cobra.Command {
 		newELNSampleTypeCmd(),
 		newELNRetrofitCmd(),
 		newELNRebuildMapCmd(),
+		newELNRegisterIRODSCmd(),
 	)
 	return cmd
 }
