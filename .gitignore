@@ -46,6 +46,15 @@ Thumbs.db
 all_gbiomed_mango_data.json
 /tmp/
 
+# Operational / working dirs used for the Mango migration and ad-hoc
+# analysis — NOT part of the shippable project. /data holds large data
+# dumps (e.g. bads.json, >500MB); /report holds migration scripts, the
+# ELN note poster, RESUME state and manifests; /docs/superpowers holds
+# brainstorming design specs. All local-only.
+/data/
+/docs/
+/report/
+
 # transient local testing / tooling debris (not part of the project):
 #   .omp/            oh-my-posh + ssh state
 #   .playwright-mcp/ browser-driven serve-UI test screenshots/logs
