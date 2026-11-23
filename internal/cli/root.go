@@ -128,21 +128,45 @@ func shouldRunUpgradeCheck(cmd *cobra.Command) bool {
 	return true
 }
 
-// shouldAutoMigrate returns true unless cmd is one of the read-only
-// / housekeeping subcommands where we don't want a side effect of
-// rewriting files on the filesystem. Also opts out when
-// MUS_NO_MIGRATE is set in the environment.
+// shouldAutoMigrate reports whether this invocation may auto-migrate a legacy
+// `.env` to `mus.cfg` as a side effect.
+//
+// This is an ALLOWLIST, not a blocklist: migration rewrites (and can delete)
+// files in the user's data tree, so it fires ONLY for commands that already
+// write config or sidecars there. Everything else — check, irods
+// check/find/get, config show, dry-runs, and any command added later — must
+// leave the tree untouched. Read-only commands still READ a legacy `.env`
+// via the config cascade; they just don't rewrite it. Users who want the
+// one-shot move run `mus config migrate` explicitly.
+//
+// Regression: `mus irods check` used to migrate+delete a `.env` during an
+// attic harvest. See internal/cli/automigrate_test.go.
+//
+// MUS_NO_MIGRATE in the environment disables migration entirely.
+//
+// Matching walks the command's ancestry so a two-word writing command (e.g.
+// `config set`, `eln link`) is recognised by the (parent, leaf) pair; a bare
+// `upload` leaf covers both `irods upload` and `s3 upload`.
 func shouldAutoMigrate(cmd *cobra.Command) bool {
 	if os.Getenv("MUS_NO_MIGRATE") != "" {
 		return false
 	}
-	for c := cmd; c != nil; c = c.Parent() {
-		switch c.Name() {
-		case "version", "verify", "completion", "upgrade", "migrate":
-			return false
-		}
+	leaf := cmd.Name()
+	parent := ""
+	if p := cmd.Parent(); p != nil {
+		parent = p.Name()
 	}
-	return true
+	switch {
+	case leaf == "tag": // mus tag — writes sidecars
+		return true
+	case leaf == "upload": // mus irods upload / mus s3 upload — writes sidecars
+		return true
+	case parent == "config" && (leaf == "set" || leaf == "unset"):
+		return true
+	case parent == "eln" && (leaf == "link" || leaf == "disable" || leaf == "enable"):
+		return true
+	}
+	return false
 }
 
 // autoMigrateCascade walks from startDir up to /, calling
